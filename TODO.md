@@ -10,16 +10,17 @@ for the normative contracts.
 A checked implementation or passing smoke test is not full acceptance. The initial
 source/CLI foundation has recorded modern build and narrow native results in
 [bootstrap verification](docs/bootstrap-verification.md). The current htop-style
-presentation/settings increment must have its own results. Historical observations
+presentation/settings increment has separate [native observations](docs/presentation-verification.md).
+Historical observations
 remain attached to the revision they describe. Unchecked items below are closure
 criteria; some already have candidate code and need evidence rather than rewriting.
 
 ## 1. Source, specification and contributor baseline — WT-W000
 
-- [ ] Review the complete source move: application C/headers, compatibility config,
+- [x] Review the complete source move: application C/headers, compatibility config,
   build entrypoint and inherited package/site inputs reside in `source/`; root
   CMake, instructions, license, version and navigation remain discoverable.
-- [ ] Build from a fresh clone and an arbitrary working directory using root CMake
+- [x] Build from a fresh clone and an arbitrary working directory using root CMake
   and `source/build.bat`; keep outputs outside tracked source.
 - [ ] Preserve upstream GPL notices, source identity and historical observations;
   do not rewrite old hashes to match new paths.

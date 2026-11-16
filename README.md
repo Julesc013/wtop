@@ -19,6 +19,7 @@ installer. Automated checks and native acceptance are separate evidence.
 - [Specification entry point](spec/START-HERE.md) and [OKF index](spec/index.md).
 - [Platform and binary policy](spec/platform/targets.md).
 - [Build and verification](docs/development.md).
+- [Current native TUI/settings evidence](docs/presentation-verification.md).
 - [Distribution, paths and removal](docs/installation.md).
 - [Codex workflow](docs/codex.md), [contribution guide](CONTRIBUTING.md) and
   [repository instructions](AGENTS.md).

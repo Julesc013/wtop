@@ -23,6 +23,8 @@ x86/x64/ARM64 build candidates. Narrow native CLI results are recorded in
 The current presentation increment adopts htop-style controls and color roles by
 default, optional vi/vim and Emacs maps, a default-visible last-row
 function bar, graceful mouse input, named views, and explicit configuration saving.
+Its [native observations](docs/presentation-verification.md) include x86/x64
+console interaction and settings checks on Windows Server 2025.
 Fully contextual overlay bar labels remain unfinished. Its implementation and
 tests must be assessed independently of the earlier bootstrap. A work unit can contain useful candidate code while its broader
 acceptance remains open; contributors must inspect that code before extending it.
