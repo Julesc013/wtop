@@ -72,7 +72,27 @@ test-discovery error before final builds.
   logging, broader query/inspection commands, GPU telemetry and complete htop
   parity are unimplemented or unqualified.
 
-The new CI workflow is intended to run native CLI/core checks for Win32 and x64
-on its hosted Windows runner and build ARM64. Its runner is not proof of a native
-32-bit OS, historical Windows or ARM64 execution. Workflow results must be
-inspected separately; authoring the workflow is not an execution result.
+## Native CI result
+
+[CI run 43856577337](https://github.com/Julesc013/wtop/actions/runs/43856577337)
+passed for source `988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa`.
+The Win32 and x64 jobs each passed all six CTest entries, including the native
+Python behavioral suite. ARM64 compiled and linked but was not executed.
+The Windows runner was Server 2025 x64, image `windows-2025-vs2026`
+`20261103.298.1`, using MSVC `19.51.36260.0`. Running Win32 under this x64 host
+does not establish behavior on a native 32-bit Windows edition.
+
+The Ubuntu 26.04/GCC 15.2.0 job passed specification checks and the instrumented
+portable core without the local workspace's LeakSanitizer initialization failure.
+This still does not test native Windows memory/handle growth.
+
+All three CI artifact ZIP digests and the contained EXE hashes were verified.
+Their PE imports contain Windows system DLLs and no separately deployed UCRT or
+VC runtime DLL. This establishes the inspected dependency list, not universal
+old-OS support. The exact identities and relevant job-log lines are retained in
+[the CI observation record](ci-observations-2026-11-16.json).
+
+These targeted checks do not complete the broader product acceptance cases.
+Interactive TUI, fault-injection, historical OS and release qualification remain
+open. The formal acceptance registry has not been promoted from these smoke and
+behavioral checks.
