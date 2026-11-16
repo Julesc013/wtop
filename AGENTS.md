@@ -4,6 +4,13 @@ Wtop continues gsass1/NTop at `326ccd80b41842868f4247d1e8978e854658a710`.
 Preserve upstream history, authorship and GPL-3.0-only notices. The current
 product is a terminal process monitor; a native GUI is deferred.
 
+`master` is the canonical Wtop integration and default branch. Start feature
+branches from its current head and merge reviewed, checked changes back through
+pull requests. `ntop-baseline` preserves the original commit above; do not develop
+Wtop there or advance it when upstream changes. The `upstream` Git remote refers
+to gsass1/NTop and is separate from this fixed baseline. Do not create a second
+competing Wtop integration branch named `main`.
+
 Application sources, headers and inherited build/configuration/packaging files
 live in `source/`. Root `CMakeLists.txt` remains the build entrypoint. Root
 `TODO.md` and `ROADMAP.md` are practical views of the canonical specification;

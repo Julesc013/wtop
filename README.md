@@ -5,6 +5,10 @@ Wtop is a native terminal process monitor derived from
 with **htop-style controls and colors by default**, optional Vi/Vim and Emacs
 bindings, and explicit command-line output and settings operations.
 
+**Canonical development branch: `master`.** The `ntop-baseline` branch preserves
+the unmodified NTop starting revision. Develop Wtop on short-lived branches from
+`master`; see [branch and upstream policy](docs/development.md#branches-and-upstream).
+
 **Status: development candidate, version 0.1.0-dev.2.** The current application
 backend is Windows NT. Historical DOS, Win16, Win9x, early NT, CE and OS/2 ports
 are specified work, not implemented support. Compiling for a CPU architecture

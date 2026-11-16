@@ -1,5 +1,45 @@
 # Build and verification
 
+## Branches and upstream
+
+`master` is Wtop's sole canonical integration branch and the repository's default
+branch. Its name is retained so existing clones, pull-request targets and CI
+filters keep working. `main` would also be a valid name, but a rename provides no
+compatibility benefit; maintaining both as independent Wtop trunks would make the
+source of truth ambiguous.
+
+| Ref or remote | Purpose |
+| --- | --- |
+| `master` | Current Wtop development; the target for reviewed changes |
+| `work/<task>` | Short-lived feature or repair branch starting from current `master` |
+| `ntop-baseline` | Fixed, unmodified starting point at `326ccd80b41842868f4247d1e8978e854658a710` |
+| `origin` remote | This Wtop fork, `https://github.com/Julesc013/wtop.git` |
+| `upstream` remote | Original NTop repository, `https://github.com/gsass1/NTop.git` |
+
+The baseline branch is a historical reference, not a moving copy of upstream and
+not another supported Wtop release line. Do not advance it. The original upstream
+history and GPL notices remain in Wtop's ancestry; future upstream fixes should
+be inspected and integrated selectively with their provenance intact.
+
+Git remotes are local clone configuration. If a clone does not already have an
+`upstream` remote, add it once:
+
+```sh
+git remote add upstream https://github.com/gsass1/NTop.git
+git fetch upstream
+```
+
+`upstream/master` is then a remote-tracking ref; it is different from the local
+Wtop `master` branch. Fetching upstream does not merge or overwrite Wtop. Inspect
+relevant differences before choosing a merge or cherry-pick; do not blindly sync
+the fork over its downstream changes. The inherited `multiple-cpus` branch is
+also historical material, not Wtop's integration branch.
+
+Merge only after applicable checks pass, preserve other contributors' work, and
+do not force-push the canonical branch. A development merge does not publish a
+release or qualify additional operating systems. Normal `master` CI produces
+development artifacts; release publication remains a separate work unit.
+
 ## Current implementation and module boundaries
 
 The application has a Windows NT backend derived from NTop. Shared option,
