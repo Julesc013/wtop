@@ -1,0 +1,64 @@
+{
+  "$schema": "../schemas/catalogs.schema.json#/$defs/metrics",
+  "schema": "wtop.metrics/1",
+  "states": [
+    "valid",
+    "warming_up",
+    "unsupported",
+    "denied",
+    "stale",
+    "reset",
+    "error",
+    "capacity"
+  ],
+  "metrics": [
+    {
+      "id": "process.cpu.one_core_percent",
+      "unit": "percent_of_one_logical_cpu",
+      "definition": "100 * delta(kernel_time + user_time) / monotonic_elapsed; may exceed 100",
+      "status": "planned"
+    },
+    {
+      "id": "process.cpu.machine_percent",
+      "unit": "percent_of_declared_active_capacity",
+      "definition": "one_core_percent divided by declared active logical capacity; topology changes reset the baseline",
+      "status": "planned"
+    },
+    {
+      "id": "process.memory.working_set_bytes",
+      "unit": "bytes",
+      "definition": "Provider-reported resident working set; not an assertion of exact Linux RSS equivalence",
+      "status": "candidate"
+    },
+    {
+      "id": "process.memory.private_commit_bytes",
+      "unit": "bytes",
+      "definition": "Private committed memory reported by the native provider",
+      "status": "planned"
+    },
+    {
+      "id": "process.io.read_bytes",
+      "unit": "bytes",
+      "definition": "Cumulative process I/O read transfers; not guaranteed physical disk traffic",
+      "status": "planned"
+    },
+    {
+      "id": "process.io.write_bytes",
+      "unit": "bytes",
+      "definition": "Cumulative process I/O write transfers; not guaranteed physical disk traffic",
+      "status": "planned"
+    },
+    {
+      "id": "host.cpu.accounted_busy_percent",
+      "unit": "percent_of_accounted_time",
+      "definition": "sum(busy deltas) / sum(total accounted deltas) * 100, under a named provider definition",
+      "status": "planned"
+    },
+    {
+      "id": "host.memory.available_bytes",
+      "unit": "bytes",
+      "definition": "Available physical memory under the native provider's documented accounting",
+      "status": "candidate"
+    }
+  ]
+}

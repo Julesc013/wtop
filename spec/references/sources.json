@@ -1,0 +1,206 @@
+{
+  "$schema": "../schemas/catalogs.schema.json#/$defs/sources",
+  "schema": "wtop.sources/1",
+  "sources": [
+    {
+      "id": "user",
+      "title": "User's Wtop requirements and implementation authorization",
+      "resource": "urn:wtop:conversation:2026-11-16",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Product intent, native TUI preference, historical scope and permission to implement; not execution evidence."
+    },
+    {
+      "id": "ntop",
+      "title": "Inherited NTop source baseline",
+      "resource": "https://github.com/gsass1/NTop/tree/326ccd80b41842868f4247d1e8978e854658a710",
+      "revision": "326ccd80b41842868f4247d1e8978e854658a710",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Source and inherited GPL notice; no current Wtop platform qualification."
+    },
+    {
+      "id": "okf-02",
+      "title": "Open Knowledge Format 0.2",
+      "resource": "https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md",
+      "revision": "blob:c06e3eede0c910d0ecf12524c34204156f8795ac",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Full upstream structural specification read; upstream does not define Wtop requirements, schemas or work units."
+    },
+    {
+      "id": "aide-okf",
+      "title": "AIDE engineering OKF profile",
+      "resource": "https://github.com/Julesc013/aide/blob/025e1cbc4f4c0893555a75a20d9ebaf03a06da3c/specs/control-plane/knowledge/okf-engineering-profile.md",
+      "revision": "025e1cbc4f4c0893555a75a20d9ebaf03a06da3c",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Proposed imported design, not an adopted execution protocol. Independently version local extensions; provenance is not authority."
+    },
+    {
+      "id": "disked-okf",
+      "title": "DiskEd OKF authoring profile and schemas",
+      "resource": "https://github.com/Julesc013/disked/blob/98baed979e214d07986a0ce0c91e75c9dbbb61b9/spec/foundation/okf-profile.md",
+      "revision": "98baed979e214d07986a0ce0c91e75c9dbbb61b9",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Read profile, frontmatter, requirement, acceptance and work-unit schemas. Patterns inform original Wtop definitions; DiskEd's separate-grant workflow is not copied."
+    },
+    {
+      "id": "syspane-cpu",
+      "title": "SysPane CPU state and Windows acquisition",
+      "resource": "https://github.com/Julesc013/syspane/blob/99807626f383f1130740901f985a21082d27d2bc/spec/delivery/windows-processor-handoff.md",
+      "revision": "99807626f383f1130740901f985a21082d27d2bc",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Selected processor_state, processor_windows and handoff sources read. One-group Windows10 evidence is repository-reported, not rerun here; code is modern C++."
+    },
+    {
+      "id": "syspane-owner",
+      "title": "SysPane measurement callback ownership",
+      "resource": "https://github.com/Julesc013/syspane/blob/99807626f383f1130740901f985a21082d27d2bc/source/collectors/measurement_owner.hpp",
+      "revision": "99807626f383f1130740901f985a21082d27d2bc",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Read serialized owner and lifetime handoff. A lock cannot interrupt a blocked native call; no code redistribution license inferred."
+    },
+    {
+      "id": "screensave",
+      "title": "ScreenSave portable semantics and evidence classes",
+      "resource": "https://github.com/Julesc013/screensave/blob/3ec92556f97d7bf6b21b954ba7166916241877c9/contracts/portable_semantics_v2.md",
+      "revision": "3ec92556f97d7bf6b21b954ba7166916241877c9",
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Read contract, session/clock/base headers and support matrix. Current unsigned-int width assertion is not a 16-bit ABI; broad historical execution remains unqualified."
+    },
+    {
+      "id": "pe-format",
+      "title": "Microsoft PE format",
+      "resource": "https://learn.microsoft.com/en-us/windows/win32/debug/pe-format",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Machine/subsystem fields and ABI boundaries; a common extension does not establish compatibility."
+    },
+    {
+      "id": "winpe",
+      "title": "Microsoft Windows PE introduction",
+      "resource": "https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/winpe-intro?view=windows-11",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Subset runtime and no MSI. Native matching-architecture baseline; WinPE-x64-Support is an optional Arm64 exception recorded separately."
+    },
+    {
+      "id": "rt-policy",
+      "title": "Microsoft Windows Installer platform restrictions",
+      "resource": "https://learn.microsoft.com/en-us/windows/win32/msi/windows-installer-portal",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Windows RT packages require Microsoft signature; ordinary third-party desktop distribution is not a supported stock-RT path."
+    },
+    {
+      "id": "watcom",
+      "title": "Open Watcom target and linker documentation",
+      "resource": "https://open-watcom.github.io/open-watcom-v2-wikidocs/c_readme.html",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Advertises DOS, Windows1 through3.x, Win9x/NT and OS2 targets; toolchain target listing is not Wtop execution proof."
+    },
+    {
+      "id": "process-rights",
+      "title": "Microsoft process security and access rights",
+      "resource": "https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Least-access queries, protected process restrictions and API-version differences."
+    },
+    {
+      "id": "nt-native",
+      "title": "Microsoft NtQuerySystemInformation",
+      "resource": "https://learn.microsoft.com/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Native structures may change; isolate layouts, validate buffers and dynamically resolve optional APIs."
+    },
+    {
+      "id": "console",
+      "title": "Microsoft console creation and subsystem behavior",
+      "resource": "https://learn.microsoft.com/en-us/windows/console/creation-of-a-console",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Console association and GUI process allocation do not force separate applications; shell/redirect behavior needs tests."
+    },
+    {
+      "id": "ce",
+      "title": "Microsoft Windows CE platform SDKs",
+      "resource": "https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa462938(v=msdn.10)",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "OEM platform SDK and image components qualify a CE target; CPU, instruction set and image are explicit."
+    },
+    {
+      "id": "reactos",
+      "title": "ReactOS project compatibility declaration",
+      "resource": "https://github.com/reactos/reactos",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Server2003 compatibility focus and alpha status; Wtop still needs tests on a pinned build."
+    },
+    {
+      "id": "winget",
+      "title": "Microsoft WinGet requirements",
+      "resource": "https://learn.microsoft.com/en-us/windows/package-manager/winget/",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "WinGet requires Windows10 1809 or later; not a historic OS installation mechanism."
+    },
+    {
+      "id": "msi-legacy",
+      "title": "Microsoft historical Installer redistributables",
+      "resource": "https://learn.microsoft.com/en-us/windows/win32/msi/instmsi-exe",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "MSI versions have explicit Win9x/NT4 service-pack requirements; no universal historical MSI."
+    },
+    {
+      "id": "known-folders",
+      "title": "Microsoft known folder identifiers",
+      "resource": "https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid",
+      "revision": null,
+      "observed_at": "2026-11-16T10:52:40Z",
+      "scope": "Installed modern Windows path roles; older profiles use a version-qualified adapter."
+    },
+    {
+      "id": "dos1",
+      "title": "Microsoft DOS1.25 EXE loader and interrupt dispatcher",
+      "resource": "https://github.com/microsoft/MS-DOS/blob/2d04cacc5322951f187bb17e017c12920ac8ebe2/v1.25/source/COMMAND.ASM",
+      "revision": "2d04cacc5322951f187bb17e017c12920ac8ebe2",
+      "observed_at": "2026-11-16T11:13:04Z",
+      "scope": "Loader header, COM/EXE selection and relocation inspected. Adjacent MSDOS.ASM dispatcher ends at2Eh; DOS2 handle APIs absent. This proves source behavior for1.25, not every1.0OEM."
+    },
+    {
+      "id": "winpe-components",
+      "title": "Microsoft WinPE optional components",
+      "resource": "https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/winpe-add-packages--optional-components-reference?view=windows-11",
+      "revision": null,
+      "observed_at": "2026-11-16T11:13:04Z",
+      "scope": "WinPE-x64-Support provides x64 emulation on Arm64; optional components must match ADK build and image architecture. No Wtop runtime qualification inferred."
+    },
+    {
+      "id": "phone-kernel",
+      "title": "Microsoft Research Experiment19 and Windows Phone kernels",
+      "resource": "https://www.microsoft.com/en-us/research/video/experiment-19-re-imagining-the-windows-phone-os/",
+      "revision": null,
+      "observed_at": "2026-11-16T11:13:04Z",
+      "scope": "Microsoft identifies Windows Phone7 as CE and Windows Phone8 as NT. This does not qualify Wtop desktop APIs or unrestricted deployment on phones."
+    },
+    {
+      "id": "htop-controls",
+      "title": "htop default action bindings and manual",
+      "resource": "https://github.com/htop-dev/htop/blob/21bbc80c7811149ee33f449748addf23740c7b9f/htop.1.in",
+      "revision": "21bbc80c7811149ee33f449748addf23740c7b9f",
+      "observed_at": "2026-11-16T12:38:25Z",
+      "scope": "Reference interaction semantics and documented F1-F10/screen behavior; no htop implementation code imported."
+    },
+    {
+      "id": "htop-colors",
+      "title": "htop default terminal color roles",
+      "resource": "https://github.com/htop-dev/htop/blob/21bbc80c7811149ee33f449748addf23740c7b9f/CRT.c",
+      "revision": "21bbc80c7811149ee33f449748addf23740c7b9f",
+      "observed_at": "2026-11-16T12:38:25Z",
+      "scope": "Reference foreground/background roles; terminal palette RGB and Windows telemetry semantics remain independent."
+    }
+  ]
+}

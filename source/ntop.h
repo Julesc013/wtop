@@ -19,6 +19,7 @@
 #define NTOP_H
 
 #include <tchar.h>
+#include <windows.h>
 
 #define DEFAULT_STR_SIZE 1024
 
@@ -42,6 +43,8 @@ typedef enum process_sort_type {
 int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest);
 void ChangeProcessSortType(process_sort_type NewProcessSortType);
 void StartSearch(const TCHAR *Pattern);
+void SetPresentationFilter(const TCHAR *Pattern);
+int SavePresentationSettings(void);
 
 typedef enum vi_message_type {
 	VI_NOTICE,
@@ -50,5 +53,7 @@ typedef enum vi_message_type {
 
 void SetViMessage(vi_message_type MessageType, TCHAR *Fmt, ...);
 void ClearViMessage(void);
+void RequestShutdown(void);
+int KillObservedProcess(DWORD pid);
 
 #endif

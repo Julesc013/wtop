@@ -1,0 +1,498 @@
+{
+  "$schema": "../schemas/catalogs.schema.json#/$defs/work",
+  "schema": "wtop.work/1",
+  "units": [
+    {
+      "id": "WT-W000",
+      "title": "Fork, specification and inherited-code repair/build baseline",
+      "status": "active",
+      "dependencies": [],
+      "context": [
+        "WT-000",
+        "WT-001",
+        "WT-002",
+        "WT-060",
+        "WT-080"
+      ],
+      "allowed_paths": [
+        "spec/",
+        "tools/",
+        "tests/",
+        "source/ntop.c",
+        "source/ntop.h",
+        "source/util.c",
+        "source/util.h",
+        "source/vi.c",
+        "source/vi.h",
+        "CMakeLists.txt",
+        "README.md",
+        "TODO.md",
+        "ROADMAP.md",
+        "docs/",
+        "source/_config.yml",
+        "source/build.bat",
+        "source/ntop.conf",
+        "source/ntop.nuspec"
+      ],
+      "deliverables": [
+        "Preserved upstream provenance/license",
+        "Compact validated specification",
+        "Concrete inherited-code repairs and modern build evidence"
+      ],
+      "acceptance": [
+        "WT-AC-002-01",
+        "WT-AC-002-02",
+        "WT-AC-060-01",
+        "WT-AC-060-02"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W010",
+      "title": "Invocation and bounded snapshot surface",
+      "status": "planned",
+      "dependencies": [
+        "WT-W000"
+      ],
+      "context": [
+        "WT-030",
+        "WT-040",
+        "WT-011",
+        "WT-012"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "source/ntop.c",
+        "source/ntop.h",
+        "source/util.c",
+        "source/util.h"
+      ],
+      "deliverables": [
+        "Explicit TUI/snapshot/information dispatch",
+        "Safe option parser",
+        "Read-only config precedence"
+      ],
+      "acceptance": [
+        "WT-AC-030-01",
+        "WT-AC-030-02",
+        "WT-AC-040-01",
+        "WT-AC-030-04"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W020",
+      "title": "Shared metric model and truthful machine output",
+      "status": "planned",
+      "dependencies": [
+        "WT-W010"
+      ],
+      "context": [
+        "WT-010",
+        "WT-011",
+        "WT-030",
+        "WT-062"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "source/ntop.c",
+        "source/ntop.h"
+      ],
+      "deliverables": [
+        "Lifetime-aware snapshots",
+        "Independent CPU/rate semantics",
+        "Versioned text/JSON projections"
+      ],
+      "acceptance": [
+        "WT-AC-010-01",
+        "WT-AC-011-01",
+        "WT-AC-011-02",
+        "WT-AC-011-03",
+        "WT-AC-011-04",
+        "WT-AC-030-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W030",
+      "title": "Sampling lifecycle and safe process actions",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020"
+      ],
+      "context": [
+        "WT-012",
+        "WT-061",
+        "WT-011"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "source/ntop.c",
+        "source/vi.c"
+      ],
+      "deliverables": [
+        "Bounded in-flight sampling",
+        "Owned callbacks and cleanup",
+        "Identity-revalidated action results"
+      ],
+      "acceptance": [
+        "WT-AC-012-01",
+        "WT-AC-012-02",
+        "WT-AC-012-03",
+        "WT-AC-061-01",
+        "WT-AC-061-02",
+        "WT-AC-061-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W035",
+      "title": "Unified query, inspection and bounded logging",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020",
+        "WT-W030"
+      ],
+      "context": [
+        "WT-030",
+        "WT-011",
+        "WT-012",
+        "WT-061"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "spec/"
+      ],
+      "deliverables": [
+        "Shared read-only selectors/fields for query and inspection",
+        "Provider/configuration diagnostics with explicit capability states",
+        "Versioned bounded logging/export with partial-failure and cancellation outcomes"
+      ],
+      "acceptance": [
+        "WT-AC-030-01",
+        "WT-AC-030-03",
+        "WT-AC-011-03",
+        "WT-AC-012-01",
+        "WT-AC-061-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W040",
+      "title": "Table-first TUI parity and rendering",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020",
+        "WT-W030"
+      ],
+      "context": [
+        "WT-031",
+        "WT-030",
+        "WT-040"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "source/ntop.c",
+        "source/vi.c"
+      ],
+      "deliverables": [
+        "htop-default keymap with optional vi/vim and Emacs bindings",
+        "Contextual last-row function bar and live status, visible by default",
+        "Shared keyboard/mouse action dispatch with graceful mouse fallback",
+        "Configurable header rows, columns/order, sort/tree and named view tabs",
+        "Identity-safe process controls, help and setup without decorative layout drift"
+      ],
+      "acceptance": [
+        "WT-AC-031-01",
+        "WT-AC-031-02",
+        "WT-AC-031-03",
+        "WT-AC-031-04",
+        "WT-AC-031-05",
+        "WT-AC-031-06",
+        "WT-AC-031-07"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W050",
+      "title": "Owned configuration and themes",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020"
+      ],
+      "context": [
+        "WT-040",
+        "WT-061"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "packaging/"
+      ],
+      "deliverables": [
+        "Explicit checked settings save/export and compatibility reader",
+        "htop/ntop/monochrome color roles with overrides and keymap selection",
+        "Versioned view/header/column/tab configuration with preservation limits",
+        "Explicit portable/installed path resolver and ownership-aware migration"
+      ],
+      "acceptance": [
+        "WT-AC-040-02",
+        "WT-AC-040-03",
+        "WT-AC-040-04"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W060",
+      "title": "Portable artifacts and installation channels",
+      "status": "planned",
+      "dependencies": [
+        "WT-W040",
+        "WT-W050"
+      ],
+      "context": [
+        "WT-050",
+        "WT-060",
+        "WT-063"
+      ],
+      "allowed_paths": [
+        "packaging/",
+        "tools/",
+        "tests/",
+        "source/"
+      ],
+      "deliverables": [
+        "Exact portable payload/ZIP",
+        "Owned optional installer receipts",
+        "Versioned package identities"
+      ],
+      "acceptance": [
+        "WT-AC-050-01",
+        "WT-AC-050-02",
+        "WT-AC-050-03",
+        "WT-AC-010-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W070",
+      "title": "Modern native target qualification",
+      "status": "planned",
+      "dependencies": [
+        "WT-W040",
+        "WT-W060"
+      ],
+      "context": [
+        "WT-020",
+        "WT-062",
+        "WT-063"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "tools/",
+        "spec/catalog/"
+      ],
+      "deliverables": [
+        "Named modern OS/architecture behavior",
+        "Artifact/import evidence",
+        "Bounded overhead measurements"
+      ],
+      "acceptance": [
+        "WT-AC-020-01",
+        "WT-AC-062-01",
+        "WT-AC-062-02",
+        "WT-AC-062-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W080",
+      "title": "Legacy Win32 startup and provider prototypes",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020"
+      ],
+      "context": [
+        "WT-020",
+        "WT-060",
+        "WT-011"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "tools/",
+        "spec/catalog/"
+      ],
+      "deliverables": [
+        "NT3.1/Win9x shared-PE feasibility result",
+        "Explicit toolchain/import/collector limits",
+        "Reasoned profile split if required"
+      ],
+      "acceptance": [
+        "WT-AC-020-02",
+        "WT-AC-020-03",
+        "WT-AC-060-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W090",
+      "title": "DOS, Win16 and OS2 research profiles",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020"
+      ],
+      "context": [
+        "WT-020",
+        "WT-010",
+        "WT-012"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "tools/",
+        "spec/catalog/"
+      ],
+      "deliverables": [
+        "Narrow startup/input/output/task prototypes",
+        "Target-specific widths and memory model",
+        "Truthful unavailable metrics"
+      ],
+      "acceptance": [
+        "WT-AC-010-02",
+        "WT-AC-020-02",
+        "WT-AC-020-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W100",
+      "title": "WinPE, CE and ReactOS profiles",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020",
+        "WT-W030"
+      ],
+      "context": [
+        "WT-020",
+        "WT-040",
+        "WT-050"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "tools/",
+        "spec/catalog/"
+      ],
+      "deliverables": [
+        "Image/SDK/architecture-qualified prototypes",
+        "Portable WinPE paths",
+        "Pinned ReactOS behavior"
+      ],
+      "acceptance": [
+        "WT-AC-020-01",
+        "WT-AC-020-02",
+        "WT-AC-020-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W110",
+      "title": "Optional hardware and historical/event providers",
+      "status": "planned",
+      "dependencies": [
+        "WT-W030",
+        "WT-W070"
+      ],
+      "context": [
+        "WT-011",
+        "WT-012",
+        "WT-061",
+        "WT-062"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "spec/"
+      ],
+      "deliverables": [
+        "Capability-specific GPU/thermal/power/event contracts",
+        "No default driver/service",
+        "Actual hardware and shutdown evidence"
+      ],
+      "acceptance": [
+        "WT-AC-011-03",
+        "WT-AC-012-03",
+        "WT-AC-061-01",
+        "WT-AC-062-02"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W120",
+      "title": "Future native GUI in the target application",
+      "status": "planned",
+      "dependencies": [
+        "WT-W040",
+        "WT-W050",
+        "WT-W070"
+      ],
+      "context": [
+        "WT-010",
+        "WT-012",
+        "WT-020",
+        "WT-031"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "spec/"
+      ],
+      "deliverables": [
+        "Native GUI sharing snapshot/actions",
+        "Qualified console/GUI launch behavior",
+        "Per-target native presentation evidence"
+      ],
+      "acceptance": [
+        "WT-AC-010-01",
+        "WT-AC-012-02",
+        "WT-AC-020-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W130",
+      "title": "Exact-payload release qualification",
+      "status": "planned",
+      "dependencies": [
+        "WT-W070"
+      ],
+      "context": [
+        "WT-050",
+        "WT-062",
+        "WT-063"
+      ],
+      "allowed_paths": [
+        "packaging/",
+        "tools/",
+        "tests/",
+        "spec/"
+      ],
+      "deliverables": [
+        "Qualified release manifest",
+        "Acquired-byte verification",
+        "Honest support and channel documentation"
+      ],
+      "acceptance": [
+        "WT-AC-063-01",
+        "WT-AC-063-02"
+      ],
+      "evidence": []
+    }
+  ]
+}

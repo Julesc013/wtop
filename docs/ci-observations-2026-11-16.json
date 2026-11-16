@@ -1,0 +1,168 @@
+{
+  "schema": "wtop.ci-observation/1",
+  "observed_at": "2026-11-16T11:22:06.789173+00:00",
+  "source_revision": "988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+  "run_url": "https://github.com/Julesc013/wtop/actions/runs/43856577337",
+  "run_id": 43856577337,
+  "build_compiler": "MSVC 19.51.36260.0",
+  "runner": "Windows Server 2025 x64, windows-2025-vs2026 image20261103.298.1",
+  "native_cli_result": {
+    "x86": "6/6 CTest entries passed under x64 Windows",
+    "x64": "6/6 CTest entries passed",
+    "arm64": "not executed; build passed"
+  },
+  "host_result": "24 Python tests passed and 8 native tests skipped; instrumented portable_core passed on Ubuntu26.04/GCC15.2.0",
+  "formal_acceptance": "not promoted; targeted CI checks are narrower than full product acceptance",
+  "artifact_zip_metadata": [
+    {
+      "id": 14221605219,
+      "name": "wtop-x64-candidate-988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+      "digest": "sha256:ba706e917072fe3a000982ddc20f7148f9a6451d49435ce35929fffc8a616e2e",
+      "size_in_bytes": 125856,
+      "expires_at": "2026-11-30T11:18:57Z"
+    },
+    {
+      "id": 14221447655,
+      "name": "wtop-ARM64-candidate-988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+      "digest": "sha256:3d0df510d521dc9925445f3248dabaa721ed3e56a0552c3c1accd9db61087eb2",
+      "size_in_bytes": 115880,
+      "expires_at": "2026-11-30T11:19:01Z"
+    },
+    {
+      "id": 14220354052,
+      "name": "wtop-Win32-candidate-988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+      "digest": "sha256:b362d3fc80a9e0e99e56cd203c269fba25a91f102d6ef63cf5dc145e2985dbda",
+      "size_in_bytes": 113773,
+      "expires_at": "2026-11-30T11:19:03Z"
+    }
+  ],
+  "artifacts": [
+    {
+      "profile": "win-nt-x86",
+      "bytes": 181248,
+      "machine": "0x14c",
+      "subsystem": 3,
+      "import_dlls": [
+        "ADVAPI32.dll",
+        "PSAPI.DLL",
+        "KERNEL32.dll"
+      ],
+      "candidate": {
+        "source": "988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+        "version": "0.1.0-dev.1",
+        "architecture": "Win32",
+        "runner": "Windows",
+        "runnerImage": "20261103.298.1",
+        "kernel": "Microsoft Windows NT 10.0.26100.0",
+        "cliRuntimeTestedHere": true,
+        "historicalOsQualified": false,
+        "tuiHumanAccepted": false,
+        "releaseSupported": false,
+        "sha256": "cc06697e5b0bd23027add07c12cb37d7f42637b331746521d0846cf14b777b7f"
+      }
+    },
+    {
+      "profile": "win-nt-x64",
+      "bytes": 211456,
+      "machine": "0x8664",
+      "subsystem": 3,
+      "import_dlls": [
+        "ADVAPI32.dll",
+        "PSAPI.DLL",
+        "KERNEL32.dll"
+      ],
+      "candidate": {
+        "source": "988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+        "version": "0.1.0-dev.1",
+        "architecture": "x64",
+        "runner": "Windows",
+        "runnerImage": "20261103.298.1",
+        "kernel": "Microsoft Windows NT 10.0.26100.0",
+        "cliRuntimeTestedHere": true,
+        "historicalOsQualified": false,
+        "tuiHumanAccepted": false,
+        "releaseSupported": false,
+        "sha256": "91a2c93a9f19980153e8c96071e906a32b3f9ee0c428dc923c6c12baeacdf3b4"
+      }
+    },
+    {
+      "profile": "win-nt-arm64",
+      "bytes": 217600,
+      "machine": "0xaa64",
+      "subsystem": 3,
+      "import_dlls": [
+        "ADVAPI32.dll",
+        "PSAPI.DLL",
+        "KERNEL32.dll"
+      ],
+      "candidate": {
+        "source": "988a0697bbaa9f9cb5f6ea2415a63b0a2b20a3aa",
+        "version": "0.1.0-dev.1",
+        "architecture": "ARM64",
+        "runner": "Windows",
+        "runnerImage": "20261103.298.1",
+        "kernel": "Microsoft Windows NT 10.0.26100.0",
+        "cliRuntimeTestedHere": false,
+        "historicalOsQualified": false,
+        "tuiHumanAccepted": false,
+        "releaseSupported": false,
+        "sha256": "649f09850aa15a3863f998c2f0f36e229807580217ddf4f17b9812eab19db51e"
+      }
+    }
+  ],
+  "job_logs": [
+    {
+      "job_id": 133262272621,
+      "downloaded_log_sha256": "841face38266822db03732185785ebcabab3eeb2253a8fa91b9c868c9e6e56f5",
+      "relevant_lines": [
+        "2026-11-16T11:18:30.2141968Z Microsoft Windows Server 2025",
+        "2026-11-16T11:18:30.2144356Z Image: windows-2025-vs2026",
+        "2026-11-16T11:18:52.6445940Z -- The C compiler identification is MSVC 19.51.36260.0"
+      ]
+    },
+    {
+      "job_id": 133262273059,
+      "downloaded_log_sha256": "4b5a965b17bbf673787d6dca8bdcde5c26e678d53702c250069cf238917b764d",
+      "relevant_lines": [
+        "2026-11-16T11:18:30.5432609Z Image: ubuntu-26.04",
+        "2026-11-16T11:18:33.2361163Z Ran 32 tests in 0.673s",
+        "2026-11-16T11:18:33.2380978Z OK (skipped=8)",
+        "2026-11-16T11:18:34.2762075Z -- The C compiler identification is GNU 15.2.0",
+        "2026-11-16T11:18:36.5992399Z 1/1 Test #1: portable_core ....................   Passed    0.06 sec",
+        "2026-11-16T11:18:36.6047746Z 100% tests passed out of 1"
+      ]
+    },
+    {
+      "job_id": 133262273115,
+      "downloaded_log_sha256": "0b39b1d66a0c058fd94750703810e8bf4c155a891448776b7a267468ff28cbef",
+      "relevant_lines": [
+        "2026-11-16T11:18:30.2400053Z Microsoft Windows Server 2025",
+        "2026-11-16T11:18:30.2402740Z Image: windows-2025-vs2026",
+        "2026-11-16T11:18:51.3799386Z -- The C compiler identification is MSVC 19.51.36260.0",
+        "2026-11-16T11:19:01.8851152Z 1/6 Test #1: portable_core ....................   Passed    0.05 sec",
+        "2026-11-16T11:19:01.9039825Z 2/6 Test #2: cli_version ......................   Passed    0.02 sec",
+        "2026-11-16T11:19:01.9127918Z 3/6 Test #3: cli_capabilities .................   Passed    0.01 sec",
+        "2026-11-16T11:19:01.9216323Z 4/6 Test #4: cli_gui_reserved .................   Passed    0.01 sec",
+        "2026-11-16T11:19:02.0037187Z 5/6 Test #5: cli_snapshot .....................   Passed    0.08 sec",
+        "2026-11-16T11:19:03.0126079Z 6/6 Test #6: native_cli_behavior ..............   Passed    1.01 sec",
+        "2026-11-16T11:19:03.0135684Z 100% tests passed out of 6"
+      ]
+    },
+    {
+      "job_id": 133262273321,
+      "downloaded_log_sha256": "8663b988fecfa776735b4051fe86956099fd3e5e26b77e2b7e9edead5689399e",
+      "relevant_lines": [
+        "2026-11-16T11:18:30.4809751Z Microsoft Windows Server 2025",
+        "2026-11-16T11:18:30.4813050Z Image: windows-2025-vs2026",
+        "2026-11-16T11:18:47.6690902Z -- The C compiler identification is MSVC 19.51.36260.0",
+        "2026-11-16T11:18:55.9710590Z 1/6 Test #1: portable_core ....................   Passed    0.01 sec",
+        "2026-11-16T11:18:55.9831417Z 2/6 Test #2: cli_version ......................   Passed    0.01 sec",
+        "2026-11-16T11:18:55.9902464Z 3/6 Test #3: cli_capabilities .................   Passed    0.01 sec",
+        "2026-11-16T11:18:55.9971938Z 4/6 Test #4: cli_gui_reserved .................   Passed    0.01 sec",
+        "2026-11-16T11:18:56.0739353Z 5/6 Test #5: cli_snapshot .....................   Passed    0.08 sec",
+        "2026-11-16T11:18:56.9220450Z 6/6 Test #6: native_cli_behavior ..............   Passed    0.85 sec",
+        "2026-11-16T11:18:56.9228540Z 100% tests passed out of 6"
+      ]
+    }
+  ]
+}

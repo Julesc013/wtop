@@ -1,0 +1,516 @@
+{
+  "$schema": "../schemas/catalogs.schema.json#/$defs/acceptance",
+  "schema": "wtop.acceptance/1",
+  "cases": [
+    {
+      "id": "WT-AC-001-01",
+      "requirements": [
+        "WT-REQ-001-01"
+      ],
+      "method": "review",
+      "oracle": "Inspect a proposed reused component and reject missing revision/license information; preserve upstream notices.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-001-02",
+      "requirements": [
+        "WT-REQ-001-02"
+      ],
+      "method": "structural",
+      "oracle": "A build-only fixture cannot become a qualified target or a passed native acceptance case.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-001-03",
+      "requirements": [
+        "WT-REQ-001-03"
+      ],
+      "method": "structural",
+      "oracle": "Inspect registry ownership and reject duplicate IDs or contradictory reference mappings.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-002-01",
+      "requirements": [
+        "WT-REQ-002-01"
+      ],
+      "method": "structural",
+      "oracle": "Invalid metadata, duplicate IDs, missing concepts and stale index fixtures fail validation.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-002-02",
+      "requirements": [
+        "WT-REQ-002-02"
+      ],
+      "method": "structural",
+      "oracle": "Malformed catalog, traversal, symlink escape and unsupported-keyword fixtures fail with precise errors.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-002-03",
+      "requirements": [
+        "WT-REQ-002-03"
+      ],
+      "method": "structural",
+      "oracle": "A synthetic passed-without-evidence entry is rejected and an empty evidence catalog leaves all cases not_run.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-010-01",
+      "requirements": [
+        "WT-REQ-010-01"
+      ],
+      "method": "fixture",
+      "oracle": "Compare text/JSON/TUI projections of a fixed snapshot and ensure identical units, identity and values.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-010-02",
+      "requirements": [
+        "WT-REQ-010-02"
+      ],
+      "method": "build",
+      "oracle": "Compile the core under strict C90 checks and inspect public headers; a 16-bit-width fixture must not silently truncate.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-010-03",
+      "requirements": [
+        "WT-REQ-010-03"
+      ],
+      "method": "artifact",
+      "oracle": "Audit linked/imported dependencies and launch the delivered application from an arbitrary clean folder.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-011-01",
+      "requirements": [
+        "WT-REQ-011-01"
+      ],
+      "method": "fixture",
+      "oracle": "A fixture reuses a PID between snapshots and an action; the old selection is retired and action is refused.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-011-02",
+      "requirements": [
+        "WT-REQ-011-02"
+      ],
+      "method": "fixture",
+      "oracle": "Independent arithmetic fixtures cover zero/full load, resets, PID reuse, counter wrap, zero time, missing rows and access denial.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-011-03",
+      "requirements": [
+        "WT-REQ-011-03"
+      ],
+      "method": "fixture",
+      "oracle": "Feed a fixed snapshot through each projection and compare exact counters plus documented derived ratios.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-011-04",
+      "requirements": [
+        "WT-REQ-011-04"
+      ],
+      "method": "fixture",
+      "oracle": "Boundary and malformed-provider fixtures cannot overflow, hang, emit nonfinite JSON or present partial data as complete.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-012-01",
+      "requirements": [
+        "WT-REQ-012-01"
+      ],
+      "method": "fixture",
+      "oracle": "A deliberately slow collector stays within its declared in-flight/queue bounds and leaves input responsive where promised.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-012-02",
+      "requirements": [
+        "WT-REQ-012-02"
+      ],
+      "method": "native",
+      "oracle": "Exercise close, resize, interrupt, provider failure and repeated shutdown under memory/handle checks.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-012-03",
+      "requirements": [
+        "WT-REQ-012-03"
+      ],
+      "method": "fixture",
+      "oracle": "An uncooperative provider fixture cannot produce a false bounded-shutdown pass.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-020-01",
+      "requirements": [
+        "WT-REQ-020-01"
+      ],
+      "method": "artifact",
+      "oracle": "Inspect artifact imports/header/runtime records; no targeted or build-only profile becomes supported.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-020-02",
+      "requirements": [
+        "WT-REQ-020-02"
+      ],
+      "method": "fixture",
+      "oracle": "DOS/Win16/CE/RT fixture profiles expose only declared capabilities and precise unavailable reasons.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-020-03",
+      "requirements": [
+        "WT-REQ-020-03"
+      ],
+      "method": "native",
+      "oracle": "A modern-host cross-build/import record cannot satisfy the historical runtime case.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-030-01",
+      "requirements": [
+        "WT-REQ-030-01"
+      ],
+      "method": "fixture",
+      "oracle": "Table-driven parser cases cover default/TUI/snapshot/format, missing values, duplicates, conflicts, overflows and --gui exit2.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-030-02",
+      "requirements": [
+        "WT-REQ-030-02"
+      ],
+      "method": "fixture",
+      "oracle": "Use an injected collector/console spy and redirected output; information commands perform zero samples and no console mutation.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-030-03",
+      "requirements": [
+        "WT-REQ-030-03"
+      ],
+      "method": "fixture",
+      "oracle": "Parse JSON with an independent parser and compare fixed counters/status against model fixtures, including hostile process names.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-01",
+      "requirements": [
+        "WT-REQ-031-01"
+      ],
+      "method": "native",
+      "oracle": "Exercise zero rows, shrinking lists, PID reuse, tree cycles and small/rapidly resized terminals.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-02",
+      "requirements": [
+        "WT-REQ-031-02"
+      ],
+      "method": "review",
+      "oracle": "A feature audit maps each interaction to an acceptance case and observed implementation status; missing features remain planned.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-03",
+      "requirements": [
+        "WT-REQ-031-03"
+      ],
+      "method": "fixture",
+      "oracle": "Control-byte, long-name, Unicode-width and invalid-theme fixtures cannot inject terminal commands or corrupt layout.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-040-01",
+      "requirements": [
+        "WT-REQ-040-01"
+      ],
+      "method": "native",
+      "oracle": "Run from a different working directory with explicit, adjacent, legacy and user sentinel configs, denied/malformed paths and --no-config; verify read source, precedence and zero writes.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-040-02",
+      "requirements": [
+        "WT-REQ-040-02"
+      ],
+      "method": "native",
+      "oracle": "Read-only portable, multi-user and side-by-side install fixtures preserve sentinels and disclose inability to save.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-040-03",
+      "requirements": [
+        "WT-REQ-040-03"
+      ],
+      "method": "fixture",
+      "oracle": "Malformed, oversized, unknown-key and interrupted-save fixtures cannot execute content or destroy the original.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-050-01",
+      "requirements": [
+        "WT-REQ-050-01"
+      ],
+      "method": "artifact",
+      "oracle": "Compare payload hashes across ZIP/setup/MSI and verify license/source-offer obligations before release.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-050-02",
+      "requirements": [
+        "WT-REQ-050-02"
+      ],
+      "method": "native",
+      "oracle": "Per-user/system/portable/side-by-side and interrupted-update fixtures preserve sentinel files and recover the previous app.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-050-03",
+      "requirements": [
+        "WT-REQ-050-03"
+      ],
+      "method": "artifact",
+      "oracle": "Reject mismatched version/profile/hash manifests and inspect downloaded bytes before a release support claim.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-060-01",
+      "requirements": [
+        "WT-REQ-060-01"
+      ],
+      "method": "build",
+      "oracle": "Rebuild a named lane and inspect the produced machine/subsystem/import/CRT data against its profile.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-060-02",
+      "requirements": [
+        "WT-REQ-060-02"
+      ],
+      "method": "structural",
+      "oracle": "A missing compiler or failed gate appears as unavailable/failed in evidence, never pass.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-060-03",
+      "requirements": [
+        "WT-REQ-060-03"
+      ],
+      "method": "build",
+      "oracle": "Strict core build and adversarial width/encoding fixtures expose truncation and invalid conversions.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-061-01",
+      "requirements": [
+        "WT-REQ-061-01"
+      ],
+      "method": "native",
+      "oracle": "Run as an ordinary user against own and protected processes; inspect requested rights and verify no policy/service change.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-061-02",
+      "requirements": [
+        "WT-REQ-061-02"
+      ],
+      "method": "fixture",
+      "oracle": "PID-reuse, exit-race, denied-right and hostile-name fixtures cannot affect the wrong process or launch an unintended command.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-061-03",
+      "requirements": [
+        "WT-REQ-061-03"
+      ],
+      "method": "fixture",
+      "oracle": "Malformed variable-record, offset overflow and unterminated-string fixtures fail safely within declared bounds.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-062-01",
+      "requirements": [
+        "WT-REQ-062-01"
+      ],
+      "method": "structural",
+      "oracle": "Missing logs, changed source, invented IDs and empty evidence are rejected; a valid scoped record does not certify other targets.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-062-02",
+      "requirements": [
+        "WT-REQ-062-02"
+      ],
+      "method": "review",
+      "oracle": "Review a benchmark and a native compatibility record against required conditions; unknown measurements remain unknown.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-062-03",
+      "requirements": [
+        "WT-REQ-062-03"
+      ],
+      "method": "structural",
+      "oracle": "A multi-attempt evidence fixture keeps original failure records and attaches the later pass to its own exact subject.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-063-01",
+      "requirements": [
+        "WT-REQ-063-01"
+      ],
+      "method": "artifact",
+      "oracle": "Inspect manifest, source/import/native records and acquired-byte hashes; a build-only package cannot pass release qualification.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-063-02",
+      "requirements": [
+        "WT-REQ-063-02"
+      ],
+      "method": "review",
+      "oracle": "Compare release metadata and package identity against the real published artifact; planned channels remain unavailable.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-070-01",
+      "requirements": [
+        "WT-REQ-070-01"
+      ],
+      "method": "structural",
+      "oracle": "A cyclic/missing dependency or completed-without-evidence unit fails; next lists only admissible dependency-ready work.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-070-02",
+      "requirements": [
+        "WT-REQ-070-02"
+      ],
+      "method": "structural",
+      "oracle": "Status output cannot turn a reserved command or targeted platform into an implemented/released feature.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-080-01",
+      "requirements": [
+        "WT-REQ-080-01"
+      ],
+      "method": "review",
+      "oracle": "Review a proposed extraction against its dependency/rights/test record and reject unsupported parity claims.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-04",
+      "requirements": [
+        "WT-REQ-031-04"
+      ],
+      "method": "fixture",
+      "oracle": "Compare independent key/action tables, modifiers and editing contexts; htop k requests termination while vi k navigates, with identical action guards.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-05",
+      "requirements": [
+        "WT-REQ-031-05"
+      ],
+      "method": "native",
+      "oracle": "Exercise main/help/setup/search/filter/confirmation states and narrow/short terminals; hints and hitboxes remain inside displayed cells and hiding the bar returns its space.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-06",
+      "requirements": [
+        "WT-REQ-031-06"
+      ],
+      "method": "native",
+      "oracle": "Inject click/wheel/header/tab/bar events, disabled/unsupported mouse and resize races; verify selection/sort/scroll outcomes, no accidental termination and restored modes.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-07",
+      "requirements": [
+        "WT-REQ-031-07"
+      ],
+      "method": "fixture",
+      "oracle": "Round-trip differing tab layouts, reordered/hidden columns and headers, active tab and sort direction; reject duplicate/out-of-range layouts and preserve inactive-tab state.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-040-04",
+      "requirements": [
+        "WT-REQ-040-04"
+      ],
+      "method": "native",
+      "oracle": "Exercise explicit/legacy/user destinations, unavailable folder lookup, denied/read-only/missing parent, external changes, existing-file preservation, temporary cleanup and restart round-trip; ordinary startup/exit makes no settings write.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-030-04",
+      "requirements": [
+        "WT-REQ-030-04"
+      ],
+      "method": "fixture",
+      "oracle": "Combine CLI keymap/theme/mouse/bar overrides with config/no-config and metadata; invalid/conflicting forms fail before collection and write-config performs no process sample.",
+      "status": "not_run",
+      "evidence": []
+    }
+  ]
+}

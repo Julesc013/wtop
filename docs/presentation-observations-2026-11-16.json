@@ -1,0 +1,659 @@
+{
+  "schema": 1,
+  "observed_date_utc": "2026-11-16",
+  "version": "0.1.0-dev.2",
+  "repository": "https://github.com/Julesc013/wtop",
+  "implementation_commit": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+  "implementation_tree": "5dc5400a3f69edbd067b38e23e275ba3693e94e9",
+  "run": {
+    "id": 43871820392,
+    "url": "https://github.com/Julesc013/wtop/actions/runs/43871820392",
+    "event": "push"
+  },
+  "qualification": {
+    "historical_os": false,
+    "arm64_execution": false,
+    "human_visual": false,
+    "supported_release": false,
+    "all_acceptance_cases_promoted": false
+  },
+  "local_checks": {
+    "specification": "17 concepts / 51 requirements / 51 acceptance cases; valid",
+    "python": "24 passed, 11 native cases skipped on Linux",
+    "portable_c90": "3/3 passed with GCC 14.2.0 -Wall -Wextra -Werror -pedantic",
+    "portable_asan_ubsan": "3/3 passed; ASAN_OPTIONS=detect_leaks=0 due traced local execution; not a local leak-test pass",
+    "cross_builds": "x86, x64, ARM64 passed with Zig 0.17.1 / Clang 22.1.8; not runtime qualification",
+    "cross_build_limit": "Zig sets _WIN32_WINNT 0x0a00 before project 0x0601; macro warning and UCRT imports do not establish historical support",
+    "initial_arm64_attempt": "Stale generated rules used host GNU ar; link failed. A fresh build directory configured with Zig ar/ranlib built successfully."
+  },
+  "ci_evidence": {
+    "initial_run": {
+      "id": 43871361123,
+      "source": "8cde3fd874f17f79262d9d7321455ba9936f56b0",
+      "defect": "Console line input intercepted Emacs Ctrl+S; native TUI test failed while other tests passed."
+    },
+    "jobs": [
+      {
+        "id": 133314660045,
+        "name": "specification-and-core",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 43871820392,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Validate specification and tooling",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Build portable C90 core with sanitizers",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 9
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 10
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11
+          }
+        ]
+      },
+      {
+        "id": 133314660180,
+        "name": "windows (Win32)",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 43871820392,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Configure and build current Windows profile",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Run native CLI, TUI and portable checks",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5
+          },
+          {
+            "name": "Retain native console diagnostics",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6
+          },
+          {
+            "name": "Record candidate identity",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17
+          }
+        ]
+      },
+      {
+        "id": 133314660429,
+        "name": "windows (ARM64)",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 43871820392,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Configure and build current Windows profile",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Run native CLI, TUI and portable checks",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 5
+          },
+          {
+            "name": "Retain native console diagnostics",
+            "status": "completed",
+            "conclusion": "skipped",
+            "number": 6
+          },
+          {
+            "name": "Record candidate identity",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17
+          }
+        ]
+      },
+      {
+        "id": 133314661225,
+        "name": "windows (x64)",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 43871820392,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Configure and build current Windows profile",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Run native CLI, TUI and portable checks",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5
+          },
+          {
+            "name": "Retain native console diagnostics",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6
+          },
+          {
+            "name": "Record candidate identity",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7
+          },
+          {
+            "name": "Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8
+          },
+          {
+            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15
+          },
+          {
+            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17
+          }
+        ]
+      }
+    ],
+    "selected_logs": [
+      {
+        "index": 1,
+        "lines": [
+          "2026-11-16T13:01:14.9931953Z Microsoft Windows Server 2025\r",
+          "2026-11-16T13:01:36.9932132Z -- The C compiler identification is MSVC 19.51.36260.0\r",
+          "2026-11-16T13:01:47.1728919Z \u001b[36;1m    & \"$env:GITHUB_WORKSPACE\\source\\build.bat\" -release\u001b[0m\r",
+          "2026-11-16T13:01:49.3116676Z 1/9 Test #1: portable_core ....................   Passed    0.01 sec\r",
+          "2026-11-16T13:01:49.3312041Z 2/9 Test #2: portable_settings ................   Passed    0.02 sec\r",
+          "2026-11-16T13:01:49.3388761Z 3/9 Test #3: portable_ui ......................   Passed    0.01 sec\r",
+          "2026-11-16T13:01:49.3470287Z 4/9 Test #4: cli_version ......................   Passed    0.01 sec\r",
+          "2026-11-16T13:01:49.3523508Z 5/9 Test #5: cli_capabilities .................   Passed    0.00 sec\r",
+          "2026-11-16T13:01:49.3577718Z 6/9 Test #6: cli_gui_reserved .................   Passed    0.00 sec\r",
+          "2026-11-16T13:01:49.4356768Z 7/9 Test #7: cli_snapshot .....................   Passed    0.08 sec\r",
+          "2026-11-16T13:01:50.5017763Z 8/9 Test #8: native_cli_behavior ..............   Passed    1.06 sec\r",
+          "2026-11-16T13:01:53.9579348Z 9/9 Test #9: native_tui_interaction ...........   Passed    3.46 sec\r",
+          "2026-11-16T13:01:53.9587907Z 100% tests passed out of 9\r"
+        ]
+      },
+      {
+        "index": 2,
+        "lines": [
+          "2026-11-16T13:01:14.4078433Z Microsoft Windows Server 2025\r",
+          "2026-11-16T13:01:34.1992816Z -- The C compiler identification is MSVC 19.51.36260.0\r",
+          "2026-11-16T13:01:43.5377507Z \u001b[36;1m    & \"$env:GITHUB_WORKSPACE\\source\\build.bat\" -release\u001b[0m\r",
+          "2026-11-16T13:01:44.4427926Z 1/9 Test #1: portable_core ....................   Passed    0.04 sec\r",
+          "2026-11-16T13:01:44.4715030Z 2/9 Test #2: portable_settings ................   Passed    0.03 sec\r",
+          "2026-11-16T13:01:44.4869043Z 3/9 Test #3: portable_ui ......................   Passed    0.01 sec\r",
+          "2026-11-16T13:01:44.5044054Z 4/9 Test #4: cli_version ......................   Passed    0.02 sec\r",
+          "2026-11-16T13:01:44.5134549Z 5/9 Test #5: cli_capabilities .................   Passed    0.01 sec\r",
+          "2026-11-16T13:01:44.5224981Z 6/9 Test #6: cli_gui_reserved .................   Passed    0.01 sec\r",
+          "2026-11-16T13:01:44.5997177Z 7/9 Test #7: cli_snapshot .....................   Passed    0.08 sec\r",
+          "2026-11-16T13:01:45.9299844Z 8/9 Test #8: native_cli_behavior ..............   Passed    1.33 sec\r",
+          "2026-11-16T13:01:49.8320050Z 9/9 Test #9: native_tui_interaction ...........   Passed    3.90 sec\r",
+          "2026-11-16T13:01:49.8330706Z 100% tests passed out of 9\r"
+        ]
+      },
+      {
+        "index": 3,
+        "lines": [
+          "2026-11-16T13:01:14.5211442Z Ubuntu",
+          "2026-11-16T13:01:14.5215570Z Included Software: https://github.com/actions/runner-images/blob/ubuntu26/20261111.196/images/ubuntu/Ubuntu2604-Readme.md",
+          "2026-11-16T13:01:17.6133055Z Ran 35 tests in 0.814s",
+          "2026-11-16T13:01:17.6134935Z OK (skipped=11)",
+          "2026-11-16T13:01:18.0252656Z -- The C compiler identification is GNU 15.2.0",
+          "2026-11-16T13:01:19.5687505Z 1/3 Test #1: portable_core ....................   Passed    0.22 sec",
+          "2026-11-16T13:01:19.5867572Z 2/3 Test #2: portable_settings ................   Passed    0.02 sec",
+          "2026-11-16T13:01:19.5962862Z 3/3 Test #3: portable_ui ......................   Passed    0.01 sec",
+          "2026-11-16T13:01:19.5968184Z 100% tests passed out of 3"
+        ]
+      },
+      {
+        "index": 4,
+        "lines": [
+          "2026-11-16T13:01:14.6879010Z Microsoft Windows Server 2025\r",
+          "2026-11-16T13:01:36.8082474Z -- The C compiler identification is MSVC 19.51.36260.0\r"
+        ]
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": 14228347003,
+      "name": "wtop-native-checks-x64-73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+      "size_in_bytes": 8130,
+      "url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14228347003",
+      "archive_download_url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14228347003/zip",
+      "expired": false,
+      "created_at": "2026-11-16T13:01:55Z",
+      "expires_at": "2026-11-30T13:01:54Z",
+      "updated_at": "2026-11-16T13:01:55Z",
+      "digest": "sha256:958c3ee5f9ac36d4e62de42aa5a1c01a1669673074b29a7873289a332ff55f3b",
+      "workflow_run": {
+        "id": 43871820392,
+        "repository_id": 1459782028,
+        "head_repository_id": 1459782028,
+        "head_branch": "work/wtop-foundation-20261116",
+        "head_sha": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587"
+      },
+      "zip_sha256_verified": true,
+      "files": [
+        "native-tui-observations.json",
+        "Testing/Temporary/LastTest.log"
+      ],
+      "native_tui_result": "passed",
+      "checks": [
+        "default htop function bar and native mouse mode",
+        "mouse function action and keyboard overlays",
+        "F9 confirmation and cancellation are non-mutating",
+        "mouse actions cancel commands and preserve filter ownership across tabs",
+        "explicit save, unknown/comment preservation, reload and console restoration",
+        "external edits survive refused save and normal exit",
+        "vi navigation does not invoke htop k action",
+        "Emacs search/cancel and keyboard-only fallback",
+        "queued actions after quit are discarded before mutation"
+      ]
+    },
+    {
+      "id": 14227377996,
+      "name": "wtop-ARM64-candidate-73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+      "size_in_bytes": 142051,
+      "url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14227377996",
+      "archive_download_url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14227377996/zip",
+      "expired": false,
+      "created_at": "2026-11-16T13:01:49Z",
+      "expires_at": "2026-11-30T13:01:48Z",
+      "updated_at": "2026-11-16T13:01:49Z",
+      "digest": "sha256:37b811988545a54f85f7bb9d69a11c4cda4eead2947693955766bac5d6891a6f",
+      "workflow_run": {
+        "id": 43871820392,
+        "repository_id": 1459782028,
+        "head_repository_id": 1459782028,
+        "head_branch": "work/wtop-foundation-20261116",
+        "head_sha": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587"
+      },
+      "zip_sha256_verified": true,
+      "files": [
+        "LICENSE",
+        "out/windows/Release/wtop.exe",
+        "out/windows/Release/candidate.json"
+      ],
+      "candidate": {
+        "source": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+        "version": "0.1.0-dev.2",
+        "architecture": "ARM64",
+        "runner": "Windows",
+        "runnerImage": "20261103.298.1",
+        "kernel": "Microsoft Windows NT 10.0.26100.0",
+        "cliRuntimeTestedHere": false,
+        "nativeConsoleInteractionTestedHere": false,
+        "historicalOsQualified": false,
+        "tuiHumanAccepted": false,
+        "releaseSupported": false,
+        "sha256": "54991e67f0a777bbe9fa0c5e7e547a535db6974d7b29807c793768341f76cced"
+      },
+      "exe_bytes": 272896,
+      "exe_sha256_verified": true,
+      "pe": {
+        "machine": "0xaa64",
+        "subsystem": 3,
+        "subsystem_version": [
+          6,
+          2
+        ],
+        "imports": [
+          "ADVAPI32.dll",
+          "PSAPI.DLL",
+          "KERNEL32.dll"
+        ],
+        "delay_import_directory_size": 0
+      }
+    },
+    {
+      "id": 14227227973,
+      "name": "wtop-native-checks-Win32-73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+      "size_in_bytes": 7858,
+      "url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14227227973",
+      "archive_download_url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14227227973/zip",
+      "expired": false,
+      "created_at": "2026-11-16T13:01:50Z",
+      "expires_at": "2026-11-30T13:01:50Z",
+      "updated_at": "2026-11-16T13:01:50Z",
+      "digest": "sha256:43300a46dd89d17b0879c98b7d71ddaf4877ecd4249202fbbfd5774b0c493912",
+      "workflow_run": {
+        "id": 43871820392,
+        "repository_id": 1459782028,
+        "head_repository_id": 1459782028,
+        "head_branch": "work/wtop-foundation-20261116",
+        "head_sha": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587"
+      },
+      "zip_sha256_verified": true,
+      "files": [
+        "native-tui-observations.json",
+        "Testing/Temporary/LastTest.log"
+      ],
+      "native_tui_result": "passed",
+      "checks": [
+        "default htop function bar and native mouse mode",
+        "mouse function action and keyboard overlays",
+        "F9 confirmation and cancellation are non-mutating",
+        "mouse actions cancel commands and preserve filter ownership across tabs",
+        "explicit save, unknown/comment preservation, reload and console restoration",
+        "external edits survive refused save and normal exit",
+        "vi navigation does not invoke htop k action",
+        "Emacs search/cancel and keyboard-only fallback",
+        "queued actions after quit are discarded before mutation"
+      ]
+    },
+    {
+      "id": 14227173093,
+      "name": "wtop-Win32-candidate-73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+      "size_in_bytes": 137434,
+      "url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14227173093",
+      "archive_download_url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14227173093/zip",
+      "expired": false,
+      "created_at": "2026-11-16T13:01:52Z",
+      "expires_at": "2026-11-30T13:01:51Z",
+      "updated_at": "2026-11-16T13:01:52Z",
+      "digest": "sha256:790ab23f862023a9ed4ca8d3ea841902cc4053bc23fb8a806f98bf1b256e84f7",
+      "workflow_run": {
+        "id": 43871820392,
+        "repository_id": 1459782028,
+        "head_repository_id": 1459782028,
+        "head_branch": "work/wtop-foundation-20261116",
+        "head_sha": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587"
+      },
+      "zip_sha256_verified": true,
+      "files": [
+        "LICENSE",
+        "out/windows/Release/wtop.exe",
+        "out/windows/Release/candidate.json"
+      ],
+      "candidate": {
+        "source": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+        "version": "0.1.0-dev.2",
+        "architecture": "Win32",
+        "runner": "Windows",
+        "runnerImage": "20261103.298.1",
+        "kernel": "Microsoft Windows NT 10.0.26100.0",
+        "cliRuntimeTestedHere": true,
+        "nativeConsoleInteractionTestedHere": true,
+        "historicalOsQualified": false,
+        "tuiHumanAccepted": false,
+        "releaseSupported": false,
+        "sha256": "b8850f182707ae10dc26c9e34e09ca3a752649c5549b25197c1006edb5de1d5b"
+      },
+      "exe_bytes": 227328,
+      "exe_sha256_verified": true,
+      "pe": {
+        "machine": "0x014c",
+        "subsystem": 3,
+        "subsystem_version": [
+          6,
+          0
+        ],
+        "imports": [
+          "ADVAPI32.dll",
+          "PSAPI.DLL",
+          "KERNEL32.dll"
+        ],
+        "delay_import_directory_size": 0
+      }
+    },
+    {
+      "id": 14226914032,
+      "name": "wtop-x64-candidate-73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+      "size_in_bytes": 153305,
+      "url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14226914032",
+      "archive_download_url": "https://api.github.com/repos/Julesc013/wtop/actions/artifacts/14226914032/zip",
+      "expired": false,
+      "created_at": "2026-11-16T13:01:57Z",
+      "expires_at": "2026-11-30T13:01:56Z",
+      "updated_at": "2026-11-16T13:01:57Z",
+      "digest": "sha256:c3fab7d71177469eec38f74fab77e050cc8db552ba4e8c1f9431e1dfd6eb0c2c",
+      "workflow_run": {
+        "id": 43871820392,
+        "repository_id": 1459782028,
+        "head_repository_id": 1459782028,
+        "head_branch": "work/wtop-foundation-20261116",
+        "head_sha": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587"
+      },
+      "zip_sha256_verified": true,
+      "files": [
+        "LICENSE",
+        "out/windows/Release/wtop.exe",
+        "out/windows/Release/candidate.json"
+      ],
+      "candidate": {
+        "source": "73eb8af3fb1d3e55db6b3c347d7bde7431b80587",
+        "version": "0.1.0-dev.2",
+        "architecture": "x64",
+        "runner": "Windows",
+        "runnerImage": "20261103.298.1",
+        "kernel": "Microsoft Windows NT 10.0.26100.0",
+        "cliRuntimeTestedHere": true,
+        "nativeConsoleInteractionTestedHere": true,
+        "historicalOsQualified": false,
+        "tuiHumanAccepted": false,
+        "releaseSupported": false,
+        "sha256": "f126be8069415e87d2b8eaa61e2f906fe157dd65fd31c1cf4f5e9c31b2cd5545"
+      },
+      "exe_bytes": 266752,
+      "exe_sha256_verified": true,
+      "pe": {
+        "machine": "0x8664",
+        "subsystem": 3,
+        "subsystem_version": [
+          6,
+          0
+        ],
+        "imports": [
+          "ADVAPI32.dll",
+          "PSAPI.DLL",
+          "KERNEL32.dll"
+        ],
+        "delay_import_directory_size": 0
+      }
+    }
+  ],
+  "source_sha256": {
+    ".github/workflows/ci.yml": "0d3425cb6cb37e31b87444ccb2889cc7fbe33975cb365a9e71918164f10444f3",
+    "CMakeLists.txt": "f25b0eb4598cc811cc29a78a4c6805b3e9c92395cecc042e9d66e0be1e269971",
+    "VERSION": "9ed7fc15a6deea62c8f82c63b110db38e85e33f509a16e8f305a567a71018f34",
+    "source/_config.yml": "007c87b6d53384b7841ebfc5e74bd9616cd7cf7ca40add2d943ede38a16c7718",
+    "source/build.bat": "8b57c03293d5fb0d0bd2a6e0c77f6ce77f2534abae05e7a4f75004e3311fe424",
+    "source/core.c": "e1ad3abc6e521d709a2a5d516b68a452030cff4958f394dfd4dcc6c367ea0b0a",
+    "source/core.h": "7207f937f547c1d25c993fef03ca6a0639457f2a9c40640e0837cdcad0eed0eb",
+    "source/ntop.c": "29e65be87326855c552e61f288c284d7d8ec4ee0fac6090afe9ce0bedc18cb22",
+    "source/ntop.conf": "ebcc96506e9481b80397e5fccbd8f4ede556c4e5165d8b43a54a8eb0cadc300c",
+    "source/ntop.h": "ad828bd0097904a312d90de7eb45afc61eb1c35768c4fba259bc77efe81a1884",
+    "source/ntop.nuspec": "e1997e1e1792ddc95d1c7ab5860b3a41ae534881bb7fdcbfeaaa589a99257176",
+    "source/settings.c": "050853b2997295822fdddda8a27094b9e30ddaf51f8f80240b81e588aee7b085",
+    "source/settings.h": "e4e5a986b668a5fdefc6466276a93bf5aed3ceaee006f1e3304305c1984b023d",
+    "source/ui.c": "1105f80d06e174d103d1557d297e51c410a409f7be31387321d4901fa758440b",
+    "source/ui.h": "c870451fa98e8b42d4893730f425bc214600f90a8952d0de154a1bca76ac7753",
+    "source/util.c": "6f2d1a42152b31af086a3ff01b730bc958af72a35af51abfd810f5073f869866",
+    "source/util.h": "86c052dc8e48ae30a3c19598dd4350a0483814ca05f84b28396e1a153669d834",
+    "source/version.h.in": "3b1953eec12d7d55d1d4793e0661e81d39dbc48e419f683e639bfe76f6596a8e",
+    "source/vi.c": "6c616c0428eafb7f84b864cdcd3dc38130023dc556f665de026c7e8b3af9c97d",
+    "source/vi.h": "2508e524fed2ee13441f7d70a7d8bed68cd83f962f743152df9afbba61f01568",
+    "source/wtop.conf": "9e90c37302cdc6f76a94bf7a053cc88aba8f57d2bdb49fb83ce4e1c4e64da772",
+    "tests/test_core.c": "e912a908d2b6a0509848811eb83db28e174831b2c42eaeeb3b937a218021272c",
+    "tests/test_native_cli.py": "34a8e92021662b9b9158601a3bfd20496220a802c5a7139128fa031ac863c342",
+    "tests/test_native_tui.py": "0983e0dbcda1a17e2d8535b72eca421d139a84da00104eab0a9a565f12bab47d",
+    "tests/test_settings.c": "87fb4ebc0e055b195f0e52cbe4376322e51b90ccdf09242c0a18e5676f430654",
+    "tests/test_specctl.py": "67c5ddfbd4ff7a9a57fdc16facbd352f9e92efa3a58ae9bec709fb94cff3e1af",
+    "tests/test_ui.c": "3a41cf9ca06dd6435d4469fa1d1cf368c1aa33391e79790c755e787479f388c3"
+  },
+  "limits": [
+    "Win32 and x64 executed on Windows Server 2025 x64 build 26100, not on all claimed research targets.",
+    "Console tests inject native input and inspect cells/modes in an isolated console; they are not human visual acceptance or exhaustive terminal compatibility.",
+    "Native tests do not prove leak-free behavior, arbitrary failure handling, process-churn safety or performance bounds.",
+    "Existing-file external-edit comparison is best effort; MoveFileEx does not retain customized destination ACLs or other file metadata.",
+    "Emergency shutdown of blocked native queries can bypass normal console cleanup.",
+    "All 51 broad product acceptance entries remain unpromoted."
+  ]
+}
