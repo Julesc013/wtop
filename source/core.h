@@ -3,7 +3,9 @@
 #define WTOP_CORE_H
 #include <stddef.h>
 #include <stdio.h>
-typedef enum wtop_action { WTOP_RUN, WTOP_HELP, WTOP_VERSION, WTOP_CAPABILITIES } wtop_action;
+typedef enum wtop_action {
+    WTOP_RUN, WTOP_HELP, WTOP_VERSION, WTOP_CAPABILITIES, WTOP_WRITE_CONFIG
+} wtop_action;
 typedef enum wtop_mode { WTOP_TUI, WTOP_SNAPSHOT, WTOP_GUI } wtop_mode;
 typedef struct wtop_options {
     wtop_action action;
@@ -18,6 +20,11 @@ typedef struct wtop_options {
     const char *name_filter;
     const char *user_filter;
     const char *sort_column;
+    const char *keymap_name;
+    const char *theme_name;
+    const char *write_config_path;
+    int mouse_mode; /* -1 means no command-line override. */
+    int show_function_bar; /* -1 means no command-line override. */
 } wtop_options;
 /* argv remains owned by the caller; output strings reference argv. */
 int wtop_parse_options(int argc, const char *const *argv, wtop_options *options, const char **error);

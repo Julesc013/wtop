@@ -18,13 +18,21 @@
         "spec/",
         "tools/",
         "tests/",
-        "ntop.c",
-        "ntop.h",
-        "util.c",
-        "util.h",
-        "vi.c",
-        "vi.h",
-        "CMakeLists.txt"
+        "source/ntop.c",
+        "source/ntop.h",
+        "source/util.c",
+        "source/util.h",
+        "source/vi.c",
+        "source/vi.h",
+        "CMakeLists.txt",
+        "README.md",
+        "TODO.md",
+        "ROADMAP.md",
+        "docs/",
+        "source/_config.yml",
+        "source/build.bat",
+        "source/ntop.conf",
+        "source/ntop.nuspec"
       ],
       "deliverables": [
         "Preserved upstream provenance/license",
@@ -55,10 +63,10 @@
       "allowed_paths": [
         "source/",
         "tests/",
-        "ntop.c",
-        "ntop.h",
-        "util.c",
-        "util.h"
+        "source/ntop.c",
+        "source/ntop.h",
+        "source/util.c",
+        "source/util.h"
       ],
       "deliverables": [
         "Explicit TUI/snapshot/information dispatch",
@@ -68,7 +76,8 @@
       "acceptance": [
         "WT-AC-030-01",
         "WT-AC-030-02",
-        "WT-AC-040-01"
+        "WT-AC-040-01",
+        "WT-AC-030-04"
       ],
       "evidence": []
     },
@@ -88,8 +97,8 @@
       "allowed_paths": [
         "source/",
         "tests/",
-        "ntop.c",
-        "ntop.h"
+        "source/ntop.c",
+        "source/ntop.h"
       ],
       "deliverables": [
         "Lifetime-aware snapshots",
@@ -121,8 +130,8 @@
       "allowed_paths": [
         "source/",
         "tests/",
-        "ntop.c",
-        "vi.c"
+        "source/ntop.c",
+        "source/vi.c"
       ],
       "deliverables": [
         "Bounded in-flight sampling",
@@ -136,6 +145,39 @@
         "WT-AC-061-01",
         "WT-AC-061-02",
         "WT-AC-061-03"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-W035",
+      "title": "Unified query, inspection and bounded logging",
+      "status": "planned",
+      "dependencies": [
+        "WT-W020",
+        "WT-W030"
+      ],
+      "context": [
+        "WT-030",
+        "WT-011",
+        "WT-012",
+        "WT-061"
+      ],
+      "allowed_paths": [
+        "source/",
+        "tests/",
+        "spec/"
+      ],
+      "deliverables": [
+        "Shared read-only selectors/fields for query and inspection",
+        "Provider/configuration diagnostics with explicit capability states",
+        "Versioned bounded logging/export with partial-failure and cancellation outcomes"
+      ],
+      "acceptance": [
+        "WT-AC-030-01",
+        "WT-AC-030-03",
+        "WT-AC-011-03",
+        "WT-AC-012-01",
+        "WT-AC-061-01"
       ],
       "evidence": []
     },
@@ -155,18 +197,24 @@
       "allowed_paths": [
         "source/",
         "tests/",
-        "ntop.c",
-        "vi.c"
+        "source/ntop.c",
+        "source/vi.c"
       ],
       "deliverables": [
-        "Stable tree/filter/tag/follow controls",
-        "Configurable columns/meters/help",
-        "ASCII/monochrome and resize safety"
+        "htop-default keymap with optional vi/vim and Emacs bindings",
+        "Contextual last-row function bar and live status, visible by default",
+        "Shared keyboard/mouse action dispatch with graceful mouse fallback",
+        "Configurable header rows, columns/order, sort/tree and named view tabs",
+        "Identity-safe process controls, help and setup without decorative layout drift"
       ],
       "acceptance": [
         "WT-AC-031-01",
         "WT-AC-031-02",
-        "WT-AC-031-03"
+        "WT-AC-031-03",
+        "WT-AC-031-04",
+        "WT-AC-031-05",
+        "WT-AC-031-06",
+        "WT-AC-031-07"
       ],
       "evidence": []
     },
@@ -187,13 +235,15 @@
         "packaging/"
       ],
       "deliverables": [
-        "Explicit portable/installed path resolver",
-        "Versioned config/themes/keymaps",
-        "Preserving atomic/degraded-save semantics"
+        "Explicit checked settings save/export and compatibility reader",
+        "htop/ntop/monochrome color roles with overrides and keymap selection",
+        "Versioned view/header/column/tab configuration with preservation limits",
+        "Explicit portable/installed path resolver and ownership-aware migration"
       ],
       "acceptance": [
         "WT-AC-040-02",
-        "WT-AC-040-03"
+        "WT-AC-040-03",
+        "WT-AC-040-04"
       ],
       "evidence": []
     },

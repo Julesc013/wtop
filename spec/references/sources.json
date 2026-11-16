@@ -185,6 +185,22 @@
       "revision": null,
       "observed_at": "2026-11-16T11:13:04Z",
       "scope": "Microsoft identifies Windows Phone7 as CE and Windows Phone8 as NT. This does not qualify Wtop desktop APIs or unrestricted deployment on phones."
+    },
+    {
+      "id": "htop-controls",
+      "title": "htop default action bindings and manual",
+      "resource": "https://github.com/htop-dev/htop/blob/21bbc80c7811149ee33f449748addf23740c7b9f/htop.1.in",
+      "revision": "21bbc80c7811149ee33f449748addf23740c7b9f",
+      "observed_at": "2026-11-16T12:38:25Z",
+      "scope": "Reference interaction semantics and documented F1-F10/screen behavior; no htop implementation code imported."
+    },
+    {
+      "id": "htop-colors",
+      "title": "htop default terminal color roles",
+      "resource": "https://github.com/htop-dev/htop/blob/21bbc80c7811149ee33f449748addf23740c7b9f/CRT.c",
+      "revision": "21bbc80c7811149ee33f449748addf23740c7b9f",
+      "observed_at": "2026-11-16T12:38:25Z",
+      "scope": "Reference foreground/background roles; terminal palette RGB and Windows telemetry semantics remain independent."
     }
   ]
 }

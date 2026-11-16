@@ -4,6 +4,11 @@ Wtop continues gsass1/NTop at `326ccd80b41842868f4247d1e8978e854658a710`.
 Preserve upstream history, authorship and GPL-3.0-only notices. The current
 product is a terminal process monitor; a native GUI is deferred.
 
+Application sources, headers and inherited build/configuration/packaging files
+live in `source/`. Root `CMakeLists.txt` remains the build entrypoint. Root
+`TODO.md` and `ROADMAP.md` are practical views of the canonical specification;
+they must distinguish implemented code from native acceptance and release support.
+
 ## Start here
 
 Read `spec/START-HERE.md`, `spec/index.md`, `README.md` and the work unit selected

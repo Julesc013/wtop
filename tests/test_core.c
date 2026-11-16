@@ -1,5 +1,6 @@
 /* Wtop portable behavioral tests. SPDX-License-Identifier: GPL-3.0-only */
 #include "core.h"
+#include "settings.h"
 #include <assert.h>
 #include <float.h>
 #include <stdio.h>
@@ -20,8 +21,19 @@ static void options_test(void)
     const char *bad_tui[] = { "wtop", "--tui", "--format", "json" };
     const char *bad_path[] = { "wtop", "--config", "x", "--no-config" };
     const char *unknown[] = { "wtop", "--count", "10" };
+    const char *presentation[] = { "wtop", "--theme", "ntop", "--keymap", "vim", "--mouse", "off", "--no-status-bar" };
+    const char *write_config[] = { "wtop", "--no-config", "--write-config", "settings.conf", "--theme", "monochrome" };
+    const char *write_mode[] = { "wtop", "--write-config", "settings.conf", "--snapshot" };
+    const char *write_format[] = { "wtop", "--write-config", "settings.conf", "--format", "json" };
+    const char *write_metadata[] = { "wtop", "--write-config", "settings.conf", "--help" };
+    const char *bad_keymap[] = { "wtop", "--keymap", "wordstar" };
+    const char *bad_theme[] = { "wtop", "--theme", "custom-script" };
+    const char *bad_mouse[] = { "wtop", "--mouse", "yes" };
+    const char *write_selector[] = { "wtop", "--write-config", "settings.conf", "-p", "123" };
+    const char *write_two_paths[] = { "wtop", "--write-config", "first.conf", "--write-config", "second.conf" };
     assert(wtop_parse_options(1, defaults, &options, &error));
     assert(options.mode == WTOP_TUI && options.interval_ms == 1000);
+    assert(options.mouse_mode == -1 && options.show_function_bar == -1);
     assert(wtop_parse_options(5, snapshot, &options, &error));
     assert(options.mode == WTOP_SNAPSHOT && options.json && options.interval_ms == 250);
     assert(wtop_parse_options(5, metadata, &options, &error));
@@ -34,6 +46,20 @@ static void options_test(void)
     assert(!wtop_parse_options(4, bad_tui, &options, &error));
     assert(!wtop_parse_options(4, bad_path, &options, &error));
     assert(!wtop_parse_options(3, unknown, &options, &error));
+    assert(wtop_parse_options(8, presentation, &options, &error));
+    assert(!strcmp(options.theme_name, "ntop") && !strcmp(options.keymap_name, "vim"));
+    assert(options.mouse_mode == WTOP_MOUSE_OFF && options.show_function_bar == 0);
+    assert(wtop_parse_options(6, write_config, &options, &error));
+    assert(options.action == WTOP_WRITE_CONFIG && options.no_config);
+    assert(!strcmp(options.write_config_path, "settings.conf"));
+    assert(!wtop_parse_options(4, write_mode, &options, &error));
+    assert(!wtop_parse_options(5, write_format, &options, &error));
+    assert(!wtop_parse_options(4, write_metadata, &options, &error));
+    assert(!wtop_parse_options(3, bad_keymap, &options, &error));
+    assert(!wtop_parse_options(3, bad_theme, &options, &error));
+    assert(!wtop_parse_options(3, bad_mouse, &options, &error));
+    assert(!wtop_parse_options(5, write_selector, &options, &error));
+    assert(!wtop_parse_options(5, write_two_paths, &options, &error));
 }
 
 static void numeric_test(void)

@@ -16,6 +16,13 @@ Begin by compiling the inherited Windows program under the current maintained
 toolchain, repairing concrete warnings, pointer-width/Unicode/formatting defects
 and unsafe library use without a wholesale rewrite. Keep the diff reviewable.
 The baseline build must not be confused with historical qualification.
+Application C/headers and inherited build/configuration/packaging inputs live
+under source/. Root CMakeLists.txt remains the build entry point;
+source/build.bat resolves that root from its own location. Build artifacts stay
+outside tracked source. source/_config.yml is retained site input, and
+source/ntop.nuspec is legacy packaging metadata, not a Wtop installer manifest.
+source/wtop.conf is generated from current defaults; source/ntop.conf retains the
+legacy import example.
 
 The shared model aims at strict C90. Native adapters may use isolated compiler
 extensions when required by Windows headers/ABI; record each exception rather

@@ -316,6 +316,48 @@
       "acceptance": [
         "WT-AC-080-01"
       ]
+    },
+    {
+      "id": "WT-REQ-031-04",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-04"
+      ]
+    },
+    {
+      "id": "WT-REQ-031-05",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-05"
+      ]
+    },
+    {
+      "id": "WT-REQ-031-06",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-06"
+      ]
+    },
+    {
+      "id": "WT-REQ-031-07",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-07"
+      ]
+    },
+    {
+      "id": "WT-REQ-040-04",
+      "concept": "WT-040",
+      "acceptance": [
+        "WT-AC-040-04"
+      ]
+    },
+    {
+      "id": "WT-REQ-030-04",
+      "concept": "WT-030",
+      "acceptance": [
+        "WT-AC-030-04"
+      ]
     }
   ]
 }

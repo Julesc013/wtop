@@ -1,4 +1,7 @@
 <?xml version="1.0"?>
+<!-- Historical NTop package metadata retained for provenance. This is not an
+     active Wtop package manifest and must not publish to the upstream package ID.
+     See ../spec/distribution/packaging.md for the Wtop delivery work. -->
 <package xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
   <metadata>
     <id>ntop.portable</id>

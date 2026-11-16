@@ -1,5 +1,6 @@
 /* Wtop shared command and serialization helpers. SPDX-License-Identifier: GPL-3.0-only */
 #include "core.h"
+#include "settings.h"
 #include <errno.h>
 #include <float.h>
 #include <stdlib.h>
@@ -20,7 +21,7 @@ int wtop_parse_unsigned(const char *text, unsigned long minimum, unsigned long m
 static int set_action(wtop_options *options, wtop_action action, const char **error)
 {
     if (options->action != WTOP_RUN && options->action != action) {
-        *error = "choose only one of --help, --version and --capabilities";
+        *error = "choose only one information or configuration-writing action";
         return 0;
     }
     options->action = action;
@@ -37,6 +38,8 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
     memset(options, 0, sizeof(*options));
     options->mode = WTOP_TUI;
     options->interval_ms = 1000;
+    options->mouse_mode = -1;
+    options->show_function_bar = -1;
     *error = NULL;
     mode_set = 0;
     format_set = 0;
@@ -60,7 +63,12 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
             mode_set = 1;
         } else if (!strcmp(arg, "-C")) options->monochrome = 1;
         else if (!strcmp(arg, "--no-config")) options->no_config = 1;
+        else if (!strcmp(arg, "--status-bar")) options->show_function_bar = 1;
+        else if (!strcmp(arg, "--no-status-bar")) options->show_function_bar = 0;
+        else if (!strcmp(arg, "--no-mouse")) options->mouse_mode = WTOP_MOUSE_OFF;
         else if (!strcmp(arg, "--format") || !strcmp(arg, "--interval") || !strcmp(arg, "--config") ||
+                 !strcmp(arg, "--keymap") || !strcmp(arg, "--theme") || !strcmp(arg, "--mouse") ||
+                 !strcmp(arg, "--write-config") ||
                  !strcmp(arg, "-p") || !strcmp(arg, "-n") || !strcmp(arg, "-u") || !strcmp(arg, "-s")) {
             if (i + 1 >= argc || !argv[i + 1][0] || argv[i + 1][0] == '-') {
                 *error = "option requires a nonempty value";
@@ -81,6 +89,35 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
                 }
                 options->interval_set = 1;
             } else if (!strcmp(arg, "--config")) options->config_path = value;
+            else if (!strcmp(arg, "--keymap")) {
+                wtop_keymap keymap;
+                if (!wtop_parse_keymap(value, &keymap)) {
+                    *error = "--keymap must be htop, vi/vim or emacs";
+                    return 0;
+                }
+                options->keymap_name = value;
+            } else if (!strcmp(arg, "--theme")) {
+                wtop_theme theme;
+                if (!wtop_parse_theme(value, &theme)) {
+                    *error = "--theme must be htop, ntop or monochrome";
+                    return 0;
+                }
+                options->theme_name = value;
+            } else if (!strcmp(arg, "--mouse")) {
+                wtop_mouse mouse;
+                if (!wtop_parse_mouse(value, &mouse)) {
+                    *error = "--mouse must be auto, on or off";
+                    return 0;
+                }
+                options->mouse_mode = (int)mouse;
+            } else if (!strcmp(arg, "--write-config")) {
+                if (options->write_config_path && strcmp(options->write_config_path, value)) {
+                    *error = "--write-config cannot name more than one destination";
+                    return 0;
+                }
+                if (!set_action(options, WTOP_WRITE_CONFIG, error)) return 0;
+                options->write_config_path = value;
+            }
             else if (!strcmp(arg, "-p")) options->pid_filter = value;
             else if (!strcmp(arg, "-n")) options->name_filter = value;
             else if (!strcmp(arg, "-u")) options->user_filter = value;
@@ -92,6 +129,15 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
     }
     if (options->config_path && options->no_config) {
         *error = "--config and --no-config are mutually exclusive";
+        return 0;
+    }
+    if (options->action == WTOP_WRITE_CONFIG && (mode_set || format_set)) {
+        *error = "--write-config exits after saving; presentation and format options do not apply";
+        return 0;
+    }
+    if (options->action == WTOP_WRITE_CONFIG &&
+        (options->pid_filter || options->name_filter || options->user_filter)) {
+        *error = "process selectors are not saved by --write-config";
         return 0;
     }
     if (options->action == WTOP_RUN && format_set) {

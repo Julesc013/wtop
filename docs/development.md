@@ -1,13 +1,31 @@
 # Build and verification
 
-## Current implementation
+## Current implementation and module boundaries
 
-The application has a Windows NT backend derived from NTop. The small shared
-command/formatting core also builds on a development host for tests. That host
-target is not a Linux monitor or proof of a DOS/Win16 port. The Windows build
-requests Unicode APIs, a Win7-era header baseline and PSAPI v1. Final loader/CRT
-imports and native execution determine actual OS reach; version macros alone
-do not establish historical support.
+The application has a Windows NT backend derived from NTop. Shared option,
+formatting, settings and input/layout policy also builds on a development host
+for tests. That host target is not a Linux monitor or proof of a DOS/Win16 port.
+The Windows build requests Unicode APIs, a Win7-era header baseline and PSAPI v1.
+Final loader/CRT imports and native execution determine actual OS reach; version
+macros alone do not establish historical support.
+
+Application files live under `source/`. The root `CMakeLists.txt` remains the
+build entry point. The inherited `source/ntop.c/.h`, `source/util.c/.h` and
+`source/vi.c/.h` retain the working native foundation. Portable policy belongs in
+`source/core.c/.h`, `source/settings.c/.h` and `source/ui.c/.h`; Windows handles,
+console events and filesystem replacement stay with the native adapter.
+
+`source/_config.yml` is inherited site configuration, not a Wtop settings file.
+`source/ntop.nuspec` retains old NTop packaging metadata and is not a Wtop release
+manifest. `source/wtop.conf` is generated from current compiled defaults;
+`source/ntop.conf` is retained as a legacy import example. Preserve upstream
+notices and source identity when moving files; historical observations retain the
+paths and hashes that applied to their recorded revision.
+
+Use [TODO](../TODO.md) to find closure tasks and [ROADMAP](../ROADMAP.md) for
+sequence. The work registry and linked requirements remain authoritative.
+Candidate code may implement part of a planned work unit; inspect it before
+starting an extraction or replacement.
 
 ## Windows build
 
@@ -24,10 +42,13 @@ out/windows-x64/Release/wtop.exe --snapshot --format json --no-config
 Choose `-A Win32` for an x86 candidate or `-A ARM64` for an ARM64 candidate when
 that compiler is installed. Cross-compilation alone does not test execution.
 MSVC uses a static C runtime for the current application profile. Audit the PE
-imports before claiming one-file or old-OS-compatible operation. `build.bat`
-is a convenience entrypoint for CMake.
+imports before claiming one-file or old-OS-compatible operation.
+`source/build.bat` is a convenience entry point for CMake; it resolves the
+repository root from its own location and does not require copying files back to
+the root. Python enables additional development tests but is not part of the
+application's installed runtime.
 
-## Host core and specification checks
+## Host policy and specification checks
 
 ```sh
 python tools/specctl.py validate
@@ -37,34 +58,73 @@ cmake --build out/host --parallel 2
 ctest --test-dir out/host --output-on-failure
 ```
 
-Python is development tooling, not an application dependency. Sanitizer runs
-apply to the portable core; they do not prove Win32 handle ownership or native
-historical behavior. Builds should remain outside tracked source paths.
+CMake registers separate `portable_core`, `portable_settings` and `portable_ui`
+tests. Their contracts cover option conflicts/output arithmetic, bounded
+transactional settings and round trips, and key/action/visible-layout decisions.
+Expected results must come from the behavior contract, not another call to the
+same implementation. Exercise malformed values, duplicates, overflow, unknown
+inert keys, UTF-8 limits, mode conflicts and narrow widths where relevant.
 
-## Native acceptance
+Sanitizer runs apply to portable modules. They do not establish Win32 handle
+ownership, operating-system loader compatibility or historical behavior. Keep
+builds and raw logs outside tracked source paths.
+
+## Native automated checks
+
+On Windows, CMake adds CLI version, capability, reserved-GUI and snapshot checks.
+When a Python interpreter is available, it also adds `native_cli_behavior` and
+`native_tui_interaction`. The latter creates its own console, injects native input
+and observes the console buffer/settings. It must not attach to an unrelated
+interactive user's console or terminate arbitrary processes.
+
+These checks can establish concrete behavior on the recorded CI host: parseable
+output, bounded exit, selected keyboard/mouse paths and settings persistence.
+They do not establish all console hosts, visual quality, accessibility, historical
+target support, all privilege boundaries or full htop parity. Keep synthetic event
+coverage distinct from a human reviewing a real displayed frame.
+
+Tests must never broaden an action to arbitrary real processes. Launch a disposable
+fixture, record its identity and own its cleanup. Unknown/reused identities,
+failed rights, cancelled prompts and denied settings destinations need independent
+negative cases. `--write-config` tests use temporary owned directories and assert
+that no process collector is required. Restore console modes and close every
+owned handle on success, failure and cancellation.
+
+## Native acceptance and release gates
 
 For each target, record executable/source hashes, compiler/runtime, OS/service
 pack/build, architecture and optional components. Audit imports/subsystem/CPU
-instructions before execution. Exercise TUI selection, sorting, tagging,
-following, resize, Unicode/code pages, small/empty lists, quit, Ctrl+C and console
-close. Test rapid process exit/reuse and denied queries. Repeated filters and
-snapshots must not grow handles/memory without a bounded reason. Compare counters
-to independently specified arithmetic/native observations with matched units.
+instructions before execution. Exercise selection, sorting, tagging, following,
+resize, Unicode/code pages, small/empty lists, quit, Ctrl+C and console close.
+Test rapid process exit/reuse and denied queries. Repeated filters and snapshots
+must not grow handles/memory without a bounded reason. Compare counters with
+independently specified arithmetic/native observations and matched units.
+
+For the current TUI iteration, include all keymaps and editing/overlay contexts,
+F1–F10, narrow function-bar hints/hitboxes, disabled/failed mouse reporting,
+header/column/tab order and visibility, pending identity-based termination,
+priority-class boundaries, settings round trip and saved versus unsaved changes.
+Check read-only/denied config paths, interrupted replacement, original-file
+preservation and zero startup/exit writes. A passing parser fixture cannot qualify
+native save durability or mouse/console restoration.
 
 Test redirection and noninteractive commands without a console. GUI invocation
-is reserved and unavailable. Install/configuration writes need their own lifecycle
-proof. DOS1, Win1/2, Win3, Win9x, early NT, CE and OS/2 require suitable toolchains
-and actual native/emulated-guest execution; the default build proves none of them.
+is reserved and unavailable. Managed installs require their own ownership,
+update/removal and recovery proof. DOS1, Win1/2, Win3, Win9x, early NT, CE and OS/2
+require suitable toolchains and actual native/emulated-guest execution; the
+default build proves none of them.
 
 ## CI and evidence
 
-CI validates specs, runs host core tests with sanitizers, and builds Windows
-Win32/x64/ARM64 candidates. Its x86 runtime is hosted x64 Windows, while ARM64 is
-build-only. Neither is historical OS certification. Artifacts carry exact identity
-and explicit limits. A source push never automatically creates a release. Keep
-large binaries/raw logs in ignored `out/` or an external build directory; retain
-concise source-bound outcomes and known failures in project evidence.
+CI validates specifications, runs portable tests with sanitizers and builds
+Windows Win32/x64/ARM64 candidates. Its x86 runtime is hosted x64 Windows, while
+ARM64 is build-only. Neither is historical OS certification. Artifacts carry
+exact identity and explicit limits. A source push never automatically creates a
+release. Keep large binaries/raw logs in ignored `out/` or an external build
+directory; retain concise source-bound outcomes and known failures as evidence.
 
 The initial [bootstrap observations](bootstrap-verification.md) disclose the
-local cross-build and host-test results, toolchain failures and remaining native
-gates. They do not promote acceptance or release status.
+original cross-build and host-test results, toolchain failures and remaining
+gates. Those records do not qualify later source revisions. Record new evidence
+with its own revision rather than editing old hashes or silently promoting
+acceptance and release status.

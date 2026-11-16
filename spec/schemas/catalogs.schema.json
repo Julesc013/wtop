@@ -564,7 +564,8 @@
                   "modifier",
                   "selector",
                   "reserved",
-                  "planned"
+                  "planned",
+                  "configuration"
                 ]
               },
               "arguments": {

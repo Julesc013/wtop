@@ -43,6 +43,8 @@ typedef enum process_sort_type {
 int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest);
 void ChangeProcessSortType(process_sort_type NewProcessSortType);
 void StartSearch(const TCHAR *Pattern);
+void SetPresentationFilter(const TCHAR *Pattern);
+int SavePresentationSettings(void);
 
 typedef enum vi_message_type {
 	VI_NOTICE,

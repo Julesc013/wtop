@@ -258,7 +258,7 @@
         "WT-REQ-040-01"
       ],
       "method": "native",
-      "oracle": "Run from a different working directory with sentinel configs, denied paths and --no-config; verify read source and zero writes.",
+      "oracle": "Run from a different working directory with explicit, adjacent, legacy and user sentinel configs, denied/malformed paths and --no-config; verify read source, precedence and zero writes.",
       "status": "not_run",
       "evidence": []
     },
@@ -449,6 +449,66 @@
       ],
       "method": "review",
       "oracle": "Review a proposed extraction against its dependency/rights/test record and reject unsupported parity claims.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-04",
+      "requirements": [
+        "WT-REQ-031-04"
+      ],
+      "method": "fixture",
+      "oracle": "Compare independent key/action tables, modifiers and editing contexts; htop k requests termination while vi k navigates, with identical action guards.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-05",
+      "requirements": [
+        "WT-REQ-031-05"
+      ],
+      "method": "native",
+      "oracle": "Exercise main/help/setup/search/filter/confirmation states and narrow/short terminals; hints and hitboxes remain inside displayed cells and hiding the bar returns its space.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-06",
+      "requirements": [
+        "WT-REQ-031-06"
+      ],
+      "method": "native",
+      "oracle": "Inject click/wheel/header/tab/bar events, disabled/unsupported mouse and resize races; verify selection/sort/scroll outcomes, no accidental termination and restored modes.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-031-07",
+      "requirements": [
+        "WT-REQ-031-07"
+      ],
+      "method": "fixture",
+      "oracle": "Round-trip differing tab layouts, reordered/hidden columns and headers, active tab and sort direction; reject duplicate/out-of-range layouts and preserve inactive-tab state.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-040-04",
+      "requirements": [
+        "WT-REQ-040-04"
+      ],
+      "method": "native",
+      "oracle": "Exercise explicit/legacy/user destinations, unavailable folder lookup, denied/read-only/missing parent, external changes, existing-file preservation, temporary cleanup and restart round-trip; ordinary startup/exit makes no settings write.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-030-04",
+      "requirements": [
+        "WT-REQ-030-04"
+      ],
+      "method": "fixture",
+      "oracle": "Combine CLI keymap/theme/mouse/bar overrides with config/no-config and metadata; invalid/conflicting forms fail before collection and write-config performs no process sample.",
       "status": "not_run",
       "evidence": []
     }

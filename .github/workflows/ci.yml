@@ -53,9 +53,19 @@ jobs:
         run: |
           cmake -S . -B out/windows -A ${{ matrix.arch }}
           cmake --build out/windows --config Release --parallel 2
-      - name: Run native CLI and core checks
+      - name: Run native CLI, TUI and portable checks
         if: matrix.arch != 'ARM64'
         run: ctest --test-dir out/windows -C Release --output-on-failure
+      - name: Retain native console diagnostics
+        if: always() && matrix.arch != 'ARM64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wtop-native-checks-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            out/windows/native-tui-observations.json
+            out/windows/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Record candidate identity
         shell: pwsh
         run: |
@@ -67,6 +77,7 @@ jobs:
             runnerImage = $env:ImageVersion
             kernel = [Environment]::OSVersion.VersionString
             cliRuntimeTestedHere = ('${{ matrix.arch }}' -ne 'ARM64')
+            nativeConsoleInteractionTestedHere = ('${{ matrix.arch }}' -ne 'ARM64')
             historicalOsQualified = $false
             tuiHumanAccepted = $false
             releaseSupported = $false

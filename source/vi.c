@@ -177,7 +177,15 @@ COMMAND_FUNC(search)
 	return 0;
 }
 
+COMMAND_FUNC(save)
+{
+    UNREFERENCED_PARAMETER(Argv);
+    if(Argc) { SetViMessage(VI_ERROR, _T("Usage: save")); return 1; }
+    return !SavePresentationSettings();
+}
+
 static cmd Commands[] = {
+    COMMAND(save),
 	COMMAND(exec),
 	COMMAND(kill),
 	COMMAND(q),
@@ -269,7 +277,10 @@ static void TryExec(TCHAR *Str)
         return;
     }
 
-	/* Search has an alias */
+	/* Interactive filter shares the bounded input editor. */
+    if(Str[0] == _T('\\')) { SetPresentationFilter(Str + 1); return; }
+
+    /* Search has an alias */
 	if(Str[0] == _T('/')) {
 		TCHAR *Args[1];
 		Args[0] = Str + 1;
@@ -319,6 +330,7 @@ void ViEnableInput(TCHAR InitialKey)
 	ClearViMessage();
 	InInputMode = 1;
 	InputIndex = 1;
+    HistoryIndex = HistoryCount;
 }
 
 void ViDisableInput(void)
@@ -326,49 +338,88 @@ void ViDisableInput(void)
 	CurrentInputStr[0] = 0;
 	InInputMode = 0;
 
-	FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
+    /* Never discard unrelated queued console events on editor close. */
+}
+
+static DWORD PreviousInputPosition(DWORD Position)
+{
+    if(Position <= 1) return 1;
+    --Position;
+#ifdef UNICODE
+    if(Position > 1 && CurrentInputStr[Position] >= 0xdc00 && CurrentInputStr[Position] <= 0xdfff &&
+       CurrentInputStr[Position - 1] >= 0xd800 && CurrentInputStr[Position - 1] <= 0xdbff) --Position;
+#endif
+    return Position;
+}
+
+static DWORD NextInputPosition(DWORD Position, DWORD Length)
+{
+    if(Position >= Length) return Length;
+#ifdef UNICODE
+    if(CurrentInputStr[Position] >= 0xd800 && CurrentInputStr[Position] <= 0xdbff && Position + 1 < Length &&
+       CurrentInputStr[Position + 1] >= 0xdc00 && CurrentInputStr[Position + 1] <= 0xdfff) ++Position;
+#endif
+    return Position + 1;
 }
 
 int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
 {
-	switch(KeyEvent->wVirtualKeyCode) {
-	case VK_UP:
-		if(HistoryCount != 0 && HistoryIndex != 0) {
-			HistoryPrevious(&CurrentInputStr);
-			return 1;
-		}
-		break;
-	case VK_DOWN:
-		if(HistoryCount && HistoryIndex < HistoryCount - 1) {
-			HistoryNext(&CurrentInputStr);
-			return 1;
-		} 
-		break;
-	case VK_BACK:
-		if(InputIndex != 0) {
-			CurrentInputStr[--InputIndex] = _T('\0');
-			if(InputIndex == 0) {
-				ViDisableInput();
-			}
-			return 1;
-		}
-		break;
-	case VK_ESCAPE:
-		ViDisableInput();
-		return 1;
-	case VK_RETURN:
-		ViExecInput();
-		return 1;
-	default:
-		if(_istprint(IntFromTChar(KeyEvent->uChar.UnicodeChar)) && InputIndex + 1 < DEFAULT_STR_SIZE) {
-			CurrentInputStr[InputIndex++] = KeyEvent->uChar.UnicodeChar;
-            CurrentInputStr[InputIndex] = 0;
-			return 1;
-		}
-	}
-
-	return 0;
+    DWORD Length = (DWORD)_tcslen(CurrentInputStr);
+    BOOL Ctrl = (KeyEvent->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    if(Ctrl) {
+        switch(KeyEvent->wVirtualKeyCode) {
+        case 'G': ViDisableInput(); return 1;
+        case 'A': InputIndex = 1; return 1;
+        case 'E': InputIndex = Length; return 1;
+        case 'U': CurrentInputStr[1] = 0; InputIndex = 1; return 1;
+        case 'W': {
+            DWORD Start = InputIndex;
+            while(Start > 1 && _istspace(IntFromTChar(CurrentInputStr[Start - 1]))) Start = PreviousInputPosition(Start);
+            while(Start > 1 && !_istspace(IntFromTChar(CurrentInputStr[Start - 1]))) Start = PreviousInputPosition(Start);
+            memmove(CurrentInputStr + Start, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
+            InputIndex = Start; return 1;
+        }
+        default: return 0;
+        }
+    }
+    switch(KeyEvent->wVirtualKeyCode) {
+    case VK_UP:
+        if(HistoryCount && HistoryIndex) { HistoryPrevious(&CurrentInputStr); return 1; }
+        break;
+    case VK_DOWN:
+        if(HistoryCount && HistoryIndex < HistoryCount - 1) { HistoryNext(&CurrentInputStr); return 1; }
+        break;
+    case VK_LEFT: InputIndex = PreviousInputPosition(InputIndex); return 1;
+    case VK_RIGHT: InputIndex = NextInputPosition(InputIndex, Length); return 1;
+    case VK_HOME: InputIndex = 1; return 1;
+    case VK_END: InputIndex = Length; return 1;
+    case VK_DELETE:
+        if(InputIndex < Length) {
+            DWORD Next = NextInputPosition(InputIndex, Length);
+            memmove(CurrentInputStr + InputIndex, CurrentInputStr + Next, (Length - Next + 1) * sizeof(*CurrentInputStr));
+            return 1;
+        }
+        break;
+    case VK_BACK:
+        if(InputIndex > 1) {
+            DWORD Previous = PreviousInputPosition(InputIndex);
+            memmove(CurrentInputStr + Previous, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
+            InputIndex = Previous;
+        } else ViDisableInput();
+        return 1;
+    case VK_ESCAPE: ViDisableInput(); return 1;
+    case VK_RETURN: ViExecInput(); return 1;
+    default:
+        if(KeyEvent->uChar.UnicodeChar >= 0x20 && KeyEvent->uChar.UnicodeChar != 0x7f && Length + 1 < DEFAULT_STR_SIZE) {
+            memmove(CurrentInputStr + InputIndex + 1, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
+            CurrentInputStr[InputIndex++] = KeyEvent->uChar.UnicodeChar;
+            return 1;
+        }
+    }
+    return 0;
 }
+
+unsigned long ViInputCursor(void) { return InputIndex; }
 
 void ViExecInput(void)
 {

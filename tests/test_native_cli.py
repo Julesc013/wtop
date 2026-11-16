@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import stat
 from pathlib import Path
 import subprocess
 import struct
@@ -135,6 +136,73 @@ class NativeCliTests(unittest.TestCase):
                 with self.subTest(content=content[:30]):
                     result = self.run_cli("--snapshot", "--config", str(config), code=2)
                     self.assertEqual(result.stdout, "")
+
+    def test_write_config_is_explicit_bounded_and_preserves_user_content(self):
+        with tempfile.TemporaryDirectory(prefix="wtop-settings-") as temp:
+            root = Path(temp)
+            config = root / "settings-\u00e9.conf"
+            self.run_cli(
+                "--no-config", "--write-config", str(config),
+                "--keymap", "emacs", "--theme", "htop",
+                "--mouse", "off", "--no-status-bar", "--interval", "60000",
+            )
+            # The 8-second caller timeout also proves this metadata-like action
+            # did not wait for the requested 60-second collection interval.
+            first = config.read_text(encoding="utf-8-sig")
+            for expected in (
+                "ConfigVersion 1", "Keymap emacs", "Theme htop", "Mouse off",
+                "FunctionBar 0", "ShowTabs 1", "Tab0.Name \"Main\"",
+                "Tab1.Name \"I/O\"", "RedrawInterval 60000",
+            ):
+                self.assertIn(expected, first)
+            config.write_text(
+                "# operator note: preserve this\nFuture.Extension inert custom value\n" + first,
+                encoding="utf-8",
+            )
+            self.run_cli("--config", str(config), "--write-config", str(config), "--keymap", "vim", "--status-bar")
+            saved = config.read_text(encoding="utf-8-sig")
+            self.assertIn("# operator note: preserve this", saved)
+            self.assertIn("Future.Extension inert custom value", saved)
+            self.assertIn("Keymap vi", saved)
+            self.assertIn("FunctionBar 1", saved)
+            self.assertEqual([p.name for p in root.iterdir()], [config.name])
+            # Reload the saved file through the real process path as well.
+            result = self.run_cli("--config", str(config), "--snapshot", "--format", "json", "--interval", "50", "-p", str(os.getpid()))
+            self.assertEqual([p["pid"] for p in json.loads(result.stdout)["processes"]], [os.getpid()])
+
+    def test_write_config_failures_preserve_existing_data(self):
+        with tempfile.TemporaryDirectory(prefix="wtop-settings-failure-") as temp:
+            root = Path(temp)
+            missing = root / "missing-parent" / "settings.conf"
+            result = self.run_cli("--no-config", "--write-config", str(missing), code=1)
+            self.assertTrue(result.stderr)
+            self.assertFalse(missing.exists())
+            self.assertEqual(list(root.iterdir()), [])
+            config = root / "readonly.conf"
+            original = b"# original must survive a rejected write\r\nFuture.Value sentinel\r\n"
+            config.write_bytes(original)
+            config.chmod(stat.S_IREAD)
+            try:
+                result = self.run_cli("--no-config", "--write-config", str(config), code=1)
+                self.assertTrue(result.stderr)
+                self.assertEqual(config.read_bytes(), original)
+                self.assertEqual([p.name for p in root.iterdir()], [config.name])
+            finally:
+                config.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+    def test_settings_options_reject_malformed_values_without_creating_files(self):
+        with tempfile.TemporaryDirectory(prefix="wtop-settings-invalid-") as temp:
+            root = Path(temp)
+            target = root / "must-not-exist.conf"
+            for options in (
+                ("--keymap", "unknown"), ("--theme", "unknown"),
+                ("--mouse", "yes"), ("--snapshot",), ("--format", "json"),
+                ("-p", "123"), ("-n", "explorer"), ("-u", "user"),
+            ):
+                with self.subTest(options=options):
+                    self.run_cli("--no-config", "--write-config", str(target), *options, code=2)
+                    self.assertFalse(target.exists())
+            self.assertEqual(list(root.iterdir()), [])
 
 
 if __name__ == "__main__":

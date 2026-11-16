@@ -147,7 +147,7 @@
         "-p"
       ],
       "mode": "selector",
-      "arguments": "comma-separated nonnegative PID list",
+      "arguments": "comma-separated PID values 1..4294967295, maximum 1024",
       "status": "inherited_unqualified",
       "behavior": "Filter selected native PIDs; parsing is bounded and does not establish lifetime identity.",
       "acceptance": [
@@ -205,7 +205,7 @@
       "mode": "modifier",
       "arguments": "PATH",
       "status": "candidate",
-      "behavior": "Explicit read-only config file; no automatic migration/save.",
+      "behavior": "Read explicit configuration; ordinary startup/exit is read-only, explicit TUI save targets this path. Conflicts with --no-config.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -219,7 +219,7 @@
       "mode": "modifier",
       "arguments": "none",
       "status": "candidate",
-      "behavior": "Suppress configuration file reads.",
+      "behavior": "Suppress configuration file reads and implicit TUI save destination; explicit --write-config PATH remains allowed.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -303,9 +303,103 @@
       "mode": "planned",
       "arguments": "explicit portable root or executable-relative marker policy",
       "status": "planned",
-      "behavior": "Future explicit portable data ownership; no PATH/ARP/registry integration. Initial reader remains read-only.",
+      "behavior": "Future explicit portable data ownership; no PATH/ARP/registry integration. Current explicit settings reads/saves do not establish installation ownership.",
       "acceptance": [
         "WT-AC-040-02"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-KEYMAP",
+      "tokens": [
+        "--keymap"
+      ],
+      "mode": "modifier",
+      "arguments": "htop|vi|vim|emacs",
+      "status": "candidate",
+      "behavior": "Select the interaction map; vim aliases vi. CLI overrides config.",
+      "acceptance": [
+        "WT-AC-030-04"
+      ],
+      "evidence": [],
+      "default": "htop",
+      "values": [
+        "htop",
+        "vi",
+        "vim",
+        "emacs"
+      ]
+    },
+    {
+      "id": "WT-CMD-THEME",
+      "tokens": [
+        "--theme"
+      ],
+      "mode": "modifier",
+      "arguments": "htop|ntop|monochrome (mono alias)",
+      "status": "candidate",
+      "behavior": "Select built-in semantic colors; CLI theme resets role palette after file settings; -C forces monochrome last. mono aliases monochrome.",
+      "acceptance": [
+        "WT-AC-030-04"
+      ],
+      "evidence": [],
+      "default": "htop",
+      "values": [
+        "htop",
+        "ntop",
+        "monochrome",
+        "mono"
+      ]
+    },
+    {
+      "id": "WT-CMD-MOUSE",
+      "tokens": [
+        "--mouse",
+        "--no-mouse"
+      ],
+      "mode": "modifier",
+      "arguments": "--mouse auto|on|off; --no-mouse takes no argument",
+      "status": "candidate",
+      "behavior": "Mouse preference with keyboard fallback; no-mouse aliases off.",
+      "acceptance": [
+        "WT-AC-030-04"
+      ],
+      "evidence": [],
+      "default": "auto",
+      "values": [
+        "auto",
+        "on",
+        "off"
+      ]
+    },
+    {
+      "id": "WT-CMD-STATUS-BAR",
+      "tokens": [
+        "--status-bar",
+        "--no-status-bar"
+      ],
+      "mode": "modifier",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Show or hide the bottom function/control bar; live prompts and errors remain visible.",
+      "acceptance": [
+        "WT-AC-030-04"
+      ],
+      "evidence": [],
+      "default": true
+    },
+    {
+      "id": "WT-CMD-WRITE-CONFIG",
+      "tokens": [
+        "--write-config"
+      ],
+      "mode": "configuration",
+      "arguments": "PATH",
+      "status": "candidate",
+      "behavior": "Explicit checked settings export/save without collection; accepts preferences, interval and sort; conflicts with mode/format/metadata and unsaved -p/-n/-u selectors. No implicit install/registry/PATH integration.",
+      "acceptance": [
+        "WT-AC-030-04",
+        "WT-AC-040-04"
       ],
       "evidence": []
     }

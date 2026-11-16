@@ -5,7 +5,7 @@ description: "Advance through useful vertical slices while keeping legacy and GU
 resource: "urn:wtop:spec:wt-070"
 tags: ["wtop", "roadmap"]
 status: "draft"
-generated: {"by": "chatgpt/gpt-6-astra-pro", "at": "2026-11-16T10:52:40Z"}
+generated: {"by": "chatgpt/gpt-6-astra-pro", "at": "2026-11-16T12:38:25Z"}
 wtop: {"id": "WT-070", "profile": "wtop-spec/1", "version": "0.1.0", "authority": "proposed-normative", "review": "pending", "depends_on": ["WT-001", "WT-002", "WT-010", "WT-020", "WT-030", "WT-062"], "requirements": ["WT-REQ-070-01", "WT-REQ-070-02"]}
 sources: [{"id": "user", "resource": "../references/sources.json#user"}]
 ---
@@ -14,7 +14,8 @@ sources: [{"id": "user", "resource": "../references/sources.json#user"}]
 
 [work/units.json](../work/units.json) is the only work queue. Each unit names
 prerequisites, context concepts, paths, deliverables, acceptance IDs and evidence.
-The spec tool prints current active work and dependency-ready planned units.
+Root TODO.md and ROADMAP.md are human-readable projections of this queue and
+its acceptance contracts, not separate status authorities. The spec tool prints current active work and dependency-ready planned units.
 It never executes commands, expands permission or marks work complete.
 
 The sequence starts with the existing fork, scoped defect repair and modern
@@ -44,7 +45,11 @@ implementation are distinct. Unresolved questions become concrete decision recor
 only when they materially affect the next implementation, not a vast speculative
 framework.
 
-Code organization follows proven responsibilities. Retain inherited names until
+Code organization follows proven responsibilities. Application C/headers, the
+compatibility configuration example and inherited build/package/site inputs now
+live under source/. Keep CMake, repository instructions and contributor navigation
+at the root. Historical observation files retain the paths and hashes of their
+original source revision. Retain inherited basenames until
 a small tested rename is useful. Do not copy SysPane, ScreenSave or DiskEd source
 trees wholesale; record reusable contracts and settle licenses for copied code.
 Keep one owner for process accounting, config paths, command parsing and each
