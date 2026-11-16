@@ -1,52 +1,88 @@
-name: NTop CI
+name: Wtop checks
 
-# Trigger on every master branch push and pull request
 on:
   push:
-    branches:
-      - master
-  # Allows you to run this workflow manually from the Actions tab
+    branches: [master, 'work/**']
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: wtop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    runs-on: windows-latest
-
+  specification-and-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Run CMake
-        run: cmake -DCMAKE_BUILD_TYPE=Release .
-
-      - name: Run Build
-        run: cmake --build . --config Release
-
-      - name: Set version
-        id: set_version
-        run: echo "VERSION=v0.3.$((${{ github.run_number }} + 4))" >> $GITHUB_ENV
-        shell: bash
-
-      - name: create release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          tag_name: ${{ env.VERSION }}
-          release_name: ${{ env.VERSION }}
-          body: |
-            ${{ github.event.head_commit.message }}
-          draft: false
-          prerelease: false
-
-      - name: Upload release asset
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .\Release\NTop.exe
-          asset_name: NTop.exe
-          asset_content_type: application/vnd.microsoft.portable-executable
+          python-version: '3.12'
+      - name: Validate specification and tooling
+        run: |
+          python tools/specctl.py validate
+          python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Build portable C90 core with sanitizers
+        run: |
+          cmake -S . -B out/host -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS='-Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake --build out/host --parallel 2
+          ctest --test-dir out/host --output-on-failure
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [Win32, x64, ARM64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Configure and build current Windows profile
+        run: |
+          cmake -S . -B out/windows -A ${{ matrix.arch }}
+          cmake --build out/windows --config Release --parallel 2
+      - name: Run native CLI and core checks
+        if: matrix.arch != 'ARM64'
+        run: ctest --test-dir out/windows -C Release --output-on-failure
+      - name: Record candidate identity
+        shell: pwsh
+        run: |
+          $identity = [ordered]@{
+            source = '${{ github.sha }}'
+            version = (Get-Content VERSION -Raw).Trim()
+            architecture = '${{ matrix.arch }}'
+            runner = '${{ runner.os }}'
+            runnerImage = $env:ImageVersion
+            kernel = [Environment]::OSVersion.VersionString
+            cliRuntimeTestedHere = ('${{ matrix.arch }}' -ne 'ARM64')
+            historicalOsQualified = $false
+            tuiHumanAccepted = $false
+            releaseSupported = $false
+            sha256 = (Get-FileHash out/windows/Release/wtop.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $identity | ConvertTo-Json | Set-Content out/windows/Release/candidate.json -Encoding utf8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wtop-${{ matrix.arch }}-candidate-${{ github.sha }}
+          path: |
+            out/windows/Release/wtop.exe
+            out/windows/Release/candidate.json
+            LICENSE
+          if-no-files-found: error
+          retention-days: 14
+
+# Candidates never create a tag or release. The inherited workflow published a
+# nominal stable release on every master push; publishing now requires its own
+# explicit qualification work unit.

@@ -1,0 +1,106 @@
+{
+  "schema": "wtop.bootstrap-observation/1",
+  "observed_at": "2026-11-16T11:16:55.010187+00:00",
+  "qualification": "none; build and host-test observations only",
+  "source_files": {
+    "VERSION": "4017a74020d05db7a1aaf72546702eb3045f148c3f7fa349feedba8f347057af",
+    "CMakeLists.txt": "c1edb0a2d9b6adb70bba61bf1539c63570c454dc622521406f702b31ed37b30e",
+    "ntop.c": "b0c6bd1f825a20169e359bda63589d0be5786b4328f7f31af3209c4c03f185c5",
+    "ntop.h": "ccf9bdd36a4ee09427b03bbe51d01e0dc46d8aa3dedd39791595bd8e33406644",
+    "util.c": "6f2d1a42152b31af086a3ff01b730bc958af72a35af51abfd810f5073f869866",
+    "util.h": "86c052dc8e48ae30a3c19598dd4350a0483814ca05f84b28396e1a153669d834",
+    "vi.c": "6d81f4891305967a263e3dd58ca22055e12b176435c7463227a14dc1ea3b7a02",
+    "vi.h": "bb7c67f952afbae3667edb409a67ddad52409d9afb9a3d6170c8f05905abea8f",
+    "source/core.c": "1373b6b3b8aa6dfe86cb31358ccce3ca0edc0d3a11c3f18b8507a5ba9039ca49",
+    "source/core.h": "598569c2edf04536e3479478331163fb4acb008b25df21703368ab97200cc394",
+    "source/version.h.in": "3b1953eec12d7d55d1d4793e0661e81d39dbc48e419f683e639bfe76f6596a8e",
+    "tests/test_core.c": "1119ff13c7d5a4e0af6185a0535c6c2aefea77b966a7c038af410dbda056ed60",
+    "tests/test_native_cli.py": "297fb60130cc85bf9a8b2469805cb0f70abb014883dc3c31a60d928e056c56bf",
+    "tools/specctl.py": "c7008e19d5cfbd57b7eabf12f485930f76cd6a79c9a47d20311ba6c6166537f1",
+    "tests/test_specctl.py": "67c5ddfbd4ff7a9a57fdc16facbd352f9e92efa3a58ae9bec709fb94cff3e1af"
+  },
+  "cross_compiler": "Zig 0.17.1 / Clang 22.1.8 targeting windows-gnu",
+  "artifacts": [
+    {
+      "profile": "win-nt-x86",
+      "machine": "0x14c",
+      "bytes": 319488,
+      "sha256": "68ad2fad1c41e9260231f78ef2a4b7561d307dc2765403964a82c0776e0d8aad",
+      "subsystem": 3,
+      "subsystem_version": [
+        6,
+        0
+      ],
+      "import_dlls": [
+        "ADVAPI32.dll",
+        "PSAPI.DLL",
+        "KERNEL32.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-private-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll"
+      ],
+      "execution_tested": false
+    },
+    {
+      "profile": "win-nt-x64",
+      "machine": "0x8664",
+      "bytes": 265216,
+      "sha256": "b0764262c26da5d1cdfd79c6ec1b7bee59ea2312d473fb137f6922a69c3ac4cf",
+      "subsystem": 3,
+      "subsystem_version": [
+        6,
+        0
+      ],
+      "import_dlls": [
+        "ADVAPI32.dll",
+        "PSAPI.DLL",
+        "KERNEL32.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-private-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll"
+      ],
+      "execution_tested": false
+    },
+    {
+      "profile": "win-nt-arm64",
+      "machine": "0xaa64",
+      "bytes": 229888,
+      "sha256": "1e49995335ff2a9a8c567708b715572f13805f2ae0ab1e6784c52d4744ecc54c",
+      "subsystem": 3,
+      "subsystem_version": [
+        6,
+        0
+      ],
+      "import_dlls": [
+        "ADVAPI32.dll",
+        "PSAPI.DLL",
+        "KERNEL32.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-private-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll"
+      ],
+      "execution_tested": false
+    }
+  ]
+}

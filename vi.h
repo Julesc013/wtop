@@ -25,7 +25,8 @@ extern int InInputMode;
 
 typedef struct _KEY_EVENT_RECORD KEY_EVENT_RECORD;
 
-void ViInit(void);
+int ViInit(void);
+void ViDestroy(void);
 int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent);
 void ViExecInput(void);
 void ViEnableInput(TCHAR InitialKey);

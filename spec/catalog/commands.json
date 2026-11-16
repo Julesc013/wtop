@@ -1,0 +1,313 @@
+{
+  "$schema": "../schemas/catalogs.schema.json#/$defs/commands",
+  "schema": "wtop.commands/1",
+  "commands": [
+    {
+      "id": "WT-CMD-TUI",
+      "tokens": [
+        "<default>",
+        "--tui"
+      ],
+      "mode": "interactive",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Interactive process view; explicit TUI conflicts with snapshot/format.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-SNAPSHOT",
+      "tokens": [
+        "--snapshot",
+        "--dump",
+        "-d"
+      ],
+      "mode": "snapshot",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "One synchronous snapshot; first rate values are unavailable unless independently measurable.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-FORMAT",
+      "tokens": [
+        "--format"
+      ],
+      "mode": "modifier",
+      "arguments": "text|json",
+      "status": "candidate",
+      "behavior": "Default text; alone selects snapshot; explicit --tui conflicts.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": [],
+      "default": "text",
+      "values": [
+        "text",
+        "json"
+      ]
+    },
+    {
+      "id": "WT-CMD-INTERVAL",
+      "tokens": [
+        "--interval"
+      ],
+      "mode": "modifier",
+      "arguments": "integer milliseconds 50..60000",
+      "status": "candidate",
+      "behavior": "Default1000; initial candidate uses same sampling/redraw interval.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": [],
+      "default": 1000,
+      "minimum": 50,
+      "maximum": 60000
+    },
+    {
+      "id": "WT-CMD-HELP",
+      "tokens": [
+        "--help",
+        "-h"
+      ],
+      "mode": "information",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Print help without collector or interactive console initialization.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-VERSION",
+      "tokens": [
+        "--version",
+        "-v"
+      ],
+      "mode": "information",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Print development/release version without collection.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-CAPABILITIES",
+      "tokens": [
+        "--capabilities"
+      ],
+      "mode": "information",
+      "arguments": "none; --format text|json",
+      "status": "candidate",
+      "behavior": "Describe capability state and qualification; no collector.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-GUI",
+      "tokens": [
+        "--gui"
+      ],
+      "mode": "reserved",
+      "arguments": "none",
+      "status": "unavailable",
+      "behavior": "Reserved future GUI; explicit unavailable diagnostic, exit2.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-MONOCHROME",
+      "tokens": [
+        "-C"
+      ],
+      "mode": "modifier",
+      "arguments": "none",
+      "status": "inherited_unqualified",
+      "behavior": "Monochrome presentation.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-PID",
+      "tokens": [
+        "-p"
+      ],
+      "mode": "selector",
+      "arguments": "comma-separated nonnegative PID list",
+      "status": "inherited_unqualified",
+      "behavior": "Filter selected native PIDs; parsing is bounded and does not establish lifetime identity.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-NAME",
+      "tokens": [
+        "-n"
+      ],
+      "mode": "selector",
+      "arguments": "comma-separated name fragments",
+      "status": "inherited_unqualified",
+      "behavior": "Inherited name-fragment filter; exact encoding/match policy requires qualification.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-USER",
+      "tokens": [
+        "-u"
+      ],
+      "mode": "selector",
+      "arguments": "USERNAME",
+      "status": "inherited_unqualified",
+      "behavior": "Inherited user selector; unavailable metadata remains explicit.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-SORT",
+      "tokens": [
+        "-s"
+      ],
+      "mode": "modifier",
+      "arguments": "COLUMN",
+      "status": "inherited_unqualified",
+      "behavior": "Inherited sort-column selection; stable model sort is planned.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-CONFIG",
+      "tokens": [
+        "--config"
+      ],
+      "mode": "modifier",
+      "arguments": "PATH",
+      "status": "candidate",
+      "behavior": "Explicit read-only config file; no automatic migration/save.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-NO-CONFIG",
+      "tokens": [
+        "--no-config"
+      ],
+      "mode": "modifier",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Suppress configuration file reads.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-QUERY",
+      "tokens": [
+        "query"
+      ],
+      "mode": "planned",
+      "arguments": "typed selector and fields",
+      "status": "planned",
+      "behavior": "Future bounded noninteractive query; syntax is not yet frozen.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-INSPECT",
+      "tokens": [
+        "inspect"
+      ],
+      "mode": "planned",
+      "arguments": "lifetime-aware process selector",
+      "status": "planned",
+      "behavior": "Future detailed process inspection; do not advertise as implemented.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-LOG",
+      "tokens": [
+        "log"
+      ],
+      "mode": "planned",
+      "arguments": "explicit bounded destination/duration",
+      "status": "planned",
+      "behavior": "Future opt-in history; no daemon/service by default.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-INSTALL",
+      "tokens": [
+        "install"
+      ],
+      "mode": "planned",
+      "arguments": "explicit scope/path",
+      "status": "planned",
+      "behavior": "Future typed install action using same payload and owned receipt.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-UNINSTALL",
+      "tokens": [
+        "uninstall"
+      ],
+      "mode": "planned",
+      "arguments": "owned installation receipt",
+      "status": "planned",
+      "behavior": "Future uninstall with preservation of changed/unowned files.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-PORTABLE",
+      "tokens": [
+        "--portable"
+      ],
+      "mode": "planned",
+      "arguments": "explicit portable root or executable-relative marker policy",
+      "status": "planned",
+      "behavior": "Future explicit portable data ownership; no PATH/ARP/registry integration. Initial reader remains read-only.",
+      "acceptance": [
+        "WT-AC-040-02"
+      ],
+      "evidence": []
+    }
+  ]
+}

@@ -25,27 +25,28 @@
 #include <pdh.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <limits.h>
+#include "core.h"
+#include "version.h"
 #include "ntop.h"
 #include "util.h"
 #include "vi.h"
-
-#ifndef NTOP_VER
-#define NTOP_VER "dev"
-#endif
-
-#define STRINGIZE(x) #x
-#define STRINGIZE_VALUE_OF(x) STRINGIZE(x)
 
 #define SCROLL_INTERVAL 20ULL
 #define INPUT_LOOP_DELAY 30
 #define CARET_INTERVAL 500
 #define MAX_NAMEPARTS 10
 #define MAX_NAMEPARTSIZE 255
+#define SHUTDOWN_GRACE_MS 3000
+#define EXIT_FORCED_SHUTDOWN 124
 
 static int Width;
 static int Height;
 static int OldWidth;
 static int OldHeight;
+static int RenderColumn;
 static int SizeX;
 static int SizeY;
 static const int ProcessWindowPosY = 6;
@@ -56,26 +57,48 @@ HANDLE ConsoleHandle;
 static HANDLE OldConsoleHandle;
 static BOOL InteractiveMode = TRUE;
 static CRITICAL_SECTION SyncLock;
+static HANDLE ShutdownEvent;
+static HANDLE CleanupDoneEvent;
+static HANDLE ProcessListThread;
+static volatile LONG ShutdownRequested;
+static DWORD CollectorError;
+static ULONGLONG LastSampleElapsed;
 
-static int ConPrintf(TCHAR *Fmt, ...)
+void RequestShutdown(void)
 {
-	TCHAR Buffer[1024];
-	va_list VaList;
+    InterlockedExchange(&ShutdownRequested, 1);
+    if(ShutdownEvent) SetEvent(ShutdownEvent);
+}
 
-	va_start(VaList, Fmt);
-	int CharsWritten = _vstprintf_s(Buffer, _countof(Buffer), Fmt, VaList);
-	va_end(VaList);
+static BOOL ShouldStop(void)
+{
+    return InterlockedCompareExchange(&ShutdownRequested, 0, 0) != 0;
+}
 
-	DWORD Dummy;
-	WriteFile(ConsoleHandle, Buffer, CharsWritten, &Dummy, 0);
-
-	return CharsWritten;
+static int ConPrintf(const TCHAR *Fmt, ...)
+{
+    TCHAR Buffer[4096];
+    va_list VaList;
+    va_start(VaList, Fmt);
+    int CharsWritten = _vsntprintf_s(Buffer, _countof(Buffer), _TRUNCATE, Fmt, VaList);
+    va_end(VaList);
+    if(CharsWritten < 0) CharsWritten = (int)_tcslen(Buffer);
+    if(InteractiveMode && Width > 0) {
+        CharsWritten = min(CharsWritten, max(0, Width - RenderColumn));
+#ifdef UNICODE
+        if(CharsWritten && Buffer[CharsWritten - 1] >= 0xd800 && Buffer[CharsWritten - 1] <= 0xdbff) --CharsWritten;
+#endif
+        RenderColumn += CharsWritten;
+    }
+    if(!WriteTText(ConsoleHandle, Buffer, (size_t)CharsWritten)) RequestShutdown();
+    return CharsWritten;
 }
 
 static void ConPutc(TCHAR c)
 {
-	DWORD Dummy;
-	WriteFile(ConsoleHandle, &c, 1, &Dummy, 0);
+    if(InteractiveMode && Width > 0 && RenderColumn >= Width) return;
+    ++RenderColumn;
+    if(!WriteTText(ConsoleHandle, &c, 1)) RequestShutdown();
 }
 
 #define FOREGROUND_WHITE (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
@@ -126,91 +149,76 @@ static config MonochromeConfig = {
 	1000
 };
 
-static void ParseConfigLine(char *Line)
+static BOOL ParseConfigLine(char *Line)
 {
-	const char *Delimeter = " \t\n";
-	char *Context;
-	char *Key = strtok_s(Line, Delimeter, &Context);
-	if(!Key)
-		return;
-	if(Key[0] == '#') /* Comment char*/
-		return;
-	char *Value = strtok_s(0, Delimeter, &Context);
-	if(!Value)
-		return;
-
-	WORD Num = (WORD)strtol(Value, 0, 0);
-
-	if(_strcmpi(Key, "FGColor") == 0) {
-		Config.FGColor = Num;
-	} else if(_strcmpi(Key, "BGColor") == 0) {
-		Config.BGColor = Num;
-	} else if(_strcmpi(Key, "FGHighlightColor") == 0) {
-		Config.FGHighlightColor = Num;
-	} else if(_strcmpi(Key, "FGHighlightColor") == 0) {
-		Config.BGHighlightColor = Num;
-	} else if(_strcmpi(Key, "MenuBarColor") == 0) {
-		Config.MenuBarColor = Num;
-	} else if(_strcmpi(Key, "ProcessListHeaderColor") == 0) {
-		Config.ProcessListHeaderColor = Num;
-	} else if(_strcmpi(Key, "CPUBarColor") == 0) {
-		Config.CPUBarColor = Num;
-	} else if(_strcmpi(Key, "MemoryBarColor") == 0) {
-		Config.MemoryBarColor = Num;
-	} else if(_strcmpi(Key, "PageMemoryBarColor") == 0) {
-		Config.PageMemoryBarColor = Num;
-	} else if(_strcmpi(Key, "ErrorColor") == 0) {
-		Config.ErrorColor = Num;
-	} else if(_strcmpi(Key, "RedrawInterval") == 0) {
-		Config.RedrawInterval = (ULONGLONG)Num;
-	}
+    const char *Delimiters = " \t\r\n";
+    char *Context;
+    char *Key = strtok_s(Line, Delimiters, &Context);
+    if(!Key || Key[0] == '#') return TRUE;
+    char *Value = strtok_s(NULL, Delimiters, &Context);
+    char *Extra = strtok_s(NULL, Delimiters, &Context);
+    if(!Value || (Extra && Extra[0] != '#')) return FALSE;
+    unsigned long Num;
+    if(!_stricmp(Key, "RedrawInterval")) {
+        if(!wtop_parse_unsigned(Value, 50, 60000, 10, &Num)) return FALSE;
+        Config.RedrawInterval = Num;
+        return TRUE;
+    }
+    if(!wtop_parse_unsigned(Value, 0, 255, 0, &Num)) return FALSE;
+    if(!_stricmp(Key, "FGColor")) Config.FGColor = (WORD)Num;
+    else if(!_stricmp(Key, "BGColor")) Config.BGColor = (WORD)Num;
+    else if(!_stricmp(Key, "FGHighlightColor")) Config.FGHighlightColor = (WORD)Num;
+    else if(!_stricmp(Key, "BGHighlightColor")) Config.BGHighlightColor = (WORD)Num;
+    else if(!_stricmp(Key, "MenuBarColor")) Config.MenuBarColor = (WORD)Num;
+    else if(!_stricmp(Key, "ProcessListHeaderColor")) Config.ProcessListHeaderColor = (WORD)Num;
+    else if(!_stricmp(Key, "CPUBarColor")) Config.CPUBarColor = (WORD)Num;
+    else if(!_stricmp(Key, "MemoryBarColor")) Config.MemoryBarColor = (WORD)Num;
+    else if(!_stricmp(Key, "PageMemoryBarColor")) Config.PageMemoryBarColor = (WORD)Num;
+    else if(!_stricmp(Key, "ErrorColor")) Config.ErrorColor = (WORD)Num;
+    else return FALSE;
+    return TRUE;
 }
 
-#define BUF_INCREASE 256
-
-static void ReadConfigFile(void)
+/* Read-only compatibility import. Persistence/install policy is not implemented. */
+static BOOL ReadConfigFile(const char *ExplicitPath)
 {
-    FILE *File;
-    errno_t Error;
-    char exePath[MAX_PATH];
-    char configPath[MAX_PATH];
-    
-    // Get executable path
-    if(GetModuleFileNameA(NULL, exePath, MAX_PATH) == 0)
-        return;
-        
-    // Remove executable name to get directory
-    char *lastSlash = strrchr(exePath, '\\');
-    if(lastSlash != NULL)
-        *lastSlash = '\0';
-        
-    // Construct config file path
-    snprintf(configPath, MAX_PATH, "%s\\ntop.conf", exePath);
-    
-    Error = fopen_s(&File, configPath, "r");
-    if(Error != 0) {
-		OutputDebugStringA("Did not open config file!\n");
-        return;
-	}
-        
-    size_t BufferSize = BUF_INCREASE;
-    size_t Offset = 0;
-    char *Buffer = xmalloc(BUF_INCREASE);
-    while(1) {
-        if(!fgets(Offset + Buffer, (int)(BufferSize - Offset), File)) {
-            break;
-        }
-        if(!feof(File) && !strchr(Buffer, '\n')) {
-            Offset = BufferSize - 1;
-            BufferSize += BUF_INCREASE;
-            Buffer = xrealloc(Buffer, BufferSize);
-        } else {
-            Offset = 0;
-            ParseConfigLine(Buffer);
+    FILE *File = NULL;
+    TCHAR Path[32768];
+    if(ExplicitPath) {
+        TCHAR *Converted = FromUtf8(ExplicitPath);
+        if(!Converted || _tcslen(Converted) >= _countof(Path)) { free(Converted); return FALSE; }
+        _tcscpy_s(Path, _countof(Path), Converted);
+        free(Converted);
+    } else {
+        DWORD Length = GetModuleFileName(NULL, Path, _countof(Path));
+        if(!Length || Length >= _countof(Path)) return FALSE;
+        TCHAR *Slash = _tcsrchr(Path, _T('\\'));
+        if(!Slash) return FALSE;
+        Slash[1] = 0;
+        if(_tcslen(Path) + 11 >= _countof(Path)) return FALSE;
+        _tcscat_s(Path, _countof(Path), _T("wtop.conf"));
+        if(_tfopen_s(&File, Path, _T("r"))) {
+            Slash[1] = 0;
+            _tcscat_s(Path, _countof(Path), _T("ntop.conf"));
         }
     }
-    free(Buffer);
+    if(!File && _tfopen_s(&File, Path, _T("r"))) {
+        return ExplicitPath ? FALSE : TRUE;
+    }
+    char Line[4096];
+    unsigned long LineNumber = 0;
+    BOOL Ok = TRUE;
+    while(fgets(Line, sizeof(Line), File)) {
+        ++LineNumber;
+        if((!strchr(Line, '\n') && !feof(File)) || !ParseConfigLine(Line)) {
+            fprintf(stderr, "wtop: invalid configuration at line %lu\n", LineNumber);
+            Ok = FALSE;
+            break;
+        }
+    }
+    if(ferror(File)) Ok = FALSE;
     fclose(File);
+    return Ok;
 }
 
 static WORD CurrentColor;
@@ -229,12 +237,28 @@ static void SetConCursorPos(SHORT X, SHORT Y)
 	Coord.X = X;
 	Coord.Y = Y;
 	SetConsoleCursorPosition(ConsoleHandle, Coord);
+    RenderColumn = X;
+}
+
+typedef enum metric_state {
+    METRIC_OK, METRIC_DENIED, METRIC_UNAVAILABLE, METRIC_WARMING, METRIC_DISCONTINUITY
+} metric_state;
+
+static const char *MetricStateName(metric_state State)
+{
+    static const char *Names[] = { "ok", "denied", "unavailable", "warming", "discontinuity" };
+    return Names[(int)State];
+}
+
+static metric_state LastMetricError(void)
+{
+    return GetLastError() == ERROR_ACCESS_DENIED ? METRIC_DENIED : METRIC_UNAVAILABLE;
 }
 
 typedef struct process {
 	HANDLE Handle;
 	DWORD ID;
-	TCHAR UserName[UNLEN];
+	TCHAR UserName[UNLEN + 1];
 	DWORD BasePriority;
 	double PercentProcessorTime;
 	unsigned __int64 UsedMemory;
@@ -244,7 +268,17 @@ typedef struct process {
 	DWORD ParentPID;
 	ULONGLONG DiskOperationsPrev;
 	ULONGLONG DiskOperations;
-	DWORD DiskUsage;
+	double DiskUsage;
+    ULONGLONG CreationTime;
+    ULONGLONG PreviousCpu;
+    ULONGLONG PreviousRead;
+    ULONGLONG PreviousWrite;
+    ULONGLONG IoReadTotal;
+    ULONGLONG IoWriteTotal;
+    ULONGLONG SampleTick;
+    BOOL PreviousTimesValid;
+    BOOL PreviousIoValid;
+    metric_state OwnerState, CpuState, MemoryState, IoState, AgeState;
 	DWORD TreeDepth;
 
 	struct process *Next;
@@ -255,44 +289,38 @@ typedef struct process {
 #define PROCLIST_BUF_INCREASE 64
 
 static process *ProcessList;
-static process *NewProcessList;
 static DWORD ProcessListSize = PROCLIST_BUF_INCREASE;
 
-static DWORD *TaggedProcessList;
+typedef struct process_identity { DWORD ID; ULONGLONG CreationTime; } process_identity;
+static process_identity *TaggedProcessList;
 static DWORD TaggedProcessListCount;
 static DWORD TaggedProcessListSize = PROCLIST_BUF_INCREASE;
 
-static void IncreaseProcListSize(void)
+static void ToggleTaggedProcess(const process *Selected)
 {
-	ProcessListSize += PROCLIST_BUF_INCREASE;
-	NewProcessList = xrealloc(NewProcessList, ProcessListSize * sizeof *NewProcessList);
-	ProcessList = xrealloc(ProcessList, ProcessListSize * sizeof *ProcessList);
+    DWORD ID = Selected->ID;
+    if(!Selected->CreationTime) { SetViMessage(VI_ERROR, _T("Cannot tag a process with unknown creation identity")); return; }
+    for(DWORD i = 0; i < TaggedProcessListCount; ++i) {
+        if(TaggedProcessList[i].ID == ID && TaggedProcessList[i].CreationTime == Selected->CreationTime) {
+            for(; i + 1 < TaggedProcessListCount; ++i) TaggedProcessList[i] = TaggedProcessList[i + 1];
+            --TaggedProcessListCount;
+            return;
+        }
+    }
+    if(TaggedProcessListCount == TaggedProcessListSize) {
+        DWORD Capacity = TaggedProcessListSize + PROCLIST_BUF_INCREASE;
+        process_identity *Larger = realloc(TaggedProcessList, (size_t)Capacity * sizeof(*Larger));
+        if(!Larger) { SetViMessage(VI_ERROR, _T("Cannot tag process: out of memory")); return; }
+        TaggedProcessList = Larger; TaggedProcessListSize = Capacity;
+    }
+    TaggedProcessList[TaggedProcessListCount].ID = ID;
+    TaggedProcessList[TaggedProcessListCount++].CreationTime = Selected->CreationTime;
 }
 
-static void ToggleTaggedProcess(DWORD ID)
+static BOOL IsProcessTagged(const process *Selected)
 {
 	for(DWORD i = 0; i < TaggedProcessListCount; i++) {
-		if(TaggedProcessList[i] == ID) {
-			for(; i < TaggedProcessListCount-1;i++) {
-				TaggedProcessList[i] = TaggedProcessList[i+1];
-			}
-			TaggedProcessListCount--;
-			return;
-		}
-	}
-
-	TaggedProcessList[TaggedProcessListCount++] = ID;
-
-	if(TaggedProcessListCount >= TaggedProcessListSize) {
-		TaggedProcessListSize += PROCLIST_BUF_INCREASE;
-		TaggedProcessList = xrealloc(TaggedProcessList, PROCLIST_BUF_INCREASE * sizeof *TaggedProcessList);
-	}
-}
-
-static BOOL IsProcessTagged(DWORD ID)
-{
-	for(DWORD i = 0; i < TaggedProcessListCount; i++) {
-		if(TaggedProcessList[i] == ID)
+		if(TaggedProcessList[i].ID == Selected->ID && TaggedProcessList[i].CreationTime == Selected->CreationTime)
 			return TRUE;
 	}
 	return FALSE;
@@ -302,9 +330,11 @@ static DWORD ProcessCount = 0;
 static DWORD RunningProcessCount = 0;
 static DWORD ProcessIndex = 0;
 static DWORD SelectedProcessIndex = 0;
-static DWORD SelectedProcessID = 0;
+static DWORD DisplayedProcessID = 0;
+static ULONGLONG DisplayedCreationTime;
 static BOOL FollowProcess = FALSE;
 static DWORD FollowProcessID = 0;
+static ULONGLONG FollowCreationTime;
 
 typedef enum sort_order {
 	ASCENDING,
@@ -315,20 +345,14 @@ static sort_order SortOrder = DESCENDING;
 
 typedef int (*process_sort_fn_t)(const void *, const void *);
 
-#define SORT_PROCESS_BY_INTEGER(Attribute)							\
-static int SortProcessBy##Attribute(const void *A, const void *B)				\
-{												\
-	int Compare = (int)(((const process *)A)->Attribute - ((const process *)B)->Attribute); \
-	return (SortOrder == ASCENDING) ? Compare : -Compare;					\
-}												\
-
-#define SORT_PROCESS_BY_UINT64(Attribute)							\
-static int SortProcessBy##Attribute(const void *A, const void *B)				\
-{												\
-	__int64 Compare = (__int64)(((const process *)A)->Attribute - ((const process *)B)->Attribute); \
-	int Result = (Compare > 1) ? 1 : -1; 							\
-	return (SortOrder == ASCENDING) ? Result : -Result;					\
-}												\
+#define SORT_PROCESS_BY_INTEGER(Attribute) \
+static int SortProcessBy##Attribute(const void *A, const void *B) \
+{ \
+    const process *Left = A, *Right = B; \
+    int Compare = (Left->Attribute > Right->Attribute) - (Left->Attribute < Right->Attribute); \
+    return SortOrder == ASCENDING ? Compare : -Compare; \
+}
+#define SORT_PROCESS_BY_UINT64(Attribute) SORT_PROCESS_BY_INTEGER(Attribute)
 
 #define SORT_PROCESS_BY_DOUBLE(Attribute)                                               \
 static int SortProcessBy##Attribute(const void *A, const void *B)                       \
@@ -353,15 +377,15 @@ SORT_PROCESS_BY_INTEGER(UpTime);
 SORT_PROCESS_BY_INTEGER(BasePriority);
 SORT_PROCESS_BY_INTEGER(ThreadCount);
 SORT_PROCESS_BY_INTEGER(ParentPID);
-SORT_PROCESS_BY_INTEGER(DiskUsage);
+SORT_PROCESS_BY_DOUBLE(DiskUsage);
 SORT_PROCESS_BY_STRING(ExeName, MAX_PATH);
 SORT_PROCESS_BY_STRING(UserName, UNLEN);
 
 static process_sort_type ProcessSortType = SORT_BY_ID;
 
-static TCHAR OSName[256];
 static DWORD CPUCoreCount;
 static double CPUUsage;
+static BOOL CPUUsageKnown;
 
 static ULONGLONG SubtractTimes(const FILETIME *A, const FILETIME *B)
 {
@@ -400,67 +424,53 @@ static process RootProcess;
 /* Finds and assigns parent and child processes */
 void FindParentChildProcesses(void)
 {
-	memset(&RootProcess, 0, sizeof(RootProcess));
-
-	/* Find and assign parent and child processes that have ParentPID=0 */
-	for (DWORD i = 0; i < ProcessCount; i++)
-	{
-		ProcessList[i].TreeDepth = 0;
-		ProcessList[i].Next = 0;
-		ProcessList[i].Parent = 0;
-		ProcessList[i].FirstChild = 0;
-
-		// if (ProcessList[i].ParentPID == 0)
-		// {
-		// 	AddChildProcess(&RootProcess, &ProcessList[i]);
-		// }
-	}
-
-	/* Find and assign parent and child processes */
-	for (DWORD i = 0; i < ProcessCount; i++)
-	{
-		for (DWORD j = 0; j < ProcessCount; j++)
-		{
-			if (i == j)
-				continue;
-
-			if (ProcessList[j].ParentPID == ProcessList[i].ID && ProcessList[j].ParentPID != 0 && ProcessList[i].ID != ProcessList[j].ID && ProcessList[j].Next == NULL)
-			{
-				/* i is a parent of j */
-				AddChildProcess(&ProcessList[i], &ProcessList[j]);
-				ProcessList[j].TreeDepth = ProcessList[i].TreeDepth + 1;
-			}
-		}
-	}
-
-	/* Add processes with PIDs that couldn't be found to RootProcess or else
-		 * they won't be shown */
-	for (DWORD i = 0; i < ProcessCount; i++)
-	{
-		process *Process = &ProcessList[i];
-
-		if (Process->Parent == NULL)
-		{
-			AddChildProcess(&RootProcess, Process);
-		}
-	}
+    memset(&RootProcess, 0, sizeof(RootProcess));
+    for(DWORD i = 0; i < ProcessCount; ++i) {
+        ProcessList[i].TreeDepth = 0;
+        ProcessList[i].Next = ProcessList[i].Parent = ProcessList[i].FirstChild = NULL;
+    }
+    for(DWORD i = 0; i < ProcessCount; ++i) {
+        process *Child = &ProcessList[i];
+        process *Parent = &RootProcess;
+        for(DWORD j = 0; j < ProcessCount; ++j) {
+            process *Candidate = &ProcessList[j];
+            if(i == j || !Child->ParentPID || Candidate->ID != Child->ParentPID) continue;
+            if(Child->CreationTime && Candidate->CreationTime && Candidate->CreationTime > Child->CreationTime) continue;
+            process *Ancestor = Candidate;
+            DWORD Steps = 0;
+            while(Ancestor && Ancestor != Child && ++Steps <= ProcessCount) Ancestor = Ancestor->Parent;
+            if(Ancestor == Child || Steps > ProcessCount) continue;
+            Parent = Candidate;
+            break;
+        }
+        AddChildProcess(Parent, Child);
+    }
+    for(DWORD i = 0; i < ProcessCount; ++i) {
+        process *Parent = ProcessList[i].Parent;
+        while(Parent && Parent != &RootProcess && ProcessList[i].TreeDepth < ProcessCount) {
+            ++ProcessList[i].TreeDepth;
+            Parent = Parent->Parent;
+        }
+    }
 }
 
-void ProcessTreeToList(process *Process, process *Dest, int *Index)
+/* Iterative traversal avoids recursion proportional to the process count. */
+void ProcessTreeToList(process *Root, process *Dest, int *Index)
 {
-	process *ProcessNode = Process->FirstChild;
-	if(ProcessNode == NULL) return;
-
-	while(ProcessNode != NULL) {
-		Dest[*Index] = *ProcessNode;
-		*Index = *Index + 1;
-		ProcessTreeToList(ProcessNode, Dest, Index);
-		ProcessNode = ProcessNode->Next;
-	}
+    process *Node = Root->FirstChild;
+    while(Node && (DWORD)*Index < ProcessCount) {
+        Dest[(*Index)++] = *Node;
+        if(Node->FirstChild) Node = Node->FirstChild;
+        else {
+            while(Node && Node != Root && !Node->Next) Node = Node->Parent;
+            Node = Node && Node != Root ? Node->Next : NULL;
+        }
+    }
 }
 
 static void SortProcessList(void)
 {
+    if(!ProcessCount) return;
 	if(ProcessSortType != SORT_BY_TREE)
 	{
 		process_sort_fn_t SortFn = 0;
@@ -493,6 +503,8 @@ static void SortProcessList(void)
 		case SORT_BY_DISK_USAGE:
 			SortFn = SortProcessByDiskUsage;
 			break;
+        default:
+            break;
 		}
 
 		if(SortFn) {
@@ -506,7 +518,8 @@ static void SortProcessList(void)
 
 		FindParentChildProcesses();
 
-		process *TreeProcessList = xmalloc(ProcessCount * sizeof(*ProcessList));
+		process *TreeProcessList = malloc((size_t)ProcessCount * sizeof(*ProcessList));
+        if(!TreeProcessList) { CollectorError = ERROR_NOT_ENOUGH_MEMORY; RequestShutdown(); return; }
 		int Index = 0;
 		ProcessTreeToList(&RootProcess, TreeProcessList, &Index);
 
@@ -518,7 +531,7 @@ static void SortProcessList(void)
 }
 
 static BOOL FilterByUserName = FALSE;
-static TCHAR FilterUserName[UNLEN];
+static TCHAR FilterUserName[UNLEN + 1];
 
 static BOOL FilterByPID = FALSE;
 static DWORD PidFilterList[1024];
@@ -530,36 +543,28 @@ static DWORD NameFilterCount;
 
 static void SelectProcess(DWORD Index)
 {
-	SelectedProcessIndex = Index;
-	if(SelectedProcessIndex <= ProcessIndex - 1 && ProcessIndex != 0) {
-		ProcessIndex = SelectedProcessIndex;
-	}
-	if(SelectedProcessIndex - ProcessIndex >= VisibleProcessCount) {
-		ProcessIndex = min(ProcessCount - VisibleProcessCount, SelectedProcessIndex);
-	}
+    if(!ProcessCount) { ProcessIndex = SelectedProcessIndex = 0; return; }
+    DWORD Visible = max(VisibleProcessCount, 1);
+    SelectedProcessIndex = min(Index, ProcessCount - 1);
+    if(SelectedProcessIndex < ProcessIndex) ProcessIndex = SelectedProcessIndex;
+    if(SelectedProcessIndex - ProcessIndex >= Visible)
+        ProcessIndex = SelectedProcessIndex - Visible + 1;
 }
 
 static void ReadjustCursor(void)
 {
-	if(FollowProcess) {
-		BOOL Found = FALSE;
-		for(DWORD i = 0; i < ProcessCount; i++) {
-			if(ProcessList[i].ID == FollowProcessID) {
-				SelectProcess(i);
-				Found = TRUE;
-				break;
-			}
-		}
-
-		if(!Found) {
-			/* Process got lost, might as well disable this now */
-			FollowProcess = FALSE;
-		}
-	} else {
-		/* After process list update ProcessIndex and SelectedProcessIndex may become out of range */
-		ProcessIndex = min(ProcessIndex, ProcessCount - VisibleProcessCount);
-		SelectedProcessIndex = min(SelectedProcessIndex, ProcessCount - 1);
-	}
+    if(!ProcessCount) { ProcessIndex = SelectedProcessIndex = 0; FollowProcess = FALSE; return; }
+    DWORD Visible = max(VisibleProcessCount, 1);
+    DWORD MaxTop = ProcessCount > Visible ? ProcessCount - Visible : 0;
+    ProcessIndex = min(ProcessIndex, MaxTop);
+    SelectedProcessIndex = min(SelectedProcessIndex, ProcessCount - 1);
+    if(FollowProcess) {
+        BOOL Found = FALSE;
+        for(DWORD i = 0; i < ProcessCount; ++i) {
+            if(ProcessList[i].ID == FollowProcessID && ProcessList[i].CreationTime == FollowCreationTime) { SelectProcess(i); Found = TRUE; break; }
+        }
+        if(!Found) FollowProcess = FALSE;
+    }
 }
 
 static TCHAR SearchPattern[256];
@@ -570,7 +575,11 @@ static void SearchNext(void);
 
 void StartSearch(const TCHAR *Pattern)
 {
-	_tcsncpy_s(SearchPattern, 256, Pattern, 256);
+    if(_tcslen(Pattern) >= _countof(SearchPattern)) {
+        SetViMessage(VI_ERROR, _T("Search pattern is too long (maximum 255 characters)"));
+        return;
+    }
+    _tcscpy_s(SearchPattern, _countof(SearchPattern), Pattern);
 
 	// if the whole string is lower case use case insensitive search
 	CaseInsensitiveSearch = TRUE;
@@ -580,7 +589,7 @@ void StartSearch(const TCHAR *Pattern)
 		{
 			break;
 		}
-		if (isupper(SearchPattern[i]))
+		if (_istupper(IntFromTChar(SearchPattern[i])))
 		{
 			CaseInsensitiveSearch = FALSE;
 			break;
@@ -603,7 +612,7 @@ static BOOLEAN SearchMatchesProcess(const process *Process)
 		{
 			if (TempProcessName[i] == 0)
 				break;
-			TempProcessName[i] = (TCHAR)tolower(TempProcessName[i]);
+			TempProcessName[i] = (TCHAR)_totlower(IntFromTChar(TempProcessName[i]));
 		}
 	}
 
@@ -612,7 +621,7 @@ static BOOLEAN SearchMatchesProcess(const process *Process)
 
 static void SearchNext(void)
 {
-	if(!SearchActive) return;
+	if(!SearchActive || !ProcessCount) return;
 
 	for(DWORD i = SelectedProcessIndex + 1; i < ProcessCount; ++i) {
 		const process *Process = &ProcessList[i];
@@ -637,7 +646,7 @@ static void SearchNext(void)
 
 static void SearchPrevious(void)
 {
-	if(!SearchActive) return;
+	if(!SearchActive || !ProcessCount) return;
 
 	for(DWORD i = SelectedProcessIndex; i > 0; --i) {
 		const process *Process = &ProcessList[i - 1];
@@ -660,204 +669,227 @@ static void SearchPrevious(void)
 	SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
 }
 
-static void PollProcessList(DWORD UpdateTime)
+static ULONGLONG FileTimeValue(const FILETIME *Value)
 {
-	HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPALL, 0);
-	if(!Snapshot) {
-		Die(_T("CreateToolhelp32Snapshot failed: %ld\n"), GetLastError());
-	}
+    return ((ULONGLONG)Value->dwHighDateTime << 32) | Value->dwLowDateTime;
+}
 
-	PROCESSENTRY32 Entry;
-	Entry.dwSize = sizeof(Entry);
-
-	BOOL Status = Process32First(Snapshot, &Entry);
-	if(!Status) {
-		Die(_T("Process32First failed: %ld\n"), GetLastError());
-	}
-
-	DWORD i = 0;
-
-	for(; Status; Status = Process32Next(Snapshot, &Entry)) {
-		process Process = { 0 };
-		Process.ID = Entry.th32ProcessID;
-		if(Process.ID == 0)
-			continue;
-		Process.ThreadCount = Entry.cntThreads;
-		Process.BasePriority = Entry.pcPriClassBase;
-		Process.ParentPID = Entry.th32ParentProcessID;
-
-		_tcsncpy_s(Process.ExeName, MAX_PATH, Entry.szExeFile, MAX_PATH);
-		_tcsncpy_s(Process.UserName, UNLEN, _T("SYSTEM"), UNLEN);
-
-		Process.Handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Entry.th32ProcessID);
-		if(Process.Handle) {
-			PROCESS_MEMORY_COUNTERS ProcMemCounters;
-			if(GetProcessMemoryInfo(Process.Handle, &ProcMemCounters, sizeof(ProcMemCounters))) {
-				Process.UsedMemory = (unsigned __int64)ProcMemCounters.WorkingSetSize;
-			}
-
-			HANDLE ProcessTokenHandle;
-			if(OpenProcessToken(Process.Handle, TOKEN_READ, &ProcessTokenHandle)) {
-				DWORD ReturnLength;
-
-				GetTokenInformation(ProcessTokenHandle, TokenUser, 0, 0, &ReturnLength);
-				if(GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
-					PTOKEN_USER TokenUserStruct = xmalloc(ReturnLength);
-
-					if(GetTokenInformation(ProcessTokenHandle, TokenUser, TokenUserStruct, ReturnLength, &ReturnLength)) {
-						SID_NAME_USE NameUse;
-						DWORD NameLength = UNLEN;
-						TCHAR DomainName[MAX_PATH];
-						DWORD DomainLength = MAX_PATH;
-
-						LookupAccountSid(0, TokenUserStruct->User.Sid, Process.UserName, &NameLength, DomainName, &DomainLength, &NameUse);
-
-						// FIXME: we cut user name here for display purposes because something like %9.9s does not work with MS's vsprintf function?
-						Process.UserName[9] = 0;
-					}
-					free(TokenUserStruct);
-				}
-				CloseHandle(ProcessTokenHandle);
-			}
-		}
-
-		if(FilterByUserName && lstrcmpi(Process.UserName, FilterUserName) != 0) {
-			continue;
-		}
-
-		if(FilterByPID) {
-			BOOL InFilter = FALSE;
-			for(DWORD PidIndex = 0; PidIndex < PidFilterCount; PidIndex++) {
-				if(PidFilterList[PidIndex] == Process.ID) {
-					InFilter = TRUE;
-				}
-			}
-
-			if(!InFilter) {
-				continue;
-			}
-		}
-
-    if (FilterByName) {
-      BOOL InFilter = FALSE;
-      for(DWORD NameIndex = 0; NameIndex < NameFilterCount; NameIndex++) {
-        if(strstr(Process.ExeName, NameFilterList[NameIndex]) != NULL) {
-          InFilter = TRUE;
-        }
-      }
-
-      if (!InFilter) {
-        continue;
-      }
+static void CloseSampleHandles(process *Sample, DWORD Count)
+{
+    for(DWORD i = 0; i < Count; ++i) {
+        if(Sample[i].Handle) { CloseHandle(Sample[i].Handle); Sample[i].Handle = NULL; }
     }
+}
 
-		NewProcessList[i++] = Process;
+static BOOL MatchesStaticFilter(const process *Process)
+{
+    if(FilterByPID) {
+        BOOL Found = FALSE;
+        for(DWORD i = 0; i < PidFilterCount; ++i) if(PidFilterList[i] == Process->ID) Found = TRUE;
+        if(!Found) return FALSE;
+    }
+    if(FilterByName) {
+        BOOL Found = FALSE;
+        for(DWORD i = 0; i < NameFilterCount; ++i)
+            if(_tcsstr(Process->ExeName, NameFilterList[i])) Found = TRUE;
+        if(!Found) return FALSE;
+    }
+    return TRUE;
+}
 
-		if(i >= ProcessListSize) {
-			IncreaseProcListSize();
-		}
-	}
+/* Private sample handles and buffers never escape the collector. */
+static BOOL PollProcessList(DWORD UpdateTime)
+{
+    FILETIME SnapshotStarted;
+    GetSystemTimeAsFileTime(&SnapshotStarted);
+    HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if(Snapshot == INVALID_HANDLE_VALUE) { CollectorError = GetLastError(); return FALSE; }
+    DWORD Capacity = PROCLIST_BUF_INCREASE, Count = 0;
+    process *Sample = calloc(Capacity, sizeof(*Sample));
+    if(!Sample) { CloseHandle(Snapshot); CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
+    PROCESSENTRY32 Entry;
+    memset(&Entry, 0, sizeof(Entry));
+    Entry.dwSize = sizeof(Entry);
+    BOOL More = Process32First(Snapshot, &Entry);
+    if(!More && GetLastError() != ERROR_NO_MORE_FILES) {
+        CollectorError = GetLastError(); CloseHandle(Snapshot); free(Sample); return FALSE;
+    }
+    for(; More && !ShouldStop(); More = Process32Next(Snapshot, &Entry)) {
+        process Process;
+        memset(&Process, 0, sizeof(Process));
+        Process.ID = Entry.th32ProcessID;
+        if(!Process.ID) continue;
+        Process.ThreadCount = Entry.cntThreads;
+        Process.BasePriority = Entry.pcPriClassBase;
+        Process.ParentPID = Entry.th32ParentProcessID;
+        _tcsncpy_s(Process.ExeName, _countof(Process.ExeName), Entry.szExeFile, _TRUNCATE);
+        _tcscpy_s(Process.UserName, _countof(Process.UserName), _T("?"));
+        Process.OwnerState = Process.CpuState = Process.MemoryState = Process.IoState = Process.AgeState = METRIC_UNAVAILABLE;
+        if(!MatchesStaticFilter(&Process)) continue;
+        Process.Handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Process.ID);
+        metric_state OpenState = Process.Handle ? METRIC_OK : LastMetricError();
+        if(Process.Handle) {
+            FILETIME Created, Exited, Kernel, User;
+            if(!GetProcessTimes(Process.Handle, &Created, &Exited, &Kernel, &User)) {
+                OpenState = LastMetricError();
+                CloseHandle(Process.Handle); Process.Handle = NULL;
+            } else if(FileTimeValue(&Created) >= FileTimeValue(&SnapshotStarted)) {
+                /* Conservatively exclude processes born after enumeration began:
+                   a reused PID must not acquire an earlier row's name/parent. */
+                CloseHandle(Process.Handle);
+                continue;
+            } else Process.CreationTime = FileTimeValue(&Created);
+        }
+        if(Process.Handle) {
+            HANDLE Token;
+            if(OpenProcessToken(Process.Handle, TOKEN_QUERY, &Token)) {
+                DWORD Size = 0;
+                GetTokenInformation(Token, TokenUser, NULL, 0, &Size);
+                if(GetLastError() == ERROR_INSUFFICIENT_BUFFER && Size) {
+                    TOKEN_USER *User = malloc(Size);
+                    if(User && GetTokenInformation(Token, TokenUser, User, Size, &Size)) {
+                        TCHAR Domain[256];
+                        DWORD NameSize = _countof(Process.UserName), DomainSize = _countof(Domain);
+                        SID_NAME_USE Use;
+                        if(LookupAccountSid(NULL, User->User.Sid, Process.UserName, &NameSize, Domain, &DomainSize, &Use))
+                            Process.OwnerState = METRIC_OK;
+                        else Process.OwnerState = LastMetricError();
+                    } else Process.OwnerState = User ? LastMetricError() : METRIC_UNAVAILABLE;
+                    free(User);
+                } else Process.OwnerState = LastMetricError();
+                CloseHandle(Token);
+            } else Process.OwnerState = LastMetricError();
+            if(Process.OwnerState != METRIC_OK) _tcscpy_s(Process.UserName, _countof(Process.UserName), _T("?"));
+        } else {
+            Process.OwnerState = Process.CpuState = Process.MemoryState = Process.IoState = Process.AgeState = OpenState;
+        }
+        if(FilterByUserName && (Process.OwnerState != METRIC_OK || _tcsicmp(Process.UserName, FilterUserName))) {
+            if(Process.Handle) CloseHandle(Process.Handle);
+            continue;
+        }
+        if(Count == Capacity) {
+            DWORD NewCapacity = Capacity + PROCLIST_BUF_INCREASE;
+            process *Larger = realloc(Sample, (size_t)NewCapacity * sizeof(*Sample));
+            if(!Larger) {
+                if(Process.Handle) CloseHandle(Process.Handle);
+                CloseSampleHandles(Sample, Count); free(Sample); CloseHandle(Snapshot);
+                CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE;
+            }
+            Sample = Larger; Capacity = NewCapacity;
+        }
+        Sample[Count++] = Process;
+    }
+    DWORD EnumerationError = More || ShouldStop() ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(Snapshot);
+    if(EnumerationError != ERROR_SUCCESS && EnumerationError != ERROR_NO_MORE_FILES) {
+        CloseSampleHandles(Sample, Count); free(Sample); CollectorError = EnumerationError; return FALSE;
+    }
+    if(ShouldStop()) { CloseSampleHandles(Sample, Count); free(Sample); return FALSE; }
 
-	CloseHandle(Snapshot);
-
-	DWORD NewProcessCount = i;
-
-	typedef struct system_times
-	{
-		FILETIME IdleTime, KernelTime, UserTime;
-	} system_times;
-
-	system_times PrevSysTimes;
-
-	GetSystemTimes(&PrevSysTimes.IdleTime, &PrevSysTimes.KernelTime, &PrevSysTimes.UserTime);
-
-	typedef struct process_times
-	{
-		FILETIME CreationTime, ExitTime, KernelTime, UserTime; 
-	} process_times;
-
-	process_times *ProcessTimes = (process_times *)xmalloc(NewProcessCount * sizeof(*ProcessTimes));
-
-	for(DWORD ProcIndex = 0; ProcIndex < NewProcessCount; ProcIndex++) {
-		process *Process = &NewProcessList[ProcIndex];
-		process_times *ProcessTime = &ProcessTimes[ProcIndex];
-		if(Process->Handle) {
-			GetProcessTimes(Process->Handle, &ProcessTime->CreationTime, &ProcessTime->ExitTime, &ProcessTime->KernelTime, &ProcessTime->UserTime);
-
-			IO_COUNTERS IoCounters;
-			if(GetProcessIoCounters(Process->Handle, &IoCounters)) {
-				Process->DiskOperationsPrev = IoCounters.ReadTransferCount + IoCounters.WriteTransferCount;
-			}
-		}
-	}
-
-	Sleep(UpdateTime);
-
-	system_times SysTimes;
-
-	GetSystemTimes(&SysTimes.IdleTime, &SysTimes.KernelTime, &SysTimes.UserTime);
-
-	ULONGLONG SysKernelDiff = SubtractTimes(&SysTimes.KernelTime, &PrevSysTimes.KernelTime);
-	ULONGLONG SysUserDiff = SubtractTimes(&SysTimes.UserTime, &PrevSysTimes.UserTime);
-	ULONGLONG SysIdleDiff = SubtractTimes(&SysTimes.IdleTime, &PrevSysTimes.IdleTime);
-
-	RunningProcessCount = 0;
-
-	for(DWORD ProcIndex = 0; ProcIndex < NewProcessCount; ProcIndex++) {
-		process_times ProcessTime = { 0 };
-		process_times *PrevProcessTime = &ProcessTimes[ProcIndex];
-		process *Process = &NewProcessList[ProcIndex];
-		if(Process->Handle) {
-			GetProcessTimes(Process->Handle, &ProcessTime.CreationTime, &ProcessTime.ExitTime, &ProcessTime.KernelTime, &ProcessTime.UserTime);
-
-			ULONGLONG ProcKernelDiff = SubtractTimes(&ProcessTime.KernelTime, &PrevProcessTime->KernelTime);
-			ULONGLONG ProcUserDiff = SubtractTimes(&ProcessTime.UserTime, &PrevProcessTime->UserTime);
-
-			ULONGLONG TotalSys = SysKernelDiff + SysUserDiff;
-			ULONGLONG TotalProc = ProcKernelDiff + ProcUserDiff;
-
-			if(TotalSys > 0) {
-				Process->PercentProcessorTime = (double)((100.0 * (double)TotalProc) / (double)TotalSys);
-				if(Process->PercentProcessorTime >= 0.01) {
-					RunningProcessCount++;
-				}
-			}
-
-			FILETIME SysTime;
-			GetSystemTimeAsFileTime(&SysTime);
-
-			Process->UpTime = SubtractTimes(&SysTime, &ProcessTime.CreationTime) / 10000;
-
-			IO_COUNTERS IoCounters;
-			if(GetProcessIoCounters(Process->Handle, &IoCounters)) {
-				Process->DiskOperations = IoCounters.ReadTransferCount + IoCounters.WriteTransferCount;
-				Process->DiskUsage = (DWORD)((Process->DiskOperations - Process->DiskOperationsPrev) * (1000/UpdateTime));
-			}
-
-			CloseHandle(Process->Handle);
-			Process->Handle = 0;
-		}
-	}
-
-	free(ProcessTimes);
-
-	/* Since we have the values already we can compute CPU usage too */
-	ULONGLONG SysTime = SysKernelDiff + SysUserDiff;
-	if(SysTime > 0) {
-		double Percentage = (double)(SysTime - SysIdleDiff) / (double)SysTime;
-		CPUUsage = min(Percentage, 1.0);
-	}
-
-	EnterCriticalSection(&SyncLock);
-
-	memcpy(ProcessList, NewProcessList, NewProcessCount * sizeof *ProcessList);
-	ProcessCount = NewProcessCount;
-
-
-	SortProcessList();
-	ReadjustCursor();
-
-	LeaveCriticalSection(&SyncLock);
+    FILETIME PrevIdle, PrevKernel, PrevUser;
+    BOOL HaveSystemBefore = GetSystemTimes(&PrevIdle, &PrevKernel, &PrevUser);
+    ULONGLONG Started = GetTickCount64();
+    for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
+        process *Process = &Sample[i];
+        if(!Process->Handle) continue;
+        FILETIME Created, Exited, Kernel, User;
+        if(GetProcessTimes(Process->Handle, &Created, &Exited, &Kernel, &User)) {
+            Process->CreationTime = FileTimeValue(&Created);
+            Process->PreviousCpu = FileTimeValue(&Kernel) + FileTimeValue(&User);
+            Process->PreviousTimesValid = TRUE;
+            Process->CpuState = METRIC_WARMING;
+        } else Process->CpuState = Process->AgeState = LastMetricError();
+        IO_COUNTERS Io;
+        if(GetProcessIoCounters(Process->Handle, &Io)) {
+            Process->PreviousRead = Io.ReadTransferCount;
+            Process->PreviousWrite = Io.WriteTransferCount;
+            Process->PreviousIoValid = TRUE;
+            Process->IoState = METRIC_WARMING;
+        } else Process->IoState = LastMetricError();
+        Process->SampleTick = GetTickCount64();
+    }
+    if(WaitForSingleObject(ShutdownEvent, UpdateTime) != WAIT_TIMEOUT) {
+        CloseSampleHandles(Sample, Count); free(Sample); return FALSE;
+    }
+    FILETIME Idle, Kernel, User;
+    BOOL HaveSystemAfter = GetSystemTimes(&Idle, &Kernel, &User);
+    ULONGLONG SystemDelta = 0, IdleDelta = 0;
+    if(HaveSystemBefore && HaveSystemAfter && FileTimeValue(&Kernel) >= FileTimeValue(&PrevKernel) &&
+       FileTimeValue(&User) >= FileTimeValue(&PrevUser) && FileTimeValue(&Idle) >= FileTimeValue(&PrevIdle)) {
+        SystemDelta = FileTimeValue(&Kernel) - FileTimeValue(&PrevKernel) + FileTimeValue(&User) - FileTimeValue(&PrevUser);
+        IdleDelta = FileTimeValue(&Idle) - FileTimeValue(&PrevIdle);
+    }
+    DWORD Running = 0;
+    for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
+        process *Process = &Sample[i];
+        if(!Process->Handle) continue;
+        FILETIME Created, Exited, ProcessKernel, ProcessUser, Now;
+        if(GetProcessTimes(Process->Handle, &Created, &Exited, &ProcessKernel, &ProcessUser)) {
+            ULONGLONG Total = FileTimeValue(&ProcessKernel) + FileTimeValue(&ProcessUser);
+            GetSystemTimeAsFileTime(&Now);
+            Process->CreationTime = FileTimeValue(&Created);
+            if(FileTimeValue(&Now) >= Process->CreationTime) {
+                ULONGLONG EndTime = FileTimeValue(&Exited) ? FileTimeValue(&Exited) : FileTimeValue(&Now);
+                Process->UpTime = EndTime >= Process->CreationTime ? (EndTime - Process->CreationTime) / 10000 : 0;
+                Process->AgeState = METRIC_OK;
+            } else Process->AgeState = METRIC_DISCONTINUITY;
+            if(Process->PreviousTimesValid && SystemDelta && Total >= Process->PreviousCpu) {
+                Process->PercentProcessorTime = 100.0 * (double)(Total - Process->PreviousCpu) / (double)SystemDelta;
+                Process->CpuState = METRIC_OK;
+                if(Process->PercentProcessorTime >= 0.01) ++Running;
+            } else Process->CpuState = Process->PreviousTimesValid ? METRIC_DISCONTINUITY : METRIC_WARMING;
+        } else Process->CpuState = Process->AgeState = LastMetricError();
+        PROCESS_MEMORY_COUNTERS Memory;
+        if(GetProcessMemoryInfo(Process->Handle, &Memory, sizeof(Memory))) {
+            Process->UsedMemory = Memory.WorkingSetSize;
+            Process->MemoryState = METRIC_OK;
+        } else Process->MemoryState = LastMetricError();
+        IO_COUNTERS Io;
+        if(GetProcessIoCounters(Process->Handle, &Io)) {
+            ULONGLONG Elapsed = GetTickCount64() - Process->SampleTick;
+            Process->IoReadTotal = Io.ReadTransferCount;
+            Process->IoWriteTotal = Io.WriteTransferCount;
+            if(Process->PreviousIoValid && Io.ReadTransferCount >= Process->PreviousRead && Io.WriteTransferCount >= Process->PreviousWrite && Elapsed) {
+                double Delta = (double)(Io.ReadTransferCount - Process->PreviousRead) + (double)(Io.WriteTransferCount - Process->PreviousWrite);
+                wtop_counter_rate(0, Delta, (double)Elapsed, &Process->DiskUsage);
+                Process->IoState = METRIC_OK;
+            } else Process->IoState = Process->PreviousIoValid ? METRIC_DISCONTINUITY : METRIC_WARMING;
+        } else Process->IoState = LastMetricError();
+        CloseHandle(Process->Handle);
+        Process->Handle = NULL;
+    }
+    CloseSampleHandles(Sample, Count);
+    if(ShouldStop()) { free(Sample); return FALSE; }
+    ULONGLONG SampleElapsed = GetTickCount64() - Started;
+    EnterCriticalSection(&SyncLock);
+    DWORD SelectedId = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].ID : 0;
+    ULONGLONG SelectedCreated = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
+    if(Count > ProcessListSize) {
+        process *Larger = realloc(ProcessList, (size_t)Count * sizeof(*ProcessList));
+        if(!Larger) {
+            LeaveCriticalSection(&SyncLock); free(Sample); CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE;
+        }
+        ProcessList = Larger; ProcessListSize = Count;
+    }
+    memcpy(ProcessList, Sample, (size_t)Count * sizeof(*ProcessList));
+    ProcessCount = Count;
+    RunningProcessCount = Running;
+    CPUUsageKnown = SystemDelta && IdleDelta <= SystemDelta;
+    if(CPUUsageKnown) CPUUsage = (double)(SystemDelta - IdleDelta) / (double)SystemDelta;
+    LastSampleElapsed = SampleElapsed;
+    SortProcessList();
+    ReadjustCursor();
+    if(!FollowProcess && SelectedId) {
+        for(DWORD i = 0; i < ProcessCount; ++i) {
+            if(ProcessList[i].ID == SelectedId && ProcessList[i].CreationTime == SelectedCreated) {
+                SelectProcess(i);
+                break;
+            }
+        }
+    }
+    LeaveCriticalSection(&SyncLock);
+    free(Sample);
+    return !ShouldStop();
 }
 
 static void DisableCursor(void)
@@ -881,7 +913,7 @@ static WORD GetConsoleColor(void)
 static BOOL PollConsoleInfo(void)
 {
 	CONSOLE_SCREEN_BUFFER_INFO Csbi;
-	GetConsoleScreenBufferInfo(ConsoleHandle, &Csbi);
+	if(!GetConsoleScreenBufferInfo(ConsoleHandle, &Csbi)) { RequestShutdown(); return FALSE; }
 	Width = Csbi.srWindow.Right - Csbi.srWindow.Left + 1;
 	Height = Csbi.srWindow.Bottom - Csbi.srWindow.Top + 1;
 
@@ -908,7 +940,6 @@ static BOOL PollConsoleInfo(void)
 }
 
 static TCHAR ComputerName[MAX_COMPUTERNAME_LENGTH + 1] = _T("localhost");
-static double CPUFrequency;
 static TCHAR CPUName[256];
 
 static ULONGLONG TotalMemory;
@@ -923,71 +954,59 @@ static double UsedPageMemoryPerc;
 
 static ULONGLONG UpTime;
 
+static BOOL SystemMemoryKnown;
+
 static void PollInitialSystemInfo(void)
 {
-	LARGE_INTEGER PerformanceFrequency;
-	QueryPerformanceFrequency(&PerformanceFrequency);
-	CPUFrequency = (double)PerformanceFrequency.QuadPart / 1000000.0;
-
-	SYSTEM_INFO SystemInfo;
-	GetNativeSystemInfo(&SystemInfo);
-	CPUCoreCount = SystemInfo.dwNumberOfProcessors;
-
-	HKEY Key;
-	if(SUCCEEDED(RegOpenKey(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\"), &Key))) {
-		DWORD Count = 256;
-		if(SUCCEEDED(RegQueryValueEx(Key, _T("ProcessorNameString"), 0, 0, (LPBYTE)&CPUName[0], &Count))) {
-			RegCloseKey(Key);
-		}
-	}
-
-	DWORD ComputerNameSize = MAX_COMPUTERNAME_LENGTH + 1;
-	GetComputerName(ComputerName, &ComputerNameSize);
+    SYSTEM_INFO SystemInfo;
+    GetNativeSystemInfo(&SystemInfo);
+    CPUCoreCount = SystemInfo.dwNumberOfProcessors;
+    _tcscpy_s(CPUName, _countof(CPUName), _T("Unknown CPU"));
+    HKEY Key;
+    if(RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"), 0, KEY_QUERY_VALUE, &Key) == ERROR_SUCCESS) {
+        DWORD Count = sizeof(CPUName), Type = 0;
+        if(RegQueryValueEx(Key, _T("ProcessorNameString"), NULL, &Type, (LPBYTE)CPUName, &Count) != ERROR_SUCCESS || Type != REG_SZ)
+            _tcscpy_s(CPUName, _countof(CPUName), _T("Unknown CPU"));
+        CPUName[_countof(CPUName) - 1] = 0;
+        RegCloseKey(Key);
+    }
+    DWORD ComputerNameSize = _countof(ComputerName);
+    GetComputerName(ComputerName, &ComputerNameSize);
 }
 
 static void PollSystemInfo(void)
 {
-	MEMORYSTATUSEX MemoryInfo;
-	MemoryInfo.dwLength = sizeof(MEMORYSTATUSEX);
-	GlobalMemoryStatusEx(&MemoryInfo);
-	TotalMemory = TO_MB(MemoryInfo.ullTotalPhys);
-	UsedMemory = TO_MB(MemoryInfo.ullTotalPhys - MemoryInfo.ullAvailPhys);
-	UsedMemoryPerc = (double)UsedMemory / (double)TotalMemory;
-
-	TotalPageMemory = TO_MB(MemoryInfo.ullTotalPageFile);
-	UsedPageMemory = TO_MB(MemoryInfo.ullTotalPageFile - MemoryInfo.ullAvailPageFile);
-	UsedPageMemoryPerc = (double)UsedPageMemory / (double)TotalPageMemory;
-
-	UpTime = GetTickCount64();
+    MEMORYSTATUSEX MemoryInfo;
+    memset(&MemoryInfo, 0, sizeof(MemoryInfo));
+    MemoryInfo.dwLength = sizeof(MemoryInfo);
+    SystemMemoryKnown = GlobalMemoryStatusEx(&MemoryInfo);
+    if(SystemMemoryKnown) {
+        TotalMemory = TO_MB(MemoryInfo.ullTotalPhys);
+        UsedMemory = TO_MB(MemoryInfo.ullTotalPhys - MemoryInfo.ullAvailPhys);
+        UsedMemoryPerc = MemoryInfo.ullTotalPhys ? (double)(MemoryInfo.ullTotalPhys - MemoryInfo.ullAvailPhys) / (double)MemoryInfo.ullTotalPhys : 0;
+        TotalPageMemory = TO_MB(MemoryInfo.ullTotalPageFile);
+        UsedPageMemory = TO_MB(MemoryInfo.ullTotalPageFile - MemoryInfo.ullAvailPageFile);
+        UsedPageMemoryPerc = MemoryInfo.ullTotalPageFile ? (double)(MemoryInfo.ullTotalPageFile - MemoryInfo.ullAvailPageFile) / (double)MemoryInfo.ullTotalPageFile : 0;
+    }
+    UpTime = GetTickCount64();
 }
-
-static HANDLE ProcessListThread;
 
 DWORD WINAPI PollProcessListThreadProc(LPVOID lpParam)
 {
 	UNREFERENCED_PARAMETER(lpParam);
 
-	while(1) {
-		PollProcessList(1000);
-	}
+	while(!ShouldStop()) {
+        if(!PollProcessList((DWORD)Config.RedrawInterval)) {
+            RequestShutdown();
+            break;
+        }
+    }
 	return 0;
 }
 
-typedef enum input_mode {
-	EXEC,
-} input_mode;
+#define TIME_STR_SIZE 32
 
-static input_mode InputMode = EXEC;
-
-#define TIME_STR_SIZE 12
-
-/*
- * Create a dd:hh:mm:ss time-string similar to how the modern taskmgr does it.
- *
- * The restriction of the day count to two digits is justified by the obvious
- * fact that a Windows system cannot possibly reach an uptime of over 100 days
- * without crashing.
- */
+/* Process age and system uptime are elapsed wall time, not consumed CPU time. */
 static void FormatTimeString(TCHAR *Buffer, DWORD BufferSize, ULONGLONG MS)
 {
 	int Seconds = (int)(MS / 1000 % 60);
@@ -1024,10 +1043,19 @@ static void WriteBlankLine(void)
 	ConPrintf(_T("%*c"), Width, _T(' '));
 }
 
-static BOOL WINAPI CtrlHandler(DWORD signal)
+/* System-owned callback thread. Events remain alive until process exit. */
+static BOOL WINAPI CtrlHandler(DWORD Signal)
 {
-	UNREFERENCED_PARAMETER(signal);
-	exit(EXIT_SUCCESS);
+    if(Signal != CTRL_C_EVENT && Signal != CTRL_BREAK_EVENT && Signal != CTRL_CLOSE_EVENT &&
+       Signal != CTRL_LOGOFF_EVENT && Signal != CTRL_SHUTDOWN_EVENT) return FALSE;
+    RequestShutdown();
+    if(CleanupDoneEvent && WaitForSingleObject(CleanupDoneEvent, SHUTDOWN_GRACE_MS + 500) != WAIT_OBJECT_0) {
+        /* Covers a blocked initial/snapshot query on the main thread too.
+           The callback owns no model memory and never attempts thread teardown. */
+        OutputDebugString(_T("wtop: cancellation cleanup exceeded 3500 ms; forcing own process exit 124.\n"));
+        TerminateProcess(GetCurrentProcess(), EXIT_FORCED_SHUTDOWN);
+    }
+    return TRUE;
 }
 
 typedef struct process_list_column {
@@ -1084,7 +1112,9 @@ static int DrawPercentageBar(TCHAR *Name, double Percentage, WORD Color)
 	ConPutc(_T('['));
 	CharsWritten++;
 
-	int Bars = (int)((double)BAR_WIDTH * Percentage);
+	BOOL Known = Percentage >= 0;
+    if(Known) Percentage = min(1.0, Percentage);
+    int Bars = Known ? (int)((double)BAR_WIDTH * Percentage) : 0;
 	SetColor(Color);
 	for(int i = 0; i < Bars; i++) {
 		ConPutc(_T('|'));
@@ -1096,7 +1126,7 @@ static int DrawPercentageBar(TCHAR *Name, double Percentage, WORD Color)
 	}
 	CharsWritten += BAR_WIDTH - Bars;
 	SetColor(Config.BGColor);
-	CharsWritten += ConPrintf(_T("%04.1f%%"), 100.0 * Percentage);
+	CharsWritten += Known ? ConPrintf(_T("%04.1f%%"), 100.0 * Percentage) : ConPrintf(_T("    ?"));
 	SetColor(Config.FGColor);
 	ConPutc(_T(']'));
 	CharsWritten++;
@@ -1110,72 +1140,28 @@ static void RestoreConsole(void)
 
 static void WriteProcessInfo(const process *Process, BOOL Highlighted)
 {
-	WORD Color = Config.FGColor;
-	BOOL Selected = IsProcessTagged(Process->ID);
-	if(Highlighted) {
-		if(Selected) {
-			Color = Config.BGColor | Config.BGHighlightColor;
-		} else {
-			Color = Config.BGHighlightColor;
-		}
-	} else if(Selected) {
-		Color = Config.BGColor;
-	}
-	SetColor(Color);
-
-	int CharsWritten = 0;
-	TCHAR UpTimeStr[TIME_STR_SIZE];
-	FormatTimeString(UpTimeStr, TIME_STR_SIZE, Process->UpTime);
-
-	TCHAR MemoryStr[256];
-	FormatMemoryString(MemoryStr, _countof(MemoryStr), Process->UsedMemory);
-
-	if(ProcessSortType == SORT_BY_TREE) {
-		TCHAR OffsetStr[256] = { 0 };
-		if(Process->TreeDepth > 0) {
-			for(DWORD i = 0; i < Process->TreeDepth-1; i++) {
-				_tcscat_s(OffsetStr, _countof(OffsetStr), _T("|  "));
-			}
-			_tcscat_s(OffsetStr, _countof(OffsetStr), _T("`- "));
-		}
-
-		CharsWritten = ConPrintf(_T("\n%7u  %9s  %3u  %04.1f%%  %s  %4u  % 03.1f MB/s  %s"),
-				Process->ID,
-				Process->UserName,
-				Process->BasePriority,
-				Process->PercentProcessorTime,
-				MemoryStr,
-				Process->ThreadCount,
-				ceil((double)Process->DiskUsage / 1000000.0 * 10.0) / 10.0,
-				UpTimeStr
-				);
-		Color = CurrentColor;
-
-		if(!Highlighted) {
-			SetColor(Config.FGHighlightColor);
-		}
-
-		CharsWritten += ConPrintf(_T("  %s"), OffsetStr);
-		SetColor(Color);
-
-		CharsWritten += ConPrintf(_T("%s"), Process->ExeName);
-	} else {
-		CharsWritten = ConPrintf(_T("\n%7u  %9s  %3u  %04.1f%%  %s  %4u  % 03.1f MB/s  %s  %s"),
-				Process->ID,
-				Process->UserName,
-				Process->BasePriority,
-				Process->PercentProcessorTime,
-				MemoryStr,
-				Process->ThreadCount,
-				ceil((double)Process->DiskUsage / 1000000.0 * 10.0) / 10.0,
-				UpTimeStr,
-				Process->ExeName
-				);
-	}
-
-	if (InteractiveMode) {
-		ConPrintf(_T("%*c"), Width-CharsWritten+1, _T(' '));
-	}
+    WORD Color = Config.FGColor;
+    BOOL Selected = IsProcessTagged(Process);
+    if(Highlighted) Color = Selected ? Config.BGColor | Config.BGHighlightColor : Config.BGHighlightColor;
+    else if(Selected) Color = Config.BGColor;
+    SetColor(Color);
+    TCHAR Age[32], Memory[64], Cpu[32], Io[64];
+    if(Process->AgeState == METRIC_OK) FormatTimeString(Age, _countof(Age), Process->UpTime);
+    else _tcscpy_s(Age, _countof(Age), _T("?"));
+    if(Process->MemoryState == METRIC_OK) FormatMemoryString(Memory, _countof(Memory), Process->UsedMemory);
+    else _tcscpy_s(Memory, _countof(Memory), _T("?"));
+    if(Process->CpuState == METRIC_OK) _stprintf_s(Cpu, _countof(Cpu), _T("%5.1f"), Process->PercentProcessorTime);
+    else _tcscpy_s(Cpu, _countof(Cpu), _T("?"));
+    if(Process->IoState == METRIC_OK) _stprintf_s(Io, _countof(Io), _T("%.1f MB/s"), Process->DiskUsage / 1000000.0);
+    else _tcscpy_s(Io, _countof(Io), _T("?"));
+    int CharsWritten = ConPrintf(_T("%7u  %9.9s  %3u  %5s  %11s  %4u  %9s  %14s  "),
+        Process->ID, Process->UserName, Process->BasePriority, Cpu, Memory, Process->ThreadCount, Io, Age);
+    if(ProcessSortType == SORT_BY_TREE) {
+        DWORD Depth = min(Process->TreeDepth, (DWORD)max(0, Width / 3));
+        for(DWORD i = 0; i < Depth; ++i) CharsWritten += ConPrintf(_T("|  "));
+    }
+    CharsWritten += ConPrintf(_T("%s"), Process->ExeName);
+    if(InteractiveMode && CharsWritten < Width) ConPrintf(_T("%*c"), Width - CharsWritten, _T(' '));
 }
 
 static ULONGLONG KeyPressStart = 0;
@@ -1193,6 +1179,7 @@ typedef enum scroll_type {
 
 static void DoScroll(scroll_type ScrollType, BOOL *Redraw)
 {
+    if(!ProcessCount) return;
 	ULONGLONG Now = GetTickCount64();
 	FollowProcess = FALSE;
 
@@ -1256,7 +1243,7 @@ static void DoScroll(scroll_type ScrollType, BOOL *Redraw)
 				if(SelectedProcessIndex > ProcessCount - 1)
 					SelectedProcessIndex = ProcessCount - 1;
 				if(SelectedProcessIndex - ProcessIndex >= VisibleProcessCount) {
-					ProcessIndex = min(ProcessCount - VisibleProcessCount, SelectedProcessIndex);
+					ProcessIndex = min(ProcessCount > VisibleProcessCount ? ProcessCount - VisibleProcessCount : 0, SelectedProcessIndex);
 					*Redraw = TRUE;
 				}
 			}
@@ -1270,95 +1257,45 @@ static void DoScroll(scroll_type ScrollType, BOOL *Redraw)
 	}
 }
 
-static void PrintVersion(void)
+static const char HelpText[] =
+    "Wtop " WTOP_VERSION_STRING " - NTop-derived Windows terminal process monitor\n"
+    "Usage: wtop [--tui | --snapshot | --gui] [options]\n"
+    "  --tui                 Interactive TUI (default; requires console input/output)\n"
+    "  --snapshot, --dump, -d One read-only snapshot; exits after two observations\n"
+    "  --format text|json    Snapshot or informational output; alone selects snapshot\n"
+    "  --interval MS         Sample/redraw interval: 50..60000 ms (default 1000)\n"
+    "  --help, -h            Help without initializing console or collector\n"
+    "  --version, -v         Version and build profile\n"
+    "  --capabilities        Build capabilities; field availability is runtime-specific\n"
+    "  --gui                 Reserved; native GUI is not implemented\n"
+    "  --config PATH         Read configuration from this explicit UTF-8 path\n"
+    "  --no-config           Ignore configuration files\n"
+    "  -C                    Monochrome TUI\n"
+    "  -p PID,PID            Filter process IDs (maximum 1024)\n"
+    "  -n PART,PART          Case-sensitive name substrings (maximum 10)\n"
+    "  -u USER               Exact account-name filter, case-insensitive\n"
+    "  -s COLUMN             ID USER PRI CPU% MEM THRD I/O AGE PROCESS\n"
+    "                        DISK and TIME remain aliases for I/O and AGE\n"
+    "TUI: arrows/j/k, PgUp/PgDn, g/G; Ctrl+Left/Right sort; M/P sort memory/CPU;\n"
+    "     Space tag, U untag, K terminate tags, I reverse, F follow, / search, n/N;\n"
+    "     q/F10/Ctrl+C quit. Commands: :q :quit :tree :sort :search :kill :exec.\n"
+    "I/O is process read+write I/O, not physical-disk attribution. AGE is wall time.\n"
+    "Cmt is commit use/limit, not page-file residency. ?/JSON null means unavailable.\n"
+    "No service, persistent collector, updater or startup entry is installed.\n";
+
+static int PrintInformation(const wtop_options *Options)
 {
-	ConPrintf(_T("NTop " STRINGIZE_VALUE_OF(NTOP_VER) " - (C) 2019 Gian Sass\n"));
-	ConPrintf(_T("Compiled on " __DATE__ " " __TIME__ "\n"));
-
-#ifdef _UNICODE
-	TCHAR UnicodeEnabled[] = _T("Yes");
-#else
-	TCHAR UnicodeEnabled[] = _T("No");
-#endif
-	ConPrintf(_T("Unicode version: %s\n\n"), UnicodeEnabled);
-}
-
-typedef struct help_entry {
-	TCHAR *Key;
-	TCHAR *Explanation;
-} help_entry;
-
-static void PrintHelpEntries(const TCHAR *Name, int Count, const help_entry *Entries)
-{
-	SetColor(0xE);
-	ConPrintf(_T("%s\n"), Name);
-
-	for(int i = 0; i < Count; i++) {
-		help_entry Entry = Entries[i];
-		SetColor(FOREGROUND_CYAN);
-		ConPrintf(_T("\t%s"), Entry.Key);
-		SetColor(FOREGROUND_WHITE);
-		ConPrintf(_T("\t%s\n"), Entry.Explanation);
-	}
-
-	ConPutc(_T('\n'));
-}
-
-static void PrintHelp(const TCHAR *argv0)
-{
-	ColorOverride = GetConsoleColor();
-	PrintVersion();
-
-	SetColor(0xE);
-	ConPrintf(_T("USAGE\n"));
-
-	SetColor(FOREGROUND_WHITE);
-	ConPrintf(_T("\t%s [OPTIONS]\n\n"), argv0);
-
-	const help_entry Options[] = {
-		{ _T("-C"), _T("Use a monochrome color scheme.") },
-		{ _T("-h"), _T("Display this help info.") },
-		{ _T("-p PID,PID...\n"), _T("\tShow only the given PIDs.") },
-    { _T("-n NamePart,NamePart...\n"), _T("\tShow only processes containing at least one of the name parts.") },
-		{ _T("-s COLUMN\n"), _T("\tSort by this column.") },
-		{ _T("-u USERNAME\n"), _T("\tDisplay only processes of this user.") },
-		{ _T("-d"), _T("Do not run in interactive mode.") },
-		{ _T("-v"), _T("Print version.") },
-	};
-	PrintHelpEntries(_T("OPTIONS"), _countof(Options), Options);
-
-	const help_entry InteractiveCommands[] = {
-		{ _T("Up and Down Arrows, PgUp and PgDown, j and k\n"), _T("\tScroll through the process list.") },
-		{ _T("CTRL + Left and Right Arrows\n"), _T("\tChange the process sort column.") },
-		{ _T("g"), _T("Go to the top of the process list.") },
-		{ _T("G"), _T("Go to the bottom of the process list.") },
-		{ _T("Space"), _T("Tag or untag selected process.") },
-		{ _T("U"), _T("Untag all selected processes.") },
-		{ _T("K"), _T("Kill all tagged processes.") },
-		{ _T("I"), _T("Invert the sort order.") },
-		{ _T("F"), _T("Follow process: if the sort order causes the currently selected\n"
-				"\t\tprocess to move in the list, make the selection bar follow it.\n"
-				"\t\tMoving the cursor manually automatically disables this feature."
-				) },
-		{ _T("n"), _T("Next in search.") },
-		{ _T("N"), _T("Previous in search.") },
-		{ _T("F10, q"), _T("Quit") },
-		{ _T("M"), _T("Sort by memory usage") },
-		{ _T("P"), _T("Sort by processor usage") },
-	};
-	PrintHelpEntries(_T("INTERACTIVE COMMANDS"), _countof(InteractiveCommands), InteractiveCommands);
-
-	const help_entry ViCommands[] = {
-		{ _T(":exec CMD\n"), _T("\tExecutes the given Windows command.") },
-		{ _T(":kill PID(s)\n"), _T("\tKill all given processes.") },
-		{ _T(":q, :quit\n"), _T("\tQuit NTop.") },
-		{ _T("/PATTERN, :search PATTERN\n"), _T("\tDo a search.") },
-		{ _T(":sort COLUMN\n"), _T("\tSort the process list after the given column.") },
-		{ _T(":tree"), _T("View process tree.") },
-	};
-	PrintHelpEntries(_T("VI COMMANDS"), _countof(ViCommands), ViCommands);
-
-	SetColor(ColorOverride);
+    if(Options->action == WTOP_HELP) {
+        if(Options->json) { fputs("{\"schema\":1,\"help\":", stdout); wtop_json_string(stdout, HelpText); puts("}"); }
+        else fputs(HelpText, stdout);
+    } else if(Options->action == WTOP_VERSION) {
+        if(Options->json) printf("{\"schema\":1,\"name\":\"wtop\",\"version\":\"%s\",\"profile\":\"%s\"}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+        else printf("Wtop %s (%s)\nDerived from NTop; Copyright (c) 2019 Gian Sass and Wtop contributors.\nGPL-3.0-only. Historical OS support is not verified.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+    } else {
+        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"tui\":true,\"snapshot\":true,\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_share_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+        else printf("Wtop %s: build capabilities (%s; no runtime probe)\nTUI, text/JSON snapshot, process tree/search/sort and NTop commands.\nMetric access varies by process rights; unavailable fields carry status/null.\nGUI, installers, GPU telemetry and historical OS ports are not implemented.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+    }
+    return fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
 }
 
 int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest)
@@ -1381,13 +1318,13 @@ int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest)
 	} else if(!lstrcmpi(Name, _T("THRD"))) {
 		*Dest = SORT_BY_THREAD_COUNT;
 		return TRUE;
-	} else if(!lstrcmpi(Name, _T("TIME"))) {
+	} else if(!lstrcmpi(Name, _T("TIME")) || !lstrcmpi(Name, _T("AGE"))) {
 		*Dest = SORT_BY_UPTIME;
 		return TRUE;
 	} else if(!lstrcmpi(Name, _T("PROCESS"))) {
 		*Dest = SORT_BY_PROCESS;
 		return TRUE;
-	} else if(!lstrcmpi(Name, _T("DISK"))) {
+	} else if(!lstrcmpi(Name, _T("DISK")) || !lstrcmpi(Name, _T("I/O"))) {
 		*Dest = SORT_BY_DISK_USAGE;
 		return TRUE;
 	}
@@ -1414,7 +1351,7 @@ void SetViMessage(vi_message_type MessageType, TCHAR *Fmt, ...)
 	va_list VaList;
 
 	va_start(VaList, Fmt);
-	_vstprintf_s(ViMessage, DEFAULT_STR_SIZE, Fmt, VaList);
+	_vsntprintf_s(ViMessage, DEFAULT_STR_SIZE, _TRUNCATE, Fmt, VaList);
 	va_end(VaList);
 }
 
@@ -1425,7 +1362,7 @@ static BOOL ViMessageActive(void)
 
 static void WriteVi(void)
 {
-	SetConCursorPos(0, (SHORT)Height-2);
+	SetConCursorPos(0, (SHORT)Height-1);
 
 	if(ViMessageActive()) {
 		switch(CurrentViMessageType) {
@@ -1437,14 +1374,13 @@ static void WriteVi(void)
 			break;
 		}
 
-		int CharsWritten = ConPrintf(_T("\n%s"), ViMessage);
+		int CharsWritten = ConPrintf(_T("%s"), ViMessage);
 
 		for (; CharsWritten < Width + 1; CharsWritten++) {
 			ConPutc(_T(' '));
 		}
 	} else {
 		SetColor(FOREGROUND_WHITE);
-		ConPutc(_T('\n'));
 		WriteBlankLine();
 	}
 }
@@ -1458,23 +1394,40 @@ static void HideViMessage(void)
 void ClearViMessage(void)
 {
 	if(ViMessageActive()) {
-		SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_INPUT | DISABLE_NEWLINE_AUTO_RETURN);
+		SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_OUTPUT);
 		HideViMessage();
-		SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_INPUT | ENABLE_WRAP_AT_EOL_OUTPUT);
+		SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_OUTPUT);
 	}
+}
+
+static int KillIdentity(DWORD Pid, ULONGLONG CreationTime)
+{
+    if(!CreationTime) { SetViMessage(VI_ERROR, _T("Cannot act on PID %lu: creation identity unavailable"), Pid); return 0; }
+    HANDLE Handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
+    if(!Handle) { SetViMessage(VI_ERROR, _T("Cannot open PID %lu: error %lu"), Pid, GetLastError()); return 0; }
+    FILETIME Created, Exited, Kernel, User;
+    int Result = 0;
+    if(!GetProcessTimes(Handle, &Created, &Exited, &Kernel, &User) || FileTimeValue(&Created) != CreationTime)
+        SetViMessage(VI_ERROR, _T("PID %lu changed or its identity cannot be revalidated"), Pid);
+    else if(!TerminateProcess(Handle, 9)) SetViMessage(VI_ERROR, _T("Cannot terminate PID %lu: error %lu"), Pid, GetLastError());
+    else Result = 1;
+    CloseHandle(Handle);
+    return Result;
+}
+
+int KillObservedProcess(DWORD Pid)
+{
+    for(DWORD i = 0; i < ProcessCount; ++i)
+        if(ProcessList[i].ID == Pid) return KillIdentity(Pid, ProcessList[i].CreationTime);
+    SetViMessage(VI_ERROR, _T("PID %lu is not in the observed process set"), Pid);
+    return 0;
 }
 
 static void KillTaggedProcesses(void)
 {
-	for(DWORD i = 0; i < TaggedProcessListCount; ++i) {
-		HANDLE Handle = OpenProcess(PROCESS_TERMINATE, FALSE, TaggedProcessList[i]);
-		if(Handle) {
-			TerminateProcess(Handle, 9);
-			CloseHandle(Handle);
-		}
-	}
-
-	TaggedProcessListCount = 0;
+    for(DWORD i = 0; i < TaggedProcessListCount; ++i)
+        KillIdentity(TaggedProcessList[i].ID, TaggedProcessList[i].CreationTime);
+    TaggedProcessListCount = 0;
 }
 
 static ULONGLONG CaretTicks;
@@ -1488,18 +1441,32 @@ static void ResetCaret(void)
 
 static BOOL CTRLState;
 
+static BOOL SelectionMatchesDisplay(void)
+{
+    if(ProcessCount && !ProcessList[SelectedProcessIndex].CreationTime) {
+        SetViMessage(VI_ERROR, _T("Cannot act on this selection: creation identity is unavailable"));
+        return FALSE;
+    }
+    if(ProcessCount && ProcessList[SelectedProcessIndex].ID == DisplayedProcessID &&
+       ProcessList[SelectedProcessIndex].CreationTime == DisplayedCreationTime) return TRUE;
+    SetViMessage(VI_ERROR, _T("Process selection changed; review the refreshed row before acting"));
+    return FALSE;
+}
+
 static void ProcessInput(BOOL *Redraw)
 {
-	DWORD NumEvents, Num;
+	DWORD NumEvents = 0, Num = 0;
 
-	GetNumberOfConsoleInputEvents(GetStdHandle(STD_INPUT_HANDLE), &NumEvents);
+	if(!GetNumberOfConsoleInputEvents(GetStdHandle(STD_INPUT_HANDLE), &NumEvents)) { RequestShutdown(); return; }
+    NumEvents = min(NumEvents, 128);
 
 	if(NumEvents == 0) {
 		return;
 	}
 
-	INPUT_RECORD *Records = xmalloc(NumEvents * sizeof(*Records));
-	ReadConsoleInput(GetStdHandle(STD_INPUT_HANDLE), Records, NumEvents, &Num);
+	INPUT_RECORD *Records = malloc((size_t)NumEvents * sizeof(*Records));
+    if(!Records) { CollectorError = ERROR_NOT_ENOUGH_MEMORY; RequestShutdown(); return; }
+	if(!ReadConsoleInput(GetStdHandle(STD_INPUT_HANDLE), Records, NumEvents, &Num)) { free(Records); RequestShutdown(); return; }
 
 	for(DWORD i = 0; i < Num; i++) {
 		INPUT_RECORD InputRecord = Records[i];
@@ -1520,7 +1487,7 @@ static void ProcessInput(BOOL *Redraw)
 						DoScroll(SCROLL_PAGE_DOWN, Redraw);
 						break;
 					case VK_SPACE:
-						ToggleTaggedProcess(ProcessList[SelectedProcessIndex].ID);
+						if(SelectionMatchesDisplay()) ToggleTaggedProcess(&ProcessList[SelectedProcessIndex]);
 						RedrawAtCursor = TRUE;
 						OldSelectedProcessIndex = SelectedProcessIndex;
 						DoScroll(SCROLL_DOWN, Redraw);
@@ -1551,9 +1518,10 @@ static void ProcessInput(BOOL *Redraw)
 						}
 						break;
 					case VK_F10:
-						exit(EXIT_SUCCESS);  // Top compatibility
+						RequestShutdown();
+                        break;
 					default:
-						switch(InputRecord.Event.KeyEvent.uChar.AsciiChar) {
+						switch(InputRecord.Event.KeyEvent.uChar.UnicodeChar) {
 						case 'K':
 							KillTaggedProcesses();
 							break;
@@ -1563,8 +1531,8 @@ static void ProcessInput(BOOL *Redraw)
 							*Redraw = TRUE;
 							break;
 						case 'G':
-							SelectedProcessIndex = ProcessCount - 1;
-							ProcessIndex = SelectedProcessIndex - VisibleProcessCount + 1; 
+							SelectedProcessIndex = ProcessCount ? ProcessCount - 1 : 0;
+                            ProcessIndex = ProcessCount > VisibleProcessCount ? ProcessCount - VisibleProcessCount : 0;
 							ClearViMessage();
 							*Redraw = TRUE;
 							break;
@@ -1580,8 +1548,10 @@ static void ProcessInput(BOOL *Redraw)
 							*Redraw = TRUE;
 							break;
 						case 'F':
+                            if(!SelectionMatchesDisplay()) { *Redraw = TRUE; break; }
 							FollowProcess = TRUE;
-							FollowProcessID = ProcessList[SelectedProcessIndex].ID;
+							FollowProcessID = ProcessCount ? ProcessList[SelectedProcessIndex].ID : 0;
+                            FollowCreationTime = ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
 							break;
 						case 'U':
 							TaggedProcessListCount = 0;
@@ -1621,7 +1591,7 @@ static void ProcessInput(BOOL *Redraw)
 							*Redraw = TRUE;
 							break;
 						case 'q':
-							exit(EXIT_SUCCESS);
+							RequestShutdown();
 						}
 						break;
 					}
@@ -1643,359 +1613,310 @@ static void ProcessInput(BOOL *Redraw)
 	free(Records);
 }
 
+static BOOL ApplyOptions(const wtop_options *Options)
+{
+    if(Options->sort_column) {
+        TCHAR *Value = FromUtf8(Options->sort_column);
+        BOOL Ok = Value && GetProcessSortTypeFromName(Value, &ProcessSortType);
+        free(Value);
+        if(!Ok) { fputs("wtop: invalid sort column\n", stderr); return FALSE; }
+    }
+    if(Options->user_filter) {
+        TCHAR *Value = FromUtf8(Options->user_filter);
+        if(!Value || _tcslen(Value) >= _countof(FilterUserName)) { free(Value); return FALSE; }
+        _tcscpy_s(FilterUserName, _countof(FilterUserName), Value);
+        free(Value); FilterByUserName = TRUE;
+    }
+    if(Options->pid_filter) {
+        const char *Cursor = Options->pid_filter;
+        while(*Cursor) {
+            const char *Comma = strchr(Cursor, ',');
+            size_t Length = Comma ? (size_t)(Comma - Cursor) : strlen(Cursor);
+            char Token[32];
+            unsigned long Pid;
+            if(!Length || Length >= sizeof(Token) || PidFilterCount == _countof(PidFilterList)) return FALSE;
+            memcpy(Token, Cursor, Length); Token[Length] = 0;
+            if(!wtop_parse_unsigned(Token, 1, 4294967295UL, 10, &Pid)) return FALSE;
+            PidFilterList[PidFilterCount++] = (DWORD)Pid;
+            if(!Comma) break;
+            Cursor = Comma + 1;
+            if(!*Cursor) return FALSE;
+        }
+        FilterByPID = TRUE;
+    }
+    if(Options->name_filter) {
+        TCHAR *Value = FromUtf8(Options->name_filter);
+        if(!Value) return FALSE;
+        TCHAR *Cursor = Value;
+        while(*Cursor) {
+            TCHAR *Comma = _tcschr(Cursor, _T(','));
+            size_t Length = Comma ? (size_t)(Comma - Cursor) : _tcslen(Cursor);
+            if(!Length || Length > MAX_NAMEPARTSIZE || NameFilterCount == MAX_NAMEPARTS) { free(Value); return FALSE; }
+            _tcsncpy_s(NameFilterList[NameFilterCount++], MAX_NAMEPARTSIZE + 1, Cursor, Length);
+            if(!Comma) break;
+            Cursor = Comma + 1;
+            if(!*Cursor) { free(Value); return FALSE; }
+        }
+        free(Value); FilterByName = TRUE;
+    }
+    return TRUE;
+}
+
+static BOOL JsonTString(const TCHAR *Text)
+{
+    char *Utf8 = ToUtf8(Text);
+    if(!Utf8) return FALSE;
+    BOOL Ok = wtop_json_string(stdout, Utf8);
+    free(Utf8);
+    return Ok;
+}
+
+static void JsonMetricDouble(const char *Name, metric_state State, double Value)
+{
+    printf(",\"%s\":{\"status\":\"%s\",\"value\":", Name, MetricStateName(State));
+    if(State == METRIC_OK) printf("%.6f", Value); else fputs("null", stdout);
+    fputc('}', stdout);
+}
+
+static void JsonMetricInteger(const char *Name, metric_state State, ULONGLONG Value)
+{
+    printf(",\"%s\":{\"status\":\"%s\",\"value\":", Name, MetricStateName(State));
+    if(State == METRIC_OK) printf("\"%llu\"", (unsigned long long)Value); else fputs("null", stdout);
+    fputc('}', stdout);
+}
+
+static int WriteSnapshot(BOOL Json)
+{
+    if(Json) {
+        printf("{\"schema\":1,\"version\":\"%s\",\"profile\":\"%s\",\"sample_elapsed_ms\":%llu,"
+               "\"cpu_normalization\":\"share-of-GetSystemTimes-aggregate; processor-group limits apply\","
+               "\"io_scope\":\"process read+write I/O; not physical-disk attribution\",\"processes\":[",
+               WTOP_VERSION_STRING, WTOP_BUILD_PROFILE, (unsigned long long)LastSampleElapsed);
+        for(DWORD i = 0; i < ProcessCount; ++i) {
+            const process *Process = &ProcessList[i];
+            if(i) fputc(',', stdout);
+            printf("{\"pid\":%lu,\"parent_pid\":%lu,\"threads\":%lu,\"base_priority\":%lu,\"name\":",
+                   Process->ID, Process->ParentPID, Process->ThreadCount, Process->BasePriority);
+            if(!JsonTString(Process->ExeName)) return 1;
+            fputs(",\"creation_filetime\":", stdout);
+            if(Process->CreationTime) printf("\"%llu\"", (unsigned long long)Process->CreationTime); else fputs("null", stdout);
+            printf(",\"owner\":{\"status\":\"%s\",\"value\":", MetricStateName(Process->OwnerState));
+            if(Process->OwnerState == METRIC_OK) { if(!JsonTString(Process->UserName)) return 1; }
+            else fputs("null", stdout);
+            fputc('}', stdout);
+            JsonMetricDouble("cpu_share_percent", Process->CpuState, Process->PercentProcessorTime);
+            JsonMetricInteger("working_set_bytes", Process->MemoryState, Process->UsedMemory);
+            JsonMetricDouble("io_read_write_bytes_per_second", Process->IoState, Process->DiskUsage);
+            JsonMetricInteger("age_ms", Process->AgeState, Process->UpTime);
+            fputc('}', stdout);
+        }
+        puts("]}");
+    } else {
+        printf("Wtop %s - one snapshot (%llu ms measured)\n", WTOP_VERSION_STRING, (unsigned long long)LastSampleElapsed);
+        puts("CPU% is aggregate CPU share; I/O is read+write process I/O; AGE is elapsed wall time.");
+        puts("PID\tOWNER\tCPU%\tWORKING_SET_BYTES\tIO_BYTES/S\tAGE_MS\tNAME");
+        for(DWORD i = 0; i < ProcessCount; ++i) {
+            const process *Process = &ProcessList[i];
+            char *Name = ToUtf8(Process->ExeName), *Owner = ToUtf8(Process->UserName);
+            if(!Name || !Owner) { free(Name); free(Owner); return 1; }
+            printf("%lu\t%s\t", Process->ID, Process->OwnerState == METRIC_OK ? Owner : MetricStateName(Process->OwnerState));
+            if(Process->CpuState == METRIC_OK) printf("%.2f", Process->PercentProcessorTime); else fputs(MetricStateName(Process->CpuState), stdout);
+            fputc('\t', stdout);
+            if(Process->MemoryState == METRIC_OK) printf("%llu", (unsigned long long)Process->UsedMemory); else fputs(MetricStateName(Process->MemoryState), stdout);
+            fputc('\t', stdout);
+            if(Process->IoState == METRIC_OK) printf("%.2f", Process->DiskUsage); else fputs(MetricStateName(Process->IoState), stdout);
+            fputc('\t', stdout);
+            if(Process->AgeState == METRIC_OK) printf("%llu", (unsigned long long)Process->UpTime); else fputs(MetricStateName(Process->AgeState), stdout);
+            printf("\t%s\n", Name);
+            free(Name); free(Owner);
+        }
+    }
+    return fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
+}
+
+static void ClearRow(int Row)
+{
+    COORD Position = { 0, (SHORT)Row };
+    DWORD Written;
+    FillConsoleOutputCharacter(ConsoleHandle, _T(' '), (DWORD)Width, Position, &Written);
+    FillConsoleOutputAttribute(ConsoleHandle, Config.FGColor, (DWORD)Width, Position, &Written);
+    SetConCursorPos(0, (SHORT)Row);
+}
+
+static void DrawFrame(void)
+{
+    if(Width < 40 || Height < 10) {
+        ClearRow(0);
+        ConPrintf(_T("Resize to at least 40x10; q quits."));
+        VisibleProcessCount = 0;
+        DisplayedProcessID = 0; DisplayedCreationTime = 0;
+        return;
+    }
+    ClearRow(0);
+    SetColor(Config.FGColor | Config.MenuBarColor);
+    ConPrintf(_T("Wtop %hs on %s"), WTOP_VERSION_STRING, ComputerName);
+    ClearRow(1);
+    DrawPercentageBar(_T("CPU"), CPUUsageKnown ? CPUUsage : -1, Config.CPUBarColor);
+    ConPrintf(_T("  Tasks: %lu  Active: %lu"), ProcessCount, RunningProcessCount);
+    ClearRow(2);
+    DrawPercentageBar(_T("Mem"), SystemMemoryKnown ? UsedMemoryPerc : -1, Config.MemoryBarColor);
+    if(SystemMemoryKnown) ConPrintf(_T("  %llu/%llu MiB"), UsedMemory, TotalMemory);
+    ClearRow(3);
+    DrawPercentageBar(_T("Cmt"), SystemMemoryKnown ? UsedPageMemoryPerc : -1, Config.PageMemoryBarColor);
+    TCHAR Age[32];
+    FormatTimeString(Age, _countof(Age), UpTime);
+    ConPrintf(_T("  Up: %s"), Age);
+    ClearRow(4);
+    ConPrintf(_T("%s (%lu processors in current native system view)"), CPUName, CPUCoreCount);
+    ClearRow(5);
+    const process_list_column Columns[] = {
+        { _T("ID"), 7 }, { _T("USER"), 9 }, { _T("PRI"), 3 },
+        { _T("CPU%"), 5 }, { _T("MEM"), 11 }, { _T("THRD"), 4 },
+        { _T("I/O"), 9 }, { _T("AGE"), 14 }, { _T("PROCESS"), 7 }
+    };
+    DrawProcessListHeader(Columns, _countof(Columns));
+    ProcessWindowHeight = (DWORD)(Height - ProcessWindowPosY);
+    VisibleProcessCount = ProcessWindowHeight - 2;
+    ReadjustCursor();
+    DisplayedProcessID = ProcessCount ? ProcessList[SelectedProcessIndex].ID : 0;
+    DisplayedCreationTime = ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
+    for(DWORD i = 0; i < VisibleProcessCount; ++i) {
+        ClearRow(ProcessWindowPosY + (int)i);
+        DWORD Index = ProcessIndex + i;
+        if(Index < ProcessCount) WriteProcessInfo(&ProcessList[Index], Index == SelectedProcessIndex);
+    }
+    ClearRow(Height - 2);
+    ConPrintf(_T("q Quit  / Search  : Commands  Space Tag  K Kill  I Reverse"));
+    ClearRow(Height - 1);
+    if(InInputMode) ConPrintf(_T("%s_"), CurrentInputStr);
+    else if(ViMessageActive()) WriteVi();
+}
+
 int _tmain(int argc, TCHAR *argv[])
 {
-	BOOL Monochrome = FALSE;
-
-	/* Only set this temporarily for command-line processing */
-	ConsoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-
-	for(int i = 1; i < argc; i++) {
-		if(argv[i][0] == _T('-') && _tcslen(argv[i]) == 2) {
-			switch(argv[i][1]) {
-			case _T('C'):
-				Monochrome = TRUE;
-				break;
-			case _T('h'):
-				PrintHelp(argv[0]);
-				return EXIT_SUCCESS;
-			case _T('s'):
-				if(++i < argc) {
-					if(!GetProcessSortTypeFromName(argv[i], &ProcessSortType)) {
-						ConPrintf(_T("Unknown column: '%s'\n"), argv[i]);
-						return EXIT_FAILURE;
-					}
-				}
-				break;
-			case _T('u'):
-				if(++i < argc) {
-					FilterByUserName = TRUE;
-					_tcscpy_s(FilterUserName, UNLEN, argv[i]);
-				}
-				break;
-			case _T('d'):
-				InteractiveMode = FALSE;
-				break;	
-			case _T('v'):
-				PrintVersion();
-				return EXIT_SUCCESS;
-			case _T('p'):
-				if(++i < argc) {
-					const TCHAR *Delim = _T(",");
-					TCHAR *Context;
-					TCHAR *Token = _tcstok_s(argv[i], Delim, &Context);
-					while(Token) {
-						PidFilterList[PidFilterCount++] = (DWORD)_tstoi(Token);
-						Token = _tcstok_s(0, Delim, &Context);
-					}
-
-					if(PidFilterCount != 0) {
-						FilterByPID = TRUE;
-					}
-				}
-				break;
-      case _T('n'):
-          if(++i < argc) {
-            const TCHAR *Delim = _T(",");
-            TCHAR *Context;
-            TCHAR *Token = _tcstok_s(argv[i], Delim, &Context);
-            while(Token && NameFilterCount < MAX_NAMEPARTS) {
-              _tcsncpy_s(NameFilterList[NameFilterCount++], MAX_NAMEPARTSIZE+1, Token, MAX_NAMEPARTSIZE);
-              Token = _tcstok_s(0, Delim, &Context);
-            }
-
-            if (NameFilterCount != 0) {
-              FilterByName = TRUE;
-            }
-          }
-          break;
-
-			default:
-				ConPrintf(_T("Unknown option: '%c'"), argv[i][1]);
-				return EXIT_FAILURE;
-			}
-		}
-	}
-
-	InitializeCriticalSection(&SyncLock);
-	SetConsoleCtrlHandler(CtrlHandler, TRUE);
-	
-	if (InteractiveMode) {
-		OldConsoleHandle = ConsoleHandle;
-		ConsoleHandle = CreateConsoleScreenBuffer(GENERIC_READ|GENERIC_WRITE,
-							FILE_SHARE_READ|FILE_SHARE_WRITE,
-							0,
-							CONSOLE_TEXTMODE_BUFFER,
-							0);
-
-		if(ConsoleHandle == INVALID_HANDLE_VALUE) {
-			Die(_T("Could not create console screen buffer: %ld\n"), GetLastError());
-		}
-
-		if(!SetConsoleActiveScreenBuffer(ConsoleHandle)) {
-			Die(_T("Could not set active console screen buffer: %ld\n"), GetLastError());
-		}
-
-		SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_INPUT|ENABLE_WRAP_AT_EOL_OUTPUT);
-
-		atexit(RestoreConsole);
-	}
-
-	if(Monochrome) {
-		Config = MonochromeConfig;
-	} else {
-		ReadConfigFile();
-	}
-
-	ProcessList = xmalloc(ProcessListSize * sizeof *ProcessList);
-	NewProcessList = xmalloc(ProcessListSize * sizeof *ProcessList);
-	TaggedProcessList = xmalloc(TaggedProcessListSize * sizeof *TaggedProcessList);
-
-
-	ViMessage = xcalloc(DEFAULT_STR_SIZE, 1);
-	ViInit();
-
-	PollConsoleInfo();
-	PollInitialSystemInfo();
-	PollSystemInfo();
-	PollProcessList(50);
-
-	TCHAR MenuBar[256] = { 0 };
-	wsprintf(MenuBar, _T("NTop on %s"), ComputerName);
-
-	ProcessListThread = CreateThread(0, 0, PollProcessListThreadProc, 0, 0, 0);
-
-	ULONGLONG StartTicks = GetTickCount64();
-
-	while(1) {
-#if _DEBUG
-		ULONGLONG T1 = GetTickCount64();
-#endif
-		if (InteractiveMode) {
-			SetConCursorPos(0, 0);
-			SetColor(Config.FGColor | Config.MenuBarColor);
-
-			int MenuBarOffsetX = Width / 2 - (int)_tcslen(MenuBar) / 2;
-			for(int i = 0; i < MenuBarOffsetX; i++) {
-				ConPutc(_T(' '));
-			}
-
-			ConPrintf(_T("%s"), MenuBar);
-
-			for(int i = 0; i < Width - MenuBarOffsetX - (int)_tcslen(MenuBar); i++) {
-				ConPutc(_T(' '));
-			}
-
-			SetColor(Config.FGColor);
-			WriteBlankLine();
-
-			/* CPU */
-			int CharsWritten = 0;
-
-			CharsWritten += DrawPercentageBar(_T("CPU"), CPUUsage, Config.CPUBarColor);
-
-			int CPUInfoChars = 0;
-
-			TCHAR CPUNameBuf[] = _T("  Name: ");
-
-			CPUInfoChars += (int)_tcslen(CPUNameBuf);
-			TCHAR CPUInfoBuf[256];
-			CPUInfoChars += wsprintf(CPUInfoBuf, _T("%s (%u Cores)"), CPUName, CPUCoreCount);
-
-			int TaskInfoChars = 0;
-
-			TCHAR TasksNameBuf[] = _T("  Tasks: ");
-
-			TaskInfoChars += (int)_tcsclen(TasksNameBuf);
-			TCHAR TasksInfoBuf[256];
-			TaskInfoChars += wsprintf(TasksInfoBuf, _T("%u total, %u running"), ProcessCount, RunningProcessCount);
-
-			if(CharsWritten + CPUInfoChars + TaskInfoChars < Width) {
-				SetColor(Config.FGHighlightColor);
-				ConPrintf(_T("%s"), CPUNameBuf);
-				SetColor(Config.FGColor);
-				ConPrintf(_T("%s"), CPUInfoBuf);
-				CharsWritten += CPUInfoChars;
-			}
-
-			SetColor(Config.FGHighlightColor);
-			ConPrintf(_T("%s"), TasksNameBuf);
-			SetColor(Config.FGColor);
-			ConPrintf(_T("%s"), TasksInfoBuf);
-			CharsWritten += TaskInfoChars;
-
-			for(; CharsWritten < Width; CharsWritten++) {
-				ConPutc(_T(' '));
-			}
-
-			/* Memory */
-			CharsWritten = DrawPercentageBar(_T("Mem"), UsedMemoryPerc, Config.MemoryBarColor);
-
-			SetColor(Config.FGHighlightColor);
-			CharsWritten += ConPrintf(_T("  Size: "));
-			SetColor(Config.FGColor);
-			CharsWritten += ConPrintf(_T("%d GB"), (int)TotalMemory/1000);
-
-			for(; CharsWritten < Width; CharsWritten++) {
-				ConPutc(_T(' '));
-			}
-
-			CharsWritten = DrawPercentageBar(_T("Pge"), UsedPageMemoryPerc, Config.PageMemoryBarColor);
-
-			SetColor(Config.FGHighlightColor);
-			CharsWritten += ConPrintf(_T("  Uptime: "));
-
-			TCHAR Buffer[TIME_STR_SIZE];
-			FormatTimeString(Buffer, TIME_STR_SIZE, UpTime);
-			SetColor(Config.FGColor);
-			CharsWritten +=	ConPrintf(_T("%s"), Buffer);
-			SetColor(Config.FGColor);
-
-			for(; CharsWritten < Width; CharsWritten++) {
-				ConPutc(_T(' '));
-			}
-
-			WriteBlankLine();
-
-			ProcessWindowHeight = Height - ProcessWindowPosY;
-			VisibleProcessCount = ProcessWindowHeight - 2;
-
-			const process_list_column ProcessListColumns[] = {
-				{ _T("ID"),	7 },
-				{ _T("USER"),	9 },
-				{ _T("PRI"),	3 },
-				{ _T("CPU%"),	5 },
-				{ _T("MEM"),	11 },
-				{ _T("THRD"),	4 },
-				{ _T("DISK"),	9 },
-				{ _T("TIME"),	TIME_STR_SIZE - 1 },
-				{ _T("PROCESS"),	-1 },
-			};
-
-			DrawProcessListHeader(ProcessListColumns, _countof(ProcessListColumns));
-
-			CharsWritten = 0;
-
-			EnterCriticalSection(&SyncLock);
-			DWORD Count = 0;
-			for(DWORD i = 0; i < VisibleProcessCount; i++) {
-				DWORD PID = i+ProcessIndex;
-				if(PID < ProcessCount) {
-					const process *Process = &ProcessList[PID];
-					SetConCursorPos(0, (SHORT)(i + ProcessWindowPosY));
-					WriteProcessInfo(Process, PID == SelectedProcessIndex);
-					Count++;
-				}
-			}
-			LeaveCriticalSection(&SyncLock);
-		
-			SetColor(0);
-			for(DWORD i = Count; i < VisibleProcessCount - 1; i++) {
-				WriteBlankLine();
-			}
-		
-			SetConCursorPos(0, (SHORT)Height-2);
-			SetColor(FOREGROUND_WHITE);
-		
-			/* Disable auto newline here. This allows us to fill the last row entirely
-			* without scrolling the screen buffer accidentally which is really annoying. */
-			SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_INPUT|DISABLE_NEWLINE_AUTO_RETURN);
-			if (InInputMode) {
-				CharsWritten = ConPrintf(_T("\n%s"), CurrentInputStr);
-				if (CaretState) {
-					ConPutc(_T('_'));
-					++CharsWritten;
-				}
-
-				for(; CharsWritten < Width; CharsWritten++) {
-					ConPutc(_T(' '));
-				}
-			} else if(ViMessageActive()) {
-				WriteVi();
-			} else {
-				ConPrintf(_T("\n%*c"), Width - 1, _T(' '));
-			}
-			SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_INPUT|ENABLE_WRAP_AT_EOL_OUTPUT);
-		}
-		else {
-			ConPrintf(_T("     ID       USER  PRI   CPU%%          MEM  THRD       DISK         TIME  PROCESS"));
-			EnterCriticalSection(&SyncLock);
-			for(DWORD i = 0; i < ProcessCount; i++) {
-				const process *Process = &ProcessList[i];
-				WriteProcessInfo(Process, FALSE);
-			}
-			ConPrintf(_T("\n"));
-			LeaveCriticalSection(&SyncLock);
-			exit(EXIT_SUCCESS);
-		}
-
-#ifdef _DEBUG
-		ULONGLONG T2 = GetTickCount64();
-
-		ULONG Diff = (ULONG)(T2 - T1);
-
-		TCHAR DebugBuffer[256];
-		wsprintf(DebugBuffer, _T("Drawing took: %lu ms\n"), Diff);
-		OutputDebugString(DebugBuffer);
-#endif
-
-		/*
-		 * Input loop. Breaks after REDRAW_INTERVAL ms or if forced.
-		 */
-
-		while(1) {
-			/*
-			 * Whether or not to redraw the selected process
-			 * (and the process at OldSelectedProcessIndex).
-			 *
-			 * This allows us not having to redraw the whole buffer
-			 * at each scroll.
-			 */
-			RedrawAtCursor = FALSE;
-			BOOL Redraw = FALSE;
-
-			ProcessInput(&Redraw);
-
-			if(Redraw) {
-				break;
-			}
-
-			if(RedrawAtCursor) {
-				SetConCursorPos(0, (SHORT)(ProcessWindowPosY + SelectedProcessIndex - ProcessIndex));
-				WriteProcessInfo(&ProcessList[SelectedProcessIndex], TRUE);
-
-				if(OldSelectedProcessIndex != SelectedProcessIndex) {
-					SetConCursorPos(0, (SHORT)(ProcessWindowPosY + OldSelectedProcessIndex - ProcessIndex));
-					WriteProcessInfo(&ProcessList[OldSelectedProcessIndex], FALSE);
-				}
-			}
-
-			if(PollConsoleInfo()) {
-				break;
-			}
-
-			ULONGLONG Now = GetTickCount64();
-
-			if(Now - StartTicks >= Config.RedrawInterval) {
-				PollSystemInfo();
-				StartTicks = Now;
-				break;
-			}
-
-            /* FIXME: ignore redrawing the caret for now because we can't do it without redrawing the entire screen yet. */
-
-            /*
-			if(Now - CaretTicks >= CARET_INTERVAL) {
-				CaretTicks = Now;
-				CaretState = !CaretState;
-				break;
-			}
-            */
-
-			Sleep(INPUT_LOOP_DELAY);
-		}
-	}
-
-	WaitForSingleObject(ProcessListThread, INFINITE);
-	return EXIT_SUCCESS;
+    int Result = 0;
+    BOOL Initialized = FALSE, HandlerRegistered = FALSE, ScreenCreated = FALSE;
+    BOOL InputModeChanged = FALSE;
+    DWORD OriginalInputMode = 0;
+    char **Utf8Argv = calloc((size_t)argc, sizeof(*Utf8Argv));
+    if(!Utf8Argv) return 1;
+    for(int i = 0; i < argc; ++i) {
+        Utf8Argv[i] = ToUtf8(argv[i]);
+        if(!Utf8Argv[i]) { Result = 1; goto Finish; }
+    }
+    wtop_options Options;
+    const char *Error;
+    if(!wtop_parse_options(argc, (const char *const *)Utf8Argv, &Options, &Error)) {
+        fprintf(stderr, "wtop: %s; use --help\n", Error);
+        Result = 2; goto Finish;
+    }
+    if(Options.action != WTOP_RUN) { Result = PrintInformation(&Options); goto Finish; }
+    if(Options.mode == WTOP_GUI) {
+        fputs("wtop: --gui is reserved; native GUI is not implemented. Use --tui or --snapshot.\n", stderr);
+        Result = 2; goto Finish;
+    }
+    if(!ApplyOptions(&Options)) { fputs("wtop: invalid or excessive filter value\n", stderr); Result = 2; goto Finish; }
+    if(!Options.no_config && !ReadConfigFile(Options.config_path)) {
+        fputs("wtop: cannot read configuration or configuration is invalid\n", stderr);
+        Result = 2; goto Finish;
+    }
+    if(Options.monochrome) {
+        ULONGLONG Interval = Config.RedrawInterval;
+        Config = MonochromeConfig;
+        Config.RedrawInterval = Interval;
+    }
+    if(Options.interval_set) Config.RedrawInterval = Options.interval_ms;
+    InteractiveMode = Options.mode == WTOP_TUI;
+    ConsoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if(InteractiveMode) {
+        DWORD OutputMode;
+        if(!GetConsoleMode(ConsoleHandle, &OutputMode) ||
+           !GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &OriginalInputMode)) {
+            fputs("wtop: TUI requires console input and output; use --snapshot --format text|json when redirected.\n", stderr);
+            Result = 2; goto Finish;
+        }
+    }
+    InitializeCriticalSection(&SyncLock);
+    Initialized = TRUE;
+    ShutdownEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    CleanupDoneEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if(!ShutdownEvent || !CleanupDoneEvent) { Result = 1; goto Cleanup; }
+    if(!SetConsoleCtrlHandler(CtrlHandler, TRUE)) { Result = 1; goto Cleanup; }
+    HandlerRegistered = TRUE;
+    ProcessList = calloc(ProcessListSize, sizeof(*ProcessList));
+    TaggedProcessList = calloc(TaggedProcessListSize, sizeof(*TaggedProcessList));
+    ViMessage = calloc(DEFAULT_STR_SIZE, sizeof(*ViMessage));
+    if(!ProcessList || !TaggedProcessList || !ViMessage || !ViInit()) { Result = 1; goto Cleanup; }
+    PollInitialSystemInfo();
+    PollSystemInfo();
+    if(!PollProcessList(InteractiveMode ? 50 : (DWORD)Config.RedrawInterval)) {
+        Result = CollectorError ? 1 : 130;
+        goto Cleanup;
+    }
+    if(!InteractiveMode) { Result = WriteSnapshot(Options.json); goto Cleanup; }
+    if(InteractiveMode) {
+        OldConsoleHandle = ConsoleHandle;
+        ConsoleHandle = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
+        if(ConsoleHandle == INVALID_HANDLE_VALUE) { Result = 1; goto Cleanup; }
+        ScreenCreated = TRUE;
+        if(!SetConsoleActiveScreenBuffer(ConsoleHandle)) { Result = 1; goto Cleanup; }
+        SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_OUTPUT);
+        InputModeChanged = SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE),
+            (OriginalInputMode | ENABLE_PROCESSED_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT) & ~ENABLE_QUICK_EDIT_MODE);
+        PollConsoleInfo();
+    }
+    ProcessListThread = CreateThread(NULL, 0, PollProcessListThreadProc, NULL, 0, NULL);
+    if(!ProcessListThread) { Result = 1; goto Cleanup; }
+    ULONGLONG LastDraw = 0;
+    BOOL Redraw = TRUE;
+    while(!ShouldStop()) {
+        EnterCriticalSection(&SyncLock);
+        ProcessInput(&Redraw);
+        if(PollConsoleInfo()) Redraw = TRUE;
+        ULONGLONG Now = GetTickCount64();
+        if(Redraw || RedrawAtCursor || Now - LastDraw >= Config.RedrawInterval) {
+            PollSystemInfo();
+            DrawFrame();
+            LastDraw = Now;
+            Redraw = RedrawAtCursor = FALSE;
+        }
+        LeaveCriticalSection(&SyncLock);
+        WaitForSingleObject(ShutdownEvent, INPUT_LOOP_DELAY);
+    }
+Cleanup:
+    RequestShutdown();
+    /* Restore caller-owned console state even if a native query cannot finish. */
+    if(ScreenCreated) { RestoreConsole(); CloseHandle(ConsoleHandle); ConsoleHandle = OldConsoleHandle; }
+    if(InputModeChanged) SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), OriginalInputMode);
+    if(ProcessListThread) {
+        if(WaitForSingleObject(ProcessListThread, SHUTDOWN_GRACE_MS) != WAIT_OBJECT_0) {
+            /* Only this read-only monitor is terminated. Never free shared state
+               while its worker is still running, and never TerminateThread. */
+            const TCHAR *Message = _T("wtop: collector did not stop within 3000 ms; forcing monitor shutdown (exit 124).\n");
+            OutputDebugString(Message);
+            DWORD ErrorMode;
+            if(GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &ErrorMode))
+                WriteTText(GetStdHandle(STD_ERROR_HANDLE), Message, _tcslen(Message));
+            TerminateProcess(GetCurrentProcess(), EXIT_FORCED_SHUTDOWN);
+            /* GetCurrentProcess supplies a full-access pseudo-handle. */
+            ExitProcess(EXIT_FORCED_SHUTDOWN);
+        }
+        CloseHandle(ProcessListThread);
+        ProcessListThread = NULL;
+    }
+    ViDestroy();
+    free(ViMessage); ViMessage = NULL;
+    free(ProcessList); ProcessList = NULL;
+    free(TaggedProcessList); TaggedProcessList = NULL;
+    if(Initialized) DeleteCriticalSection(&SyncLock);
+    if(CleanupDoneEvent) SetEvent(CleanupDoneEvent);
+    if(HandlerRegistered) SetConsoleCtrlHandler(CtrlHandler, FALSE);
+    /* The two callback rendezvous handles have process lifetime: a control
+       callback may still be returning after unregistration. Exit closes them. */
+    if(CollectorError) { fprintf(stderr, "wtop: collector failed (Win32 error %lu)\n", CollectorError); Result = 1; }
+Finish:
+    for(int i = 0; i < argc; ++i) free(Utf8Argv[i]);
+    free(Utf8Argv);
+    return Result;
 }

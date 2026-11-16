@@ -1,0 +1,16 @@
+/* Generated from VERSION; do not edit. */
+#ifndef WTOP_VERSION_H
+#define WTOP_VERSION_H
+#define WTOP_VERSION_STRING "@WTOP_VERSION@"
+/* Keep these IDs aligned with spec/catalog/targets.json. Native behavior tests
+   independently read the produced PE Machine field to verify the mapping. */
+#if defined(_M_ARM64) || defined(__aarch64__) || defined(__arm64__)
+#define WTOP_BUILD_PROFILE "win-nt-arm64"
+#elif defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__)
+#define WTOP_BUILD_PROFILE "win-nt-x64"
+#elif defined(_M_IX86) || defined(__i386__)
+#define WTOP_BUILD_PROFILE "win-nt-x86"
+#else
+#error Unsupported architecture for the current Wtop native build profiles
+#endif
+#endif

@@ -1,22 +1,9 @@
 @echo off
-
-call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\vcvars32.bat"
-
-IF NOT EXIST build mkdir build
-pushd build
-
-IF "%NTOP_VERSION%"=="" SET NTOP_VERSION=dev
-
-IF "%~1"=="-release" (
-	REM Release build
-    echo Release build
-	cl /DNTOP_VER="%NTOP_VERSION%" -W4 /GA /MT /O2 ..\ntop.c ..\util.c ..\vi.c Advapi32.lib User32.lib
-) else (
-    REM Debug build
-    echo Debug build
-    cl /DNTOP_VER=%NTOP_VERSION% -W4 /GA /MT /Z7 ..\ntop.c ..\util.c ..\vi.c Advapi32.lib User32.lib
-)
-
-echo Built version %NTOP_VERSION%!
-
-popd
+setlocal
+rem Run from a Visual Studio developer command prompt with CMake on PATH.
+set WTOP_BUILD_TYPE=Debug
+if "%~1"=="-release" set WTOP_BUILD_TYPE=Release
+cmake -S "%~dp0" -B "%~dp0build" || exit /b 1
+cmake --build "%~dp0build" --config %WTOP_BUILD_TYPE% || exit /b 1
+ctest --test-dir "%~dp0build" -C %WTOP_BUILD_TYPE% --output-on-failure
+exit /b %ERRORLEVEL%

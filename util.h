@@ -19,6 +19,8 @@
 #define UTIL_H
 
 #include <tchar.h>
+#include <windows.h>
+#include <stddef.h>
 
 #ifdef _MSC_VER
 	#define NORETURN __declspec(noreturn)
@@ -32,6 +34,9 @@ NORETURN void Die(TCHAR *Fmt, ...);
 void *xmalloc(size_t size);
 void *xrealloc(void *ptr, size_t size);
 void *xcalloc(size_t num, size_t size);
+int WriteTText(HANDLE output, const TCHAR *text, size_t characters);
+char *ToUtf8(const TCHAR *text);
+TCHAR *FromUtf8(const char *text);
 
 #ifdef UNICODE
 	/*
@@ -47,7 +52,11 @@ void *xcalloc(size_t num, size_t size);
  * Use these zero-extending functions to defend against stdlib undefined behavior
  * specified by the is*-family of ctype functions
  */
-#define IntFromTChar(t) ((int)(unsigned int)t)
-#define IntFromChar(c) ((int)(unsigned int)c)
+#ifdef UNICODE
+#define IntFromTChar(t) ((int)(unsigned short)(t))
+#else
+#define IntFromTChar(t) ((int)(unsigned char)(t))
+#endif
+#define IntFromChar(c) ((int)(unsigned char)(c))
 
 #endif

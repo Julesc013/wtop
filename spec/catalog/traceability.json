@@ -1,0 +1,321 @@
+{
+  "$schema": "../schemas/catalogs.schema.json#/$defs/traceability",
+  "schema": "wtop.traceability/1",
+  "requirements": [
+    {
+      "id": "WT-REQ-001-01",
+      "concept": "WT-001",
+      "acceptance": [
+        "WT-AC-001-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-001-02",
+      "concept": "WT-001",
+      "acceptance": [
+        "WT-AC-001-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-001-03",
+      "concept": "WT-001",
+      "acceptance": [
+        "WT-AC-001-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-002-01",
+      "concept": "WT-002",
+      "acceptance": [
+        "WT-AC-002-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-002-02",
+      "concept": "WT-002",
+      "acceptance": [
+        "WT-AC-002-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-002-03",
+      "concept": "WT-002",
+      "acceptance": [
+        "WT-AC-002-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-010-01",
+      "concept": "WT-010",
+      "acceptance": [
+        "WT-AC-010-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-010-02",
+      "concept": "WT-010",
+      "acceptance": [
+        "WT-AC-010-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-010-03",
+      "concept": "WT-010",
+      "acceptance": [
+        "WT-AC-010-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-011-01",
+      "concept": "WT-011",
+      "acceptance": [
+        "WT-AC-011-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-011-02",
+      "concept": "WT-011",
+      "acceptance": [
+        "WT-AC-011-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-011-03",
+      "concept": "WT-011",
+      "acceptance": [
+        "WT-AC-011-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-011-04",
+      "concept": "WT-011",
+      "acceptance": [
+        "WT-AC-011-04"
+      ]
+    },
+    {
+      "id": "WT-REQ-012-01",
+      "concept": "WT-012",
+      "acceptance": [
+        "WT-AC-012-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-012-02",
+      "concept": "WT-012",
+      "acceptance": [
+        "WT-AC-012-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-012-03",
+      "concept": "WT-012",
+      "acceptance": [
+        "WT-AC-012-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-020-01",
+      "concept": "WT-020",
+      "acceptance": [
+        "WT-AC-020-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-020-02",
+      "concept": "WT-020",
+      "acceptance": [
+        "WT-AC-020-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-020-03",
+      "concept": "WT-020",
+      "acceptance": [
+        "WT-AC-020-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-030-01",
+      "concept": "WT-030",
+      "acceptance": [
+        "WT-AC-030-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-030-02",
+      "concept": "WT-030",
+      "acceptance": [
+        "WT-AC-030-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-030-03",
+      "concept": "WT-030",
+      "acceptance": [
+        "WT-AC-030-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-031-01",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-031-02",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-031-03",
+      "concept": "WT-031",
+      "acceptance": [
+        "WT-AC-031-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-040-01",
+      "concept": "WT-040",
+      "acceptance": [
+        "WT-AC-040-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-040-02",
+      "concept": "WT-040",
+      "acceptance": [
+        "WT-AC-040-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-040-03",
+      "concept": "WT-040",
+      "acceptance": [
+        "WT-AC-040-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-050-01",
+      "concept": "WT-050",
+      "acceptance": [
+        "WT-AC-050-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-050-02",
+      "concept": "WT-050",
+      "acceptance": [
+        "WT-AC-050-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-050-03",
+      "concept": "WT-050",
+      "acceptance": [
+        "WT-AC-050-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-060-01",
+      "concept": "WT-060",
+      "acceptance": [
+        "WT-AC-060-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-060-02",
+      "concept": "WT-060",
+      "acceptance": [
+        "WT-AC-060-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-060-03",
+      "concept": "WT-060",
+      "acceptance": [
+        "WT-AC-060-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-061-01",
+      "concept": "WT-061",
+      "acceptance": [
+        "WT-AC-061-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-061-02",
+      "concept": "WT-061",
+      "acceptance": [
+        "WT-AC-061-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-061-03",
+      "concept": "WT-061",
+      "acceptance": [
+        "WT-AC-061-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-062-01",
+      "concept": "WT-062",
+      "acceptance": [
+        "WT-AC-062-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-062-02",
+      "concept": "WT-062",
+      "acceptance": [
+        "WT-AC-062-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-062-03",
+      "concept": "WT-062",
+      "acceptance": [
+        "WT-AC-062-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-063-01",
+      "concept": "WT-063",
+      "acceptance": [
+        "WT-AC-063-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-063-02",
+      "concept": "WT-063",
+      "acceptance": [
+        "WT-AC-063-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-070-01",
+      "concept": "WT-070",
+      "acceptance": [
+        "WT-AC-070-01"
+      ]
+    },
+    {
+      "id": "WT-REQ-070-02",
+      "concept": "WT-070",
+      "acceptance": [
+        "WT-AC-070-02"
+      ]
+    },
+    {
+      "id": "WT-REQ-080-01",
+      "concept": "WT-080",
+      "acceptance": [
+        "WT-AC-080-01"
+      ]
+    }
+  ]
+}

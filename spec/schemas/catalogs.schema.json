@@ -1,0 +1,850 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:wtop:schema:catalogs:1",
+  "title": "Wtop canonical catalog definitions",
+  "$comment": "The stdlib validator implements the exact asserted vocabulary used here and rejects unknown assertion keywords; it is not a general JSON Schema engine.",
+  "$defs": {
+    "sources": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.sources/1"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "resource": {
+                "type": "string",
+                "minLength": 1
+              },
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "observed_at": {
+                "type": "string",
+                "minLength": 1,
+                "format": "date-time"
+              },
+              "scope": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "resource",
+              "revision",
+              "observed_at",
+              "scope"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "sources"
+      ],
+      "additionalProperties": false
+    },
+    "traceability": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.traceability/1"
+        },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-REQ-[A-Z0-9][A-Z0-9-]*$"
+              },
+              "concept": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-[A-Z0-9][A-Z0-9-]*$"
+              },
+              "acceptance": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-AC-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "id",
+              "concept",
+              "acceptance"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "requirements"
+      ],
+      "additionalProperties": false
+    },
+    "acceptance": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.acceptance/1"
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-AC-[A-Z0-9][A-Z0-9-]*$"
+              },
+              "requirements": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-REQ-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "structural",
+                  "fixture",
+                  "build",
+                  "native",
+                  "artifact",
+                  "review"
+                ]
+              },
+              "oracle": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_run",
+                  "passed",
+                  "failed",
+                  "inconclusive",
+                  "blocked"
+                ]
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-EV-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "id",
+              "requirements",
+              "method",
+              "oracle",
+              "status",
+              "evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "cases"
+      ],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.evidence/1"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-EV-[A-Z0-9][A-Z0-9-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "structural",
+                  "fixture",
+                  "build",
+                  "native",
+                  "artifact",
+                  "review"
+                ]
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "failed",
+                  "inconclusive",
+                  "blocked"
+                ]
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_revision": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[0-9a-f]{40}$"
+              },
+              "environment": {
+                "type": "string",
+                "minLength": 1
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "started_at": {
+                "type": "string",
+                "minLength": 1,
+                "format": "date-time"
+              },
+              "ended_at": {
+                "type": "string",
+                "minLength": 1,
+                "format": "date-time"
+              },
+              "exit_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "sha256"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 10000
+              },
+              "log": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "sha256"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 0,
+                "maxItems": 10000
+              },
+              "acceptance": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-AC-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "limitations": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 10000
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^WT-TGT-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "uniqueItems": true,
+                "maxItems": 10000
+              },
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^WT-CMD-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "uniqueItems": true,
+                "maxItems": 10000
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "result",
+              "subject",
+              "source_revision",
+              "environment",
+              "command",
+              "started_at",
+              "ended_at",
+              "exit_code",
+              "inputs",
+              "log",
+              "artifacts",
+              "acceptance",
+              "limitations",
+              "targets",
+              "commands"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "records"
+      ],
+      "additionalProperties": false
+    },
+    "targets": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.targets/1"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-TGT-[A-Z0-9][A-Z0-9-]*$"
+              },
+              "profile": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1
+              },
+              "architecture": {
+                "type": "string",
+                "minLength": 1
+              },
+              "os_scope": {
+                "type": "string",
+                "minLength": 1
+              },
+              "presentation": {
+                "type": "string",
+                "minLength": 1
+              },
+              "qualification": {
+                "type": "string",
+                "enum": [
+                  "unqualified",
+                  "runtime_tested",
+                  "qualified",
+                  "policy_blocked"
+                ]
+              },
+              "artifact_status": {
+                "type": "string",
+                "enum": [
+                  "planned",
+                  "candidate",
+                  "buildable",
+                  "binary_audited",
+                  "released"
+                ]
+              },
+              "constraints": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-EV-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "id",
+              "profile",
+              "format",
+              "architecture",
+              "os_scope",
+              "presentation",
+              "qualification",
+              "artifact_status",
+              "constraints",
+              "evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "targets"
+      ],
+      "additionalProperties": false
+    },
+    "commands": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.commands/1"
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-CMD-[A-Z0-9][A-Z0-9-]*$"
+              },
+              "tokens": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "interactive",
+                  "snapshot",
+                  "information",
+                  "modifier",
+                  "selector",
+                  "reserved",
+                  "planned"
+                ]
+              },
+              "arguments": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "candidate",
+                  "inherited_unqualified",
+                  "implemented",
+                  "unavailable",
+                  "planned"
+                ]
+              },
+              "behavior": {
+                "type": "string",
+                "minLength": 1
+              },
+              "acceptance": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-AC-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-EV-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "default": {},
+              "minimum": {
+                "type": "integer"
+              },
+              "maximum": {
+                "type": "integer"
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "id",
+              "tokens",
+              "mode",
+              "arguments",
+              "status",
+              "behavior",
+              "acceptance",
+              "evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "commands"
+      ],
+      "additionalProperties": false
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.metrics/1"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "warming_up",
+              "unsupported",
+              "denied",
+              "stale",
+              "reset",
+              "error",
+              "capacity"
+            ]
+          },
+          "minItems": 8,
+          "maxItems": 10000,
+          "uniqueItems": true
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_.]*$"
+              },
+              "unit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "definition": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "candidate",
+                  "planned",
+                  "implemented"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "unit",
+              "definition",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "states",
+        "metrics"
+      ],
+      "additionalProperties": false
+    },
+    "work": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "const": "wtop.work/1"
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^WT-W[A-Z0-9][A-Z0-9-]*$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "planned",
+                  "active",
+                  "completed",
+                  "blocked",
+                  "deferred"
+                ]
+              },
+              "dependencies": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-W[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "context": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "allowed_paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "deliverables": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 10000
+              },
+              "acceptance": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-AC-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 1,
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^WT-EV-[A-Z0-9][A-Z0-9-]*$"
+                },
+                "minItems": 0,
+                "maxItems": 10000,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "status",
+              "dependencies",
+              "context",
+              "allowed_paths",
+              "deliverables",
+              "acceptance",
+              "evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "$schema",
+        "schema",
+        "units"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

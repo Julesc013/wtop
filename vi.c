@@ -21,6 +21,8 @@
 #include <conio.h>
 #include <stdio.h>
 #include <windows.h>
+#include <stdlib.h>
+#include <errno.h>
 
 TCHAR *CurrentInputStr;
 int InInputMode = 0;
@@ -39,16 +41,21 @@ typedef struct cmd {
 
 static TCHAR *History[256];
 static DWORD HistoryCount;
-static DWORD HistoryBufSize;
 static DWORD HistoryIndex;
 
 static void PushToHistory(TCHAR *Str)
 {
-	int Length = (int)_tcsclen(Str);
-	History[HistoryCount] = xmalloc(sizeof **History * (Length + 1));
+	if(HistoryCount == _countof(History)) {
+        free(History[0]);
+        memmove(History, History + 1, (_countof(History) - 1) * sizeof(*History));
+        --HistoryCount;
+    }
+    int Length = (int)_tcsclen(Str);
+	History[HistoryCount] = malloc(sizeof **History * (Length + 1));
+    if(!History[HistoryCount]) { SetViMessage(VI_ERROR, _T("History entry omitted: out of memory")); HistoryIndex = HistoryCount; return; }
 	_tcscpy_s(History[HistoryCount], Length+1, Str);
 	HistoryCount++;
-	HistoryIndex++;
+	HistoryIndex = HistoryCount;
 }
 
 static void HistoryPrevious(TCHAR **Str)
@@ -67,40 +74,19 @@ static void HistoryNext(TCHAR **Str)
 
 COMMAND_FUNC(kill)
 {
-	if(Argc == 0) {
-		SetViMessage(VI_ERROR, _T("Usage: kill PID(s)"));
-		return 1;
-	}
-
-	for(DWORD i = 0; i < Argc; i++) {
-		DWORD Pid = _tcstoul(Argv[i], 0, 10);
-
-		/*
-		 * strtoul returns 0 when conversion failed and we cannot kill pid 0 anyway
-		 */
-		if(Pid == 0) {
-			SetViMessage(VI_ERROR, _T("Not a valid pid: %s"), Argv[i]);
-			continue;
-		}
-
-		HANDLE Handle = OpenProcess(PROCESS_TERMINATE, FALSE, Pid);
-		if(!Handle) {
-			SetViMessage(VI_ERROR, _T("Could not open process: %ld: 0x%08x"), Pid, GetLastError());
-			continue;
-		}
-
-		if(!TerminateProcess(Handle, 9)) {
-			SetViMessage(VI_ERROR, _T("Failed to kill process: %ld: 0x%08x"), Pid, GetLastError());
-			CloseHandle(Handle);
-			return 1;
-		}
-
-		CloseHandle(Handle);
-	}
-
-	return 0;
+    if(!Argc) { SetViMessage(VI_ERROR, _T("Usage: kill PID(s)")); return 1; }
+    int Result = 0;
+    for(DWORD i = 0; i < Argc; ++i) {
+        TCHAR *End;
+        errno = 0;
+        unsigned long Pid = _tcstoul(Argv[i], &End, 10);
+        if(!Argv[i][0] || Argv[i][0] == _T('-') || Argv[i][0] == _T('+') || !Pid || *End || errno == ERANGE) {
+            SetViMessage(VI_ERROR, _T("Not a valid PID: %s"), Argv[i]); Result = 1; continue;
+        }
+        if(!KillObservedProcess((DWORD)Pid)) Result = 1;
+    }
+    return Result;
 }
-
 
 COMMAND_FUNC(tree)
 {
@@ -124,15 +110,12 @@ COMMAND_FUNC(exec)
 	}
 
 	TCHAR CommandLine[4096] = { 0 };
-
-	for(DWORD i = 0; i < Argc; ++i) {
-		_tcscat_s(CommandLine, _countof(CommandLine), Argv[i]);
-
-		if(i != Argc - 1) {
-			DWORD Length = (DWORD)_tcslen(CommandLine);
-			CommandLine[Length] = _T(' ');
-		}
-	}
+    /* TryExec passes the original native command line as one argument. */
+    if(Argc != 1 || _tcslen(Argv[0]) >= _countof(CommandLine)) {
+        SetViMessage(VI_ERROR, _T("Invalid or excessive command line"));
+        return 1;
+    }
+    _tcscpy_s(CommandLine, _countof(CommandLine), Argv[0]);
 
 	STARTUPINFO StartupInfo;
 	PROCESS_INFORMATION ProcInfo;
@@ -147,7 +130,9 @@ COMMAND_FUNC(exec)
 		return 1;
 	}
 
-	return 1;
+	CloseHandle(ProcInfo.hThread);
+    CloseHandle(ProcInfo.hProcess);
+    return 0;
 }
 
 COMMAND_FUNC(q)
@@ -155,7 +140,8 @@ COMMAND_FUNC(q)
 	UNREFERENCED_PARAMETER(Argc);
 	UNREFERENCED_PARAMETER(Argv);
 
-	exit(EXIT_SUCCESS);
+	RequestShutdown();
+    return 0;
 }
 COMMAND_ALIAS(quit, q);
 
@@ -207,17 +193,15 @@ typedef struct cmd_parse_result {
 	TCHAR **Args;
 } cmd_parse_result;
 
-static void PushArg(cmd_parse_result *ParseResult)
+static BOOL PushArg(cmd_parse_result *ParseResult)
 {
-	++ParseResult->Argc;
-
-	if(ParseResult->Args == 0) {
-		ParseResult->Args = xmalloc(1 * sizeof *ParseResult->Args);
-	} else {
-		ParseResult->Args = xrealloc(ParseResult->Args, ParseResult->Argc * sizeof *ParseResult->Args);
-	}
-
-	ParseResult->Args[ParseResult->Argc-1] = xcalloc(DEFAULT_STR_SIZE, sizeof(TCHAR));
+    TCHAR **Args = realloc(ParseResult->Args, (size_t)(ParseResult->Argc + 1) * sizeof(*Args));
+    if(!Args) return FALSE;
+    ParseResult->Args = Args;
+    Args[ParseResult->Argc] = calloc(DEFAULT_STR_SIZE, sizeof(TCHAR));
+    if(!Args[ParseResult->Argc]) return FALSE;
+    ++ParseResult->Argc;
+    return TRUE;
 }
 
 static void FreeCmdParseResult(cmd_parse_result *ParseResult)
@@ -237,110 +221,53 @@ static TCHAR *EatSpaces(TCHAR *Str)
 	return Str;
 }
 
-static BOOL IsValidCharacter(TCHAR c)
-{
-	return (_istalnum(IntFromTChar(c)) || c == _T('%')) || c == _T('/') || c == _T('.');
-}
-
+/* Bounded command parsing. Every loop consumes input or returns an error. */
 static BOOL ParseCommand(TCHAR *Str, cmd_parse_result *Result)
 {
-	Result->Argc = 0;
-	Result->Args = 0;
-
-	Result->Name = xmalloc(DEFAULT_STR_SIZE * sizeof *Result->Name);
-
-	Str = EatSpaces(Str);
-
-	int i = 0;
-
-	/*
-	 * TODO: should allow for commands to contain digits but not start with them
-	 */
-	while(_istalpha(IntFromTChar(*Str))) {
-		Result->Name[i++] = *Str++;
-	}
-
-	Result->Name[i] = _T('\0');
-
-	/*
-	 * Do error when we stopped on an non-alphanumeric character and not on a
-	 * terminator or space
-	 */
-	if(*Str != _T('\0') && !_istspace(IntFromTChar(*Str))) {
-		/* parse error */
-		free(Result->Name);
-		return FALSE;
-	}
-
-	int InQuotes = FALSE;
-
-	if(*Str != _T('\0')) {
-		i = 0;
-
-		/*
-		 * Read arguments
-		 */
-		while(*Str != _T('\0')) {
-			Str = EatSpaces(Str);
-
-			if(*Str == _T('\0')) {
-				break;
-			}
-
-			if(*Str == _T('\"')) {
-				InQuotes = TRUE;
-				Str++;
-			}
-
-			PushArg(Result);
-
-			int j = 0;
-			if(InQuotes) {
-				/*
-				 * When inside quotes read tokens and spaces inbetween
-				 * until we hit a closing quote or terminator
-				 */
-				do {
-					while(_istspace(IntFromTChar(*Str)) || IsValidCharacter(*Str)) {
-						Result->Args[i][j++] = *Str++;
-					}
-
-					if(*Str == _T('\"')) {
-						++Str;
-						InQuotes = FALSE;
-						break;
-					}
-				} while(*Str != _T('\0'));
-			} else {
-				/*
-				 * When not inside quotes then only read single token
-				 */
-				while(IsValidCharacter(*Str)) {
-					Result->Args[i][j++] = *Str++;
-				}
-			}
-
-			Result->Args[i][j] = _T('\0');
-			++i;
-
-			/*
-			 * Do error and clean up if either the string wasn't closed
-			 * or if we hit a non-alphanumeric character or non space
-			 */
-			if(InQuotes || (*Str != _T('\0') && !_istspace(IntFromTChar(*Str)))) {
-				/* parse error */
-				FreeCmdParseResult(Result);
-				return FALSE;
-			}
-		}
-	}
-
-	return TRUE;
+    memset(Result, 0, sizeof(*Result));
+    Result->Name = calloc(DEFAULT_STR_SIZE, sizeof(*Result->Name));
+    if(!Result->Name) return FALSE;
+    Str = EatSpaces(Str);
+    size_t Length = 0;
+    while(_istalpha(IntFromTChar(*Str))) {
+        if(Length + 1 >= DEFAULT_STR_SIZE) goto Error;
+        Result->Name[Length++] = *Str++;
+    }
+    if(!Length || (*Str && !_istspace(IntFromTChar(*Str)))) goto Error;
+    while(*(Str = EatSpaces(Str))) {
+        if(Result->Argc >= 128) goto Error;
+        if(!PushArg(Result)) goto Error;
+        TCHAR *Arg = Result->Args[Result->Argc - 1];
+        BOOL Quoted = *Str == _T('"');
+        if(Quoted) ++Str;
+        Length = 0;
+        while(*Str && (Quoted ? *Str != _T('"') : !_istspace(IntFromTChar(*Str)))) {
+            if(Length + 1 >= DEFAULT_STR_SIZE || (!Quoted && *Str == _T('"'))) goto Error;
+            Arg[Length++] = *Str++;
+        }
+        Arg[Length] = 0;
+        if(Quoted) {
+            if(*Str != _T('"')) goto Error;
+            ++Str;
+            if(*Str && !_istspace(IntFromTChar(*Str))) goto Error;
+        }
+    }
+    return TRUE;
+Error:
+    FreeCmdParseResult(Result);
+    return FALSE;
 }
 
 static void TryExec(TCHAR *Str)
 {
-	cmd_parse_result ParseResult;
+    cmd_parse_result ParseResult;
+    /* Preserve Windows executable/argument quoting for the inherited :exec command. */
+    if(!_tcsnicmp(Str, _T("exec"), 4) && _istspace(IntFromTChar(Str[4]))) {
+        TCHAR *Raw = EatSpaces(Str + 4);
+        if(!*Raw) SetViMessage(VI_ERROR, _T("Usage: exec COMMAND"));
+        else exec_func(1, &Raw);
+        return;
+    }
 
 	/* Search has an alias */
 	if(Str[0] == _T('/')) {
@@ -369,9 +296,19 @@ static void TryExec(TCHAR *Str)
 	FreeCmdParseResult(&ParseResult);
 }
 
-void ViInit(void)
+int ViInit(void)
 {
-	CurrentInputStr = xcalloc(DEFAULT_STR_SIZE, sizeof *CurrentInputStr);
+    CurrentInputStr = calloc(DEFAULT_STR_SIZE, sizeof *CurrentInputStr);
+    return CurrentInputStr != NULL;
+}
+
+void ViDestroy(void)
+{
+    free(CurrentInputStr);
+    CurrentInputStr = NULL;
+    for(DWORD i = 0; i < HistoryCount; ++i) { free(History[i]); History[i] = NULL; }
+    HistoryCount = HistoryIndex = InputIndex = 0;
+    InInputMode = 0;
 }
 
 void ViEnableInput(TCHAR InitialKey)
@@ -402,7 +339,7 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
 		}
 		break;
 	case VK_DOWN:
-		if(HistoryIndex < HistoryCount-1) {
+		if(HistoryCount && HistoryIndex < HistoryCount - 1) {
 			HistoryNext(&CurrentInputStr);
 			return 1;
 		} 
@@ -423,8 +360,9 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
 		ViExecInput();
 		return 1;
 	default:
-		if(isprint(IntFromChar(KeyEvent->uChar.AsciiChar))) {
-			CurrentInputStr[InputIndex++] = TCharFromAscii(KeyEvent->uChar.AsciiChar);
+		if(_istprint(IntFromTChar(KeyEvent->uChar.UnicodeChar)) && InputIndex + 1 < DEFAULT_STR_SIZE) {
+			CurrentInputStr[InputIndex++] = KeyEvent->uChar.UnicodeChar;
+            CurrentInputStr[InputIndex] = 0;
 			return 1;
 		}
 	}
