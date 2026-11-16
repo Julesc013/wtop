@@ -96,7 +96,8 @@ References: WT-AC-031-01 through WT-AC-031-07 in
 - [ ] Define concurrent-edit behavior for multiple instances and external editors;
   a byte comparison before replacement is not an atomic compare-and-swap.
 - [ ] Test paths with spaces/non-ASCII characters, read-only media, denied paths,
-  missing parents, full disks and interrupted replacement.
+  missing parents, full disks and interrupted replacement. Qualify customized
+  file ACL/metadata preservation separately from byte-content preservation.
 - [ ] Implement the later installed/portable path resolver, ownership records,
   user/system precedence and migration without guessing from directory names or
   writability. Keep managed data outside package payload directories.

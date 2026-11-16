@@ -89,7 +89,10 @@ integers, including process creation FILETIME, working-set bytes and age in
 milliseconds, use decimal strings so ordinary JSON consumers retain precision.
 CPU is the process share of the system sampling denominator; the I/O counter is
 process read/write transfer activity, not a claim of physical disk bandwidth.
-Commit is committed memory, not page-file residency. See
+Commit is committed memory, not page-file residency. The TUI keeps decimal byte
+units in compact values such as `1.2GB` and `123MB/s`; elapsed age uses explicit
+units such as `2m05s`, `2h03m` or `2d03h`. Narrow fields must not silently turn a
+clipped number into a different measurement. See
 [metric semantics](spec/architecture/model-metrics.md).
 
 Dedicated `query`, `inspect`, continuous `log`, install/uninstall commands, richer
@@ -158,8 +161,12 @@ Mouse input uses native console reporting when available. Click process rows to
 select, headers to sort, tabs to switch, or function cells to invoke their
 keyboard action. The wheel scrolls. Disabled or unavailable mouse reporting keeps
 keyboard operation usable; Wtop restores the caller's input mode on normal exit.
-Console-host behavior, resize races and visual usability require native acceptance,
-not just portable key-map tests.
+While a text editor is active, other mouse controls are ignored; function keys
+and function-bar actions cancel that editor before changing context. Cancelling
+a live filter restores its prior value. Console-host behavior, resize races and
+visual usability require native acceptance, not just portable key-map tests.
+CJK/combining-character display-cell width remains an open renderer qualification;
+valid UTF-8 settings alone do not establish full Unicode layout support.
 
 ### Color roles
 

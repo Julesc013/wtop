@@ -231,9 +231,11 @@ class Console:
         data = (InputRecord * len(records))(*records)
         count = W.DWORD()
         self.check(self.k.WriteConsoleInputW(self.input, data, len(records), C.byref(count)))
-        assert count.value == len(records)
+        assert count.value == len(records), (
+            f"console accepted {count.value}/{len(records)} records in input mode {self.mode():#x}")
 
-    def key(self, vk, char="\0", modifiers=0):
+    @staticmethod
+    def key_records(vk, char="\0", modifiers=0):
         events = []
         for down in (True, False):
             event = InputRecord()
@@ -244,11 +246,16 @@ class Console:
             event.event.key.char.UnicodeChar = char
             event.event.key.modifiers = modifiers
             events.append(event)
-        self.records(events)
+        return events
+
+    def key(self, vk, char="\0", modifiers=0):
+        self.records(self.key_records(vk, char, modifiers))
 
     def type(self, text):
+        events = []
         for char in text:
-            self.key(ord(char.upper()) if char.isascii() and char.isalpha() else ord(char), char)
+            events.extend(self.key_records(ord(char.upper()) if char.isascii() and char.isalpha() else ord(char), char))
+        self.records(events)
 
     def click(self, x, y):
         frame = self.frame()
@@ -275,8 +282,9 @@ class Console:
         return self.wait(lambda f: "Main" in "\n".join(f["rows"])
                          and "I/O" in "\n".join(f["rows"]), "initial tabs")
 
-    def stop(self):
-        self.key(0x79)  # F10 is a common quit binding in all profiles.
+    def stop(self, send_key=True):
+        if send_key:
+            self.key(0x79)  # F10 is a common quit binding in all profiles.
         assert self.process.wait(timeout=5) == 0
         self.process = None
         assert self.mode() == self.original_mode, "caller console input mode was not restored"
@@ -360,6 +368,7 @@ def worker(exe, output):
             observations["default_frame"] = frame
             assert console.mode() & 0x10, "mouse input was not enabled on this console"
             assert not console.mode() & 0x40, "QuickEdit may freeze interactive input"
+            assert not console.mode() & 0x06, "line/echo modes can intercept TUI control keys"
             observations["checks"].append("default htop function bar and native mouse mode")
 
             console.click(frame["width"] * 15 // 100, frame["height"] - 1)
@@ -477,6 +486,16 @@ def worker(exe, output):
                          "Emacs C-g cancel")
             console.stop()
             observations["checks"].append("Emacs search/cancel and keyboard-only fallback")
+
+            console.start(exe, config, pids, "--keymap", "htop", "--status-bar")
+            console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids),
+                         "owned process targets before queued quit")
+            # One input-buffer write: q must retire the rest of this same batch.
+            # A regression can target only the three processes owned by this test.
+            console.type("qky")
+            console.stop(send_key=False)
+            assert all(p.poll() is None for p in fixtures), "input after quit mutated an owned process"
+            observations["checks"].append("queued actions after quit are discarded before mutation")
         observations["result"] = "passed"
     except BaseException:
         observations["result"] = "failed"

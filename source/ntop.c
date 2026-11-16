@@ -1135,7 +1135,7 @@ static void DrawProcessListHeader(void)
     for(int i = 0; i < RenderedColumnCount; ++i) {
         wtop_ui_column_span *Span = &RenderedColumns[i];
         SetConCursorPos((SHORT)Span->start, (SHORT)ProcessHeaderRow);
-        SetColor((int)ProcessSortType == Span->id ? Settings.colors[WTOP_COLOR_BG_HIGHLIGHT] : Settings.colors[WTOP_COLOR_HEADER]);
+        SetColor((WORD)((int)ProcessSortType == Span->id ? Settings.colors[WTOP_COLOR_BG_HIGHLIGHT] : Settings.colors[WTOP_COLOR_HEADER]));
         TCHAR *Name = FromUtf8(wtop_column_name(Span->id));
         if(Name) { ConPrintf(_T("%-*.*s"), Span->width, Span->width, Name); free(Name); }
     }
@@ -1147,9 +1147,9 @@ static int DrawPercentageBar(TCHAR *Name, double Percentage, WORD Color)
 {
 	int CharsWritten = 0;
 
-	SetColor(Settings.colors[WTOP_COLOR_METER_LABEL]);
+	SetColor((WORD)Settings.colors[WTOP_COLOR_METER_LABEL]);
 	CharsWritten += ConPrintf(_T("  %s"), Name);
-	SetColor(Settings.colors[WTOP_COLOR_FG]);
+	SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
 	ConPutc(_T('['));
 	CharsWritten++;
 
@@ -1161,14 +1161,14 @@ static int DrawPercentageBar(TCHAR *Name, double Percentage, WORD Color)
 		ConPutc(_T('|'));
 	}
 	CharsWritten+= Bars;
-	SetColor(Settings.colors[WTOP_COLOR_FG]);
+	SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
 	for(int i = 0; i < BAR_WIDTH - Bars; i++) {
 		ConPutc(_T(' '));
 	}
 	CharsWritten += BAR_WIDTH - Bars;
-	SetColor(Settings.colors[WTOP_COLOR_FG_HIGHLIGHT]);
+	SetColor((WORD)Settings.colors[WTOP_COLOR_FG_HIGHLIGHT]);
 	CharsWritten += Known ? ConPrintf(_T("%04.1f%%"), 100.0 * Percentage) : ConPrintf(_T("    ?"));
-	SetColor(Settings.colors[WTOP_COLOR_FG]);
+	SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
 	ConPutc(_T(']'));
 	CharsWritten++;
 	return CharsWritten;
@@ -1316,7 +1316,7 @@ static int PrintInformation(const wtop_options *Options)
 int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest)
 {
     char *Utf8 = ToUtf8(Name);
-    int Column;
+    int Column = WTOP_COLUMN_ID;
     BOOL Ok = Utf8 && wtop_parse_column(Utf8, &Column);
     free(Utf8);
     if(Ok) *Dest = (process_sort_type)Column;
@@ -1376,7 +1376,7 @@ static void WriteVi(void)
 			// Default?
 			break;
 		case VI_ERROR:
-			SetColor(Settings.colors[WTOP_COLOR_ERROR]);
+			SetColor((WORD)Settings.colors[WTOP_COLOR_ERROR]);
 			break;
 		}
 
@@ -1482,7 +1482,11 @@ static int MouseWheelRemainder;
 
 static void ConfigureMouse(void)
 {
-    DWORD Mode = (OriginalInputMode | ENABLE_PROCESSED_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT) & ~ENABLE_QUICK_EDIT_MODE;
+    /* ReadConsoleInput needs raw key events. LINE_INPUT intercepts Ctrl+S as
+       console output pause before our Emacs search binding can receive it.
+       Keep processed Ctrl+C handling; cleanup restores the exact caller mode. */
+    DWORD Mode = (OriginalInputMode | ENABLE_PROCESSED_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT) &
+        ~(ENABLE_QUICK_EDIT_MODE | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
     Mode &= ~ENABLE_MOUSE_INPUT;
     MouseEnabled = FALSE;
     if(Settings.mouse != WTOP_MOUSE_OFF && SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), Mode | ENABLE_MOUSE_INPUT)) MouseEnabled = TRUE;
@@ -1837,7 +1841,7 @@ static void ProcessInput(BOOL *Redraw)
     if(!GetNumberOfConsoleInputEvents(Input, &Available)) { RequestShutdown(); return; }
     if(!Available) return;
     if(!ReadConsoleInput(Input, Records, min(Available, (DWORD)_countof(Records)), &Count)) { RequestShutdown(); return; }
-    for(DWORD i = 0; i < Count; ++i) {
+    for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
         if(Records[i].EventType == WINDOW_BUFFER_SIZE_EVENT) { RenderInvalidated = TRUE; *Redraw = TRUE; continue; }
         if(Records[i].EventType == MOUSE_EVENT) { if(PollConsoleInfo()) *Redraw = TRUE; HandleMouse(&Records[i].Event.MouseEvent, Redraw); continue; }
         if(Records[i].EventType != KEY_EVENT || !Records[i].Event.KeyEvent.bKeyDown) continue;
@@ -2320,6 +2324,7 @@ int _tmain(int argc, TCHAR *argv[])
         EnterCriticalSection(&SyncLock);
         if(PollConsoleInfo()) Redraw = TRUE;
         ProcessInput(&Redraw);
+        if(ShouldStop()) { LeaveCriticalSection(&SyncLock); break; }
         ULONGLONG Now = GetTickCount64();
         if(Redraw || RedrawAtCursor || Now - LastDraw >= Settings.interval_ms) {
             PollSystemInfo();

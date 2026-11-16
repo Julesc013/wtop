@@ -83,8 +83,8 @@ The TUI checks for changes to the loaded/saved bytes before replacement and
 refuses a detected external edit. This reduces accidental lost updates but is
 not an atomic cross-process transaction; simultaneous writers remain a
 qualification case. Explicit export to a named destination is the user's
-replacement request. Filesystem durability and interruption behavior still
-require native acceptance.
+replacement request. Filesystem durability, interruption behavior and retention
+of customized file ACLs/metadata still require native acceptance.
 
 The roaming fallback is a user preference location, not evidence that the
 executable was installed. An existing adjacent file remains the compatibility
