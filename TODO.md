@@ -15,6 +15,50 @@ Historical observations
 remain attached to the revision they describe. Unchecked items below are closure
 criteria; some already have candidate code and need evidence rather than rewriting.
 
+## 0. Audited checkpoint and first-release priorities
+
+The [17 November 2026 audit](docs/wtop-release-readiness-2026-11-17.md) reviews
+canonical master `1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`. The first planned
+Wtop release is **0.4.0**; the audited application remains **0.1.0-dev.2**.
+These implementation checkmarks do not close the broader acceptance cases below:
+
+- [x] Default htop controls and colors; selectable vi/vim and Emacs presets.
+- [x] Default-visible, hideable, clickable final-row function bar.
+- [x] Native mouse selection/wheel/header/tab/button handling and keyboard fallback.
+- [x] Ordered/hidden built-in meters and columns, per-tab sorting/filter/tree,
+  up to eight named views and explicit configuration save/export.
+- [x] Source relocation, root TODO/ROADMAP, portable tests and scoped native CI.
+- [x] Audit all 24 named external forks and reachable advertised branches/tags
+  from the wider listing; record adaptation and rejection decisions in the
+  [fork audit](docs/ntop-fork-audit-2026-11-17.md).
+
+Prioritize these source-confirmed gaps and qualification tasks before stable
+promotion; the audit's CUR IDs are finding references, not a second work queue:
+
+- [ ] **WT-W020 / CUR-001/002:** correct system-commit scope and process CPU
+  observation-window/capacity semantics, with independent expected-value fixtures.
+- [ ] **WT-W030/040 / CUR-003/004/010:** retain every bulk target's result, expose
+  sample freshness/stale state, and fault-test stalled work and normal/emergency exit.
+- [ ] **WT-W040 / CUR-005/006/011:** finish contextual hints/live status and qualify
+  Unicode cells/mouse/resize; decide the first-release tab-editing boundary.
+- [ ] **WT-W050 / CUR-007/013:** close file metadata/concurrent-writer behavior
+  and portable/per-user/machine ownership before advertising managed installation.
+- [ ] **WT-W010/035 / CUR-008:** resolve htop `-d` versus inherited dump semantics;
+  freeze long options, aliases and units independently of TUI keymap selection.
+- [ ] **WT-W000/070/130 / CUR-009/012:** reconcile narrow CI evidence with formal
+  cases, measure resource costs and qualify exact supported payloads/channels.
+- [ ] **WT-W020/035:** consider typed system-summary output from x1y9's idea;
+  current snapshots contain process records and metadata, not system totals.
+- [ ] **WT-W035/040/080/110:** adapt command-line/path/service inspection,
+  per-core/provider and legacy-build ideas through current ownership contracts;
+  retain already inherited fixes rather than bulk-merging fork branches.
+
+No runtime source was changed by this audit. All 51 formal acceptance cases
+remain unpromoted; existing checks are real but narrower. Read the proposed
+[0.4.0 closure and 1.0.0 scope](docs/wtop-release-readiness-2026-11-17.md) before
+choosing an implementation slice. Historical targets remain part of the declared
+long-term goal, and the GUI remains deferred.
+
 ## 1. Source, specification and contributor baseline — WT-W000
 
 - [x] Review the complete source move: application C/headers, compatibility config,

@@ -201,6 +201,30 @@
       "revision": "21bbc80c7811149ee33f449748addf23740c7b9f",
       "observed_at": "2026-11-16T12:38:25Z",
       "scope": "Reference foreground/background roles; terminal palette RGB and Windows telemetry semantics remain independent."
+    },
+    {
+      "id": "release-intent-20261117",
+      "title": "User release audit and milestone request",
+      "resource": "urn:wtop:conversation:2026-11-17",
+      "revision": null,
+      "observed_at": "2026-11-17T01:02:17Z",
+      "scope": "Requested audit of current features and NTop forks; first Wtop release 0.4.0 and complete agreed TUI/CLI scope toward 1.0.0. Not release publication authorization or native evidence."
+    },
+    {
+      "id": "wtop-audit-20261117",
+      "title": "Wtop source and release-readiness audit",
+      "resource": "../../docs/wtop-release-readiness-2026-11-17.md",
+      "revision": "1ca153b77e7df203b9f6d1f8cfb2ff472318bc27",
+      "observed_at": "2026-11-17T01:02:17Z",
+      "scope": "Pinned source findings, requested-feature status, narrow host/CI evidence, proposed release closure and retained historical scope. No fixes, native reproduction or release qualification claimed."
+    },
+    {
+      "id": "semver-2",
+      "title": "Semantic Versioning 2.0.0",
+      "resource": "https://semver.org/",
+      "revision": "2.0.0",
+      "observed_at": "2026-11-17T01:02:17Z",
+      "scope": "Version-zero/public-API distinction, prerelease suffix semantics and immutable published versions; not evidence of product completion."
     }
   ]
 }

@@ -16,6 +16,15 @@ does not qualify an operating system. The GUI is deferred; `--gui` reports that
 it is unavailable. This branch publishes no supported release, WinGet package or
 installer. Automated checks and native acceptance are separate evidence.
 
+**Next release target: 0.4.0.** The
+[17 November release audit](docs/wtop-release-readiness-2026-11-17.md) separates
+implemented features from remaining correctness, lifecycle, presentation,
+packaging and native-support gates. It identifies open system-commit/CPU-sampling
+semantics and bulk-result/freshness gaps; current CI does not close those cases.
+The [NTop fork audit](docs/ntop-fork-audit-2026-11-17.md) records useful external
+ideas, already inherited fixes and patches that should not be imported unchanged.
+Neither audit changes the application version or announces a release.
+
 ## Start here
 
 - [TODO](TODO.md): practical closure tasks and remaining risks, linked to work IDs.
@@ -24,6 +33,10 @@ installer. Automated checks and native acceptance are separate evidence.
 - [Platform and binary policy](spec/platform/targets.md).
 - [Build and verification](docs/development.md).
 - [Current native TUI/settings evidence](docs/presentation-verification.md).
+- [0.4.0 / 1.0.0 release readiness](docs/wtop-release-readiness-2026-11-17.md) and
+  [NTop fork source audit](docs/ntop-fork-audit-2026-11-17.md).
+- [Implementation design](docs/implementation-plan-2026-11-17.md): proposed
+  interfaces, reuse boundaries, tests and integration slices for the remaining work.
 - [Distribution, paths and removal](docs/installation.md).
 - [Codex workflow](docs/codex.md), [contribution guide](CONTRIBUTING.md) and
   [repository instructions](AGENTS.md).

@@ -19,6 +19,9 @@ class SpecificationValidationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="wtop-spec-test-")
         self.root = Path(self.temp.name)
         shutil.copytree(REPO / "spec", self.root / "spec")
+        # Specs link to source/evidence explanations outside the bundle. Preserve
+        # those real dependencies so each negative case isolates its own defect.
+        shutil.copytree(REPO / "docs", self.root / "docs")
 
     def tearDown(self):
         self.temp.cleanup()
