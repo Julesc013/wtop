@@ -142,6 +142,50 @@ static void prime_process_creation(void)
     free(command); free(path);
     assert(assigned);
 }
+
+/* Independent primitive probe: no provider, attributes, worker or request
+   protocol. Record every returned handle and close it before taking the final
+   count, so first-use allocations made inside Windows can be distinguished
+   from an endpoint that the application forgot to close. */
+static void probe_pipe_io(int named)
+{
+    HANDLE input, output;
+    DWORD before, opened, written_count, read_count, after, count, flags;
+    char sent = 'p', received = 0;
+    static unsigned sequence;
+    assert(GetProcessHandleCount(GetCurrentProcess(), &before));
+    if(named) {
+        WCHAR name[160];
+        BOOL connected;
+        DWORD error;
+        _snwprintf_s(name, sizeof(name) / sizeof(name[0]), _TRUNCATE,
+            L"\\\\.\\pipe\\wtop-fixture-%lu-%llu-%u", GetCurrentProcessId(), GetTickCount64(), ++sequence);
+        input = CreateNamedPipeW(name, PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1, 128, 128, 0, NULL);
+        assert(input != INVALID_HANDLE_VALUE);
+        connected = ConnectNamedPipe(input, NULL); error = GetLastError();
+        assert(connected || error == ERROR_PIPE_LISTENING);
+        output = CreateFileW(name, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        assert(output != INVALID_HANDLE_VALUE);
+        connected = ConnectNamedPipe(input, NULL); error = GetLastError();
+        assert(connected || error == ERROR_PIPE_CONNECTED);
+    } else assert(CreatePipe(&input, &output, NULL, 128));
+    assert(GetProcessHandleCount(GetCurrentProcess(), &opened));
+    assert(WriteFile(output, &sent, 1, &count, NULL) && count == 1);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &written_count));
+    assert(ReadFile(input, &received, 1, &count, NULL) && count == 1 && received == sent);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &read_count));
+    assert(CloseHandle(output));
+    assert(CloseHandle(input));
+    assert(!GetHandleInformation(input, &flags) && GetLastError() == ERROR_INVALID_HANDLE);
+    assert(!GetHandleInformation(output, &flags) && GetLastError() == ERROR_INVALID_HANDLE);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &after));
+    fprintf(stderr, "native %s pipe primitive: input=%p, output=%p; handles before=%lu, opened=%lu, written=%lu, read=%lu, closed=%lu\n",
+        named ? "named" : "anonymous", (void *)input, (void *)output, before, opened, written_count, read_count, after);
+    fflush(stderr);
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     wtop_provider_session session;
@@ -149,7 +193,7 @@ int wmain(int argc, WCHAR **argv)
     wtop_provider_result *result;
     HANDLE cancel, thread;
     FILETIME created, exited, kernel, user;
-    DWORD cold, diagnostics_ready, before, after, sequence;
+    DWORD cold, diagnostics_ready, before, after, sequence, primitives_ready;
     handle_snapshot *cold_handles, *diagnostic_handles, *baseline_handles;
     int code, i;
     ULONGLONG started;
@@ -172,6 +216,28 @@ int wmain(int argc, WCHAR **argv)
     fprintf(stderr, "native process-creation preflight handles: cold=%lu, diagnostics=%lu, warm=%lu\n", cold, diagnostics_ready, before);
     fflush(stderr);
     baseline_handles = snapshot_handles();
+    probe_pipe_io(0);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &after));
+    diagnostic_handles = snapshot_handles();
+    if(before != after) print_new_handles("anonymous pipe primitive", baseline_handles, diagnostic_handles);
+    free(baseline_handles); baseline_handles = diagnostic_handles; before = after;
+    probe_pipe_io(1);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &primitives_ready));
+    diagnostic_handles = snapshot_handles();
+    if(before != primitives_ready) print_new_handles("named pipe primitive", baseline_handles, diagnostic_handles);
+    free(baseline_handles); baseline_handles = diagnostic_handles;
+    /* The primitive's own repeated lifecycle must also have exact balance. */
+    for(i = 0; i < 5; ++i) {
+        probe_pipe_io(0); probe_pipe_io(1);
+        assert(GetProcessHandleCount(GetCurrentProcess(), &after));
+        if(after != primitives_ready) {
+            diagnostic_handles = snapshot_handles();
+            print_new_handles("repeated pipe primitive", baseline_handles, diagnostic_handles);
+            free(diagnostic_handles);
+        }
+        assert(after == primitives_ready);
+    }
+    before = primitives_ready;
     request_kind(&request, WTOP_PROVIDER_TEST_VALID);
     for(i = 0; i < 5; ++i) {
         assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_VALID);
