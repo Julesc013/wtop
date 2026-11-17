@@ -134,7 +134,7 @@ def public_blockers(manifest: dict, desktop: dict | None, repository: dict) -> l
 
 
 def source_archive(root: Path, revision: str) -> bytes:
-    tar = subprocess.run(['git','-C',str(root),'archive','--format=tar','--prefix=wtop/',revision],
+    tar = subprocess.run(['git','-c','core.autocrlf=false','-c','core.eol=lf','-C',str(root),'archive','--format=tar','--prefix=wtop/',revision],
                          check=True, capture_output=True).stdout
     if len(tar) > MAX_TOTAL:
         raise BetaError('source archive exceeds bound')
@@ -186,10 +186,7 @@ def archive_tree(data: bytes) -> tuple[str, dict[str, bytes]]:
     return digest(tree).hex(), entries
 
 
-def assemble(candidate: Path, receipt_path: Path, junit_path: Path, notes: Path, output: Path,
-             root: Path = ROOT) -> dict:
-    original = verify_candidate(candidate)
-    payload = original['payload']
+def validate_payload(payload: dict) -> None:
     if not VERSION.fullmatch(payload['version']) or payload['profile'] != 'win-nt-x64':
         raise BetaError('public beta assembler accepts only declared x64 beta versions')
     source = payload['source']
@@ -199,6 +196,14 @@ def assemble(candidate: Path, receipt_path: Path, junit_path: Path, notes: Path,
         raise BetaError('exact observed Windows SDK required')
     if not payload['pe']['resources']['present'] or payload['pe']['runtime_dlls']:
         raise BetaError('resource missing or external runtime floor unqualified')
+
+
+def assemble(candidate: Path, receipt_path: Path, junit_path: Path, notes: Path, output: Path,
+             root: Path = ROOT) -> dict:
+    original = verify_candidate(candidate)
+    payload = original['payload']
+    validate_payload(payload)
+    source = payload['source']
     native = load_json(receipt_path)
     validate_native(native, payload)
     tests = native_tests(junit_path)
@@ -235,7 +240,7 @@ def assemble(candidate: Path, receipt_path: Path, junit_path: Path, notes: Path,
               'scope':'x64 portable beta; no MSI, WinGet, ARM64 or historical support'}
     assets['beta-manifest.json']=json_bytes(manifest)
     for name,content in assets.items(): (output/name).write_bytes(content)
-    (output/'SHA256SUMS').write_text(''.join(f'{sha256(value)}  {name}\n' for name,value in sorted(assets.items())),encoding='ascii')
+    (output/'SHA256SUMS').write_bytes(''.join(f'{sha256(value)}  {name}\n' for name,value in sorted(assets.items())).encode('ascii'))
     verify(output)
     return manifest
 
@@ -245,6 +250,7 @@ def verify(directory: Path) -> dict:
     if manifest.get('schema')!='wtop.beta/1' or manifest.get('channel')!='prerelease' or manifest.get('stable_supported') is not False:
         raise BetaError('not a declared beta manifest')
     version=manifest.get('version','');payload=manifest['payload']
+    validate_payload(payload)
     if not VERSION.fullmatch(version) or manifest.get('tag')!='v'+version or payload['version']!=version or payload['profile']!='win-nt-x64':
         raise BetaError('beta version/profile mismatch')
     expected={f'wtop-{version}-win-nt-x64.exe',f'wtop-{version}-win-nt-x64-portable.zip',

@@ -13,7 +13,7 @@ import unittest
 import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
-from beta_release import BetaError, CHECKS, REQUIRED_TESTS, archive_tree, desktop_blockers, load_json, native_tests, public_blockers, validate_native
+from beta_release import BetaError, CHECKS, REQUIRED_TESTS, archive_tree, source_archive, desktop_blockers, load_json, native_tests, public_blockers, validate_native, validate_payload
 from package_candidate import SEMVER
 loader=importlib.util.spec_from_file_location('beta_record_build',ROOT/'packaging/record_build.py')
 record=importlib.util.module_from_spec(loader);loader.loader.exec_module(record)
@@ -92,9 +92,20 @@ class BuildAndSource(unittest.TestCase):
             (root/'wtop.vcxproj').write_text('<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><PropertyGroup><WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion></PropertyGroup></Project>')
             self.assertEqual(record.observed_sdk(root,{}, {})[0],'10.0.26100.0')
             with self.assertRaises(ValueError):record.observed_sdk(root,{'CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION':'10.0.22621.0'}, {})
+    def test_payload_provenance_is_required_on_every_verification(self):
+        good={'version':'0.4.0-beta.1','profile':'win-nt-x64',
+              'source':{'dirty':False,'revision':'a'*40,'tree':'b'*40},
+              'build':{'sdk':'10.0.26100.0'},'pe':{'resources':{'present':True},'runtime_dlls':[]}}
+        validate_payload(good)
+        for field,value in [('sdk','UNVERIFIED'),('revision','main'),('dirty',True),('present',False)]:
+            bad=copy.deepcopy(good)
+            owner=bad['build'] if field=='sdk' else bad['pe']['resources'] if field=='present' else bad['source']
+            owner[field]=value
+            with self.subTest(field=field),self.assertRaises(BetaError):validate_payload(bad)
+
     def test_reconstruct_git_tree_without_extracting(self):
-        data=subprocess.run(['git','-C',str(ROOT),'archive','--format=tar','--prefix=wtop/','HEAD'],capture_output=True,check=True).stdout
-        tree,entries=archive_tree(gzip.compress(data,mtime=0))
+        data=source_archive(ROOT,'HEAD')
+        tree,entries=archive_tree(data)
         expected=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD^{tree}'],capture_output=True,text=True,check=True).stdout.strip()
         self.assertEqual(tree,expected);self.assertIn('LICENSE',entries)
     def test_archive_traversal_and_duplicate_rejected(self):
