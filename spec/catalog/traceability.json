@@ -358,6 +358,34 @@
       "acceptance": [
         "WT-AC-030-04"
       ]
+    },
+    {
+      "id": "WT-REQ-063-03",
+      "concept": "WT-063",
+      "acceptance": [
+        "WT-AC-063-03"
+      ]
+    },
+    {
+      "id": "WT-REQ-063-04",
+      "concept": "WT-063",
+      "acceptance": [
+        "WT-AC-063-04"
+      ]
+    },
+    {
+      "id": "WT-REQ-063-05",
+      "concept": "WT-063",
+      "acceptance": [
+        "WT-AC-063-05"
+      ]
+    },
+    {
+      "id": "WT-REQ-063-06",
+      "concept": "WT-063",
+      "acceptance": [
+        "WT-AC-063-06"
+      ]
     }
   ]
 }

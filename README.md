@@ -1,5 +1,7 @@
 # Wtop
 
+Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+
 Wtop is a native terminal process monitor derived from
 [NTop](https://github.com/gsass1/NTop). It keeps a compact process table and meters,
 with **htop-style controls and colors by default**, optional Vi/Vim and Emacs
@@ -9,7 +11,7 @@ bindings, and explicit command-line output and settings operations.
 the unmodified NTop starting revision. Develop Wtop on short-lived branches from
 `master`; see [branch and upstream policy](docs/development.md#branches-and-upstream).
 
-**Status: development candidate, version 0.4.0-dev.1.** The current application
+**Status: development candidate, version 0.4.0-beta.1 (unpublished candidate).** The current application
 backend is Windows NT. This increment implements the eight-workstream design:
 corrected measurements/actions, sample freshness, contextual TUI and Setup,
 versioned settings ownership, query/inspect/log, bounded optional providers,
@@ -27,6 +29,10 @@ The [earlier release audit](docs/wtop-release-readiness-2026-11-17.md) and
 pinned source revisions. They are not descriptions of this newer implementation.
 
 ## Start here
+
+- [Portable beta notes](docs/beta-release-notes.md), [tester guide](docs/beta-testing.md),
+  [exact packaging](docs/beta-packaging.md), and [draft/publication gates](docs/beta-publication.md).
+- [Privacy-aware issue templates](.github/ISSUE_TEMPLATE/bug.yml) and [security reporting](SECURITY.md).
 
 - [TODO](TODO.md): practical closure tasks and remaining risks, linked to work IDs.
 - [ROADMAP](ROADMAP.md): implementation sequence, dependencies and completion gates.

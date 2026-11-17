@@ -1,0 +1,21 @@
+name: Capability request
+description: Describe a native monitoring or interaction need.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What task is currently difficult?
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system, CPU and terminal
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Proposed capability and measurable outcome
+      description: Include native API evidence when known; distinguish unavailable metrics from zero.

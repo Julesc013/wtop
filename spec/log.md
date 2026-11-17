@@ -1,6 +1,27 @@
 # Wtop specification update log
 
+
+## 2026-11-18
+
+### Public beta six-patch checkpoint
+
+- Defined an explicit x64 portable 0.4.0-beta.1 subset and four additional release
+  requirements/cases. Kept historical/stable installer and full parity goals open.
+- Added metric/action failure vectors, native AGE/memory comparator regressions,
+  actual viewport cases and an interactive ordinary-user Windows 11 receipt tool.
+- Added native version resources, observed SDK provenance, exact source-tree and
+  payload verification, draft staging and independently gated public publication.
+- Added opt-in privacy-aware support reports, issue templates, security guidance,
+  tester/release documentation and fail-closed publication fixtures.
+- No native desktop/human/feedback/support status is inferred from implementation
+  or structural validation. Published availability must be observed on GitHub.
+
 ## 2026-11-17
+
+- Authorized portable public-beta subset: added four narrow release requirements,
+  mapped exact-client/human/feedback/promotion gates, retained the guarded target
+  evidence requirement, and added privacy-aware templates.
+  Existing broad acceptance records remain unpromoted.
 
 - Implemented 0.4.0-dev.1 measurement/actions/text/context policy modules, native
   settings/provider/output adapters, typed schema-2 snapshots, query/inspect/log,

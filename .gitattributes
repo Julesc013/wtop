@@ -1,0 +1,2 @@
+# Keep checkout and corresponding-source bytes identical on every build host.
+* text=auto eol=lf

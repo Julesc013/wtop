@@ -70,5 +70,31 @@ int main(void)
     assert(wtop_sample_freshness(c(0,151),c(0,100),50,&age)==WTOP_METRIC_STALE);
     assert(wtop_sample_freshness(c(0,99),c(0,100),50,&age)==WTOP_METRIC_RESET);
     assert(strcmp(wtop_metric_state_name(WTOP_METRIC_WARMING_UP),"warming_up")==0);
+    /* Failure is transactional even when the first multiplication succeeds. */
+    bytes=c(7,11); limit=c(8,12); ratio=0.25;
+    assert(wtop_commit_bytes(c(0,1),c(4294967295UL,4294967295UL),4096,&bytes,&limit,&ratio)==WTOP_METRIC_CAPACITY);
+    assert(bytes.high==7 && bytes.low==11 && limit.high==8 && limit.low==12); near(ratio,0.25);
+    assert(wtop_commit_bytes(c(0,1),c(0,2),4096,&bytes,&bytes,&ratio)==WTOP_METRIC_ERROR);
+    assert(bytes.high==7 && bytes.low==11); near(ratio,0.25);
+    /* Independent rational vectors: elapsed ms, consumed 100ns units, expected
+       percent. The expected values are literal analytical values, not calls to
+       the production arithmetic repeated in test code. */
+    {
+        static const unsigned long elapsed[] = {1,10,100,250,1000,60000};
+        static const unsigned long ticks[] = {5000,200000,125000,10000000,80000000,600000000};
+        static const double expected[] = {50,200,12.5,400,800,100};
+        unsigned i;
+        for(i=0;i<sizeof(elapsed)/sizeof(elapsed[0]);++i) {
+            a=observation(0,0,17); b=observation(elapsed[i],elapsed[i],17+ticks[i]);
+            assert(wtop_process_cpu(&a,&b,1000,8,&value)==WTOP_METRIC_VALID);
+            near(value.core_percent,expected[i]); near(value.machine_percent,expected[i]/8);
+        }
+    }
+    /* A reversed acquisition bracket and regressing observation clock never
+       become a positive or zero CPU reading. */
+    a=observation(100,120,1); b=observation(290,250,1700001);
+    assert(wtop_process_cpu(&a,&b,1000,4,&value)==WTOP_METRIC_RESET);
+    b=observation(10,20,1700001);
+    assert(wtop_process_cpu(&a,&b,1000,4,&value)==WTOP_METRIC_RESET);
     return 0;
 }

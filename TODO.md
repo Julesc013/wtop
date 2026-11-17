@@ -1,5 +1,7 @@
 # Wtop TODO
 
+Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+
 This is the contributor checklist for the complete currently agreed product scope.
 The [work registry](spec/work/units.json) owns work-unit status; the
 [acceptance registry](spec/catalog/acceptance.json) owns qualification results.
@@ -17,7 +19,7 @@ criteria; some already have candidate code and need evidence rather than rewriti
 
 ## 0. Current implementation and first-release gates
 
-The current application is **0.4.0-dev.1**. The earlier
+The current application is **0.4.0-beta.1 (unpublished candidate)**. The earlier
 [17 November source audit](docs/wtop-release-readiness-2026-11-17.md) describes
 `1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`; the
 [current implementation record](docs/implementation-verification-2026-11-17.md)

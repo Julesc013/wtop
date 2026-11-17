@@ -39,6 +39,7 @@ wtop_metric_state wtop_process_cpu(const wtop_cpu_observation *previous,
 wtop_metric_state wtop_host_cpu(wtop_counter previous_kernel, wtop_counter kernel,
     wtop_counter previous_user, wtop_counter user, wtop_counter previous_idle,
     wtop_counter idle, double *busy_fraction);
+/* Failure preserves every output; output counter objects must be distinct. */
 wtop_metric_state wtop_commit_bytes(wtop_counter pages, wtop_counter limit_pages,
     unsigned long page_size, wtop_counter *bytes, wtop_counter *limit_bytes,
     double *fraction);

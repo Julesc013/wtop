@@ -1,0 +1,30 @@
+/* Generated from VERSION. Numeric fields are Windows file-resource identity,
+   not MSI ordering: beta/dev/rc full strings remain authoritative. */
+#include <winver.h>
+1 VERSIONINFO
+ FILEVERSION @WTOP_VERSION_MAJOR@,@WTOP_VERSION_MINOR@,@WTOP_VERSION_PATCH@,@WTOP_VERSION_BUILD@
+ PRODUCTVERSION @WTOP_VERSION_MAJOR@,@WTOP_VERSION_MINOR@,@WTOP_VERSION_PATCH@,@WTOP_VERSION_BUILD@
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS @WTOP_VERSION_FLAGS@
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904B0"
+  BEGIN
+   VALUE "FileDescription", "Wtop terminal process monitor\0"
+   VALUE "FileVersion", "@WTOP_VERSION@\0"
+   VALUE "InternalName", "wtop\0"
+   VALUE "LegalCopyright", "GPL-3.0-only; NTop and Wtop contributors\0"
+   VALUE "OriginalFilename", "wtop.exe\0"
+   VALUE "ProductName", "Wtop\0"
+   VALUE "ProductVersion", "@WTOP_VERSION@\0"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x0409, 1200
+ END
+END
