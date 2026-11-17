@@ -13,6 +13,23 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 from beta_release import checked_file, native_tests, sha256, validate_native, BetaError
 from package_candidate import verify
 
+# Windows PowerShell launched via Python under pwsh inherits PS7 module paths.
+# Resolve built-in Security/Utility only from this child host's own PSHOME.
+# This changes no registry, caller environment, execution policy or trust setting.
+METADATA_SCRIPT = (
+    "$ErrorActionPreference='Stop'; $env:PSModulePath=$PSHOME+'\\Modules'; "
+    "$p=$env:WTOP_RECEIPT_EXE; $v=[System.Diagnostics.FileVersionInfo]::GetVersionInfo($p); "
+    "@{ file=$v.FileVersion; product=$v.ProductVersion; "
+    "authenticode=(Get-AuthenticodeSignature -LiteralPath $p).Status.ToString() } "
+    "| ConvertTo-Json -Compress"
+)
+
+def read_windows_metadata(exe):
+    environment=os.environ.copy();environment['WTOP_RECEIPT_EXE']=str(exe)
+    result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',METADATA_SCRIPT],
+                          capture_output=True,text=True,check=True,timeout=30,env=environment)
+    return json.loads(result.stdout)
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('candidate',type=Path);parser.add_argument('--junit',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
@@ -20,11 +37,8 @@ def main():
     try:
         if os.name!='nt':raise BetaError('native receipt requires actual Windows execution')
         candidate=args.candidate.resolve();payload=verify(candidate)['payload'];exe=candidate/'wtop.exe'
-        # Keep the path out of executable PowerShell text; environment is data.
-        environment=os.environ.copy();environment['WTOP_RECEIPT_EXE']=str(exe)
-        command="$p=$env:WTOP_RECEIPT_EXE; $v=[System.Diagnostics.FileVersionInfo]::GetVersionInfo($p); @{ file=$v.FileVersion; product=$v.ProductVersion; authenticode=(Get-AuthenticodeSignature -LiteralPath $p).Status.ToString() } | ConvertTo-Json -Compress"
-        result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',command],capture_output=True,text=True,check=True,timeout=30,env=environment)
-        versions=json.loads(result.stdout)
+        # The filename remains environment data, never PowerShell source.
+        versions=read_windows_metadata(exe)
         result=subprocess.run([str(exe),'--no-config','--version'],capture_output=True,text=True,check=True,timeout=10)
         if payload['version'] not in result.stdout.strip().split():raise BetaError('version command did not report exact version')
         osversion=sys.getwindowsversion()
