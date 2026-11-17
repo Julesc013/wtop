@@ -4,35 +4,57 @@ on:
     branches: [transfer/wtop-beta-six-20261118]
 permissions:
   contents: write
-concurrency:
-  group: wtop-exact-beta-source-transfer
-  cancel-in-progress: false
 jobs:
   import:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate packet, apply data-only patches and create exact Git objects
+      - name: Validate and upload remaining ordinary source blobs only
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           python3 - <<'PY'
-          import sys
+          import sys, base64, hashlib, json, lzma, subprocess, tempfile
+          from pathlib import Path
           sys.path.insert(0, 'transfer')
-          import import_objects
-          original = import_objects.api
-          def preserve_message(path, payload):
-              if path == 'commits':
-                  payload = dict(payload)
-                  payload['message'] += '\n'
-              return original(path, payload)
-          import_objects.api = preserve_message
-          import_objects.main()
+          import import_objects as t
+          packed = base64.b64decode(''.join((t.ROOT/'transfer'/('part%d.txt'%n)).read_text().strip() for n in (1,2,3)), validate=True)
+          assert hashlib.sha256(packed).hexdigest() == t.PACKET_SHA
+          decoder=lzma.LZMADecompressor(memlimit=128*1024*1024)
+          raw=decoder.decompress(packed,max_length=1024*1024)
+          assert decoder.eof and not decoder.unused_data and len(raw)==124262
+          packet=json.loads(raw)
+          assert packet['base']==t.BASE and packet['head']==t.HEAD and len(packet['commits'])==6
+          with tempfile.TemporaryDirectory() as temporary:
+              work=Path(temporary)/'work'
+              subprocess.run(['git','clone','--no-checkout','--no-hardlinks',str(t.ROOT),str(work)],check=True)
+              t.git(work,'checkout','--detach',t.BASE)
+              previous=t.BASE
+              for record in packet['commits']:
+                  fields=dict(line.split(' ',1) for line in record['raw'].split('\n\n',1)[0].splitlines())
+                  assert fields['parent']==previous
+                  t.git(work,'apply','--unidiff-zero','--index','-',data=record['patch'].encode())
+                  assert t.git(work,'write-tree').decode().strip()==fields['tree']
+                  assert t.git(work,'hash-object','-t','commit','-w','--stdin',data=record['raw'].encode()).decode().strip()==record['sha']
+                  previous=record['sha']
+              assert previous==t.HEAD
+              entries=[]
+              for name in t.git(work,'diff','--name-only',t.HEAD+'^',t.HEAD).decode().splitlines():
+                  assert not name.startswith('.github/workflows/')
+                  header, listed=t.git(work,'ls-tree',t.HEAD,'--',name).decode().strip().split('\t')
+                  mode,kind,sha=header.split()
+                  assert listed==name and kind=='blob' and mode=='100644'
+                  data=t.git(work,'cat-file','blob',sha)
+                  assert t.api('blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})['sha']==sha
+                  entries.append({'path':name,'mode':mode,'type':kind,'sha':sha})
+              result={'packet_sha256':t.PACKET_SHA,'verified_tree':fields['tree'],'entries':entries,'remote_refs_modified':False}
+              Path('import-result.json').write_text(json.dumps(result,indent=2)+'\n')
+              print(json.dumps(result),flush=True)
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -40,5 +62,5 @@ jobs:
           path: import-result.json
           if-no-files-found: error
           retention-days: 14
-# Temporary transport branch only. No remote reference, release, configuration,
-# repository setting or installation is changed by this one-use workflow.
+# Temporary transport only. Workflow changes are delivered through the authorized
+# connector; this job writes ordinary content blobs and no references or releases.
