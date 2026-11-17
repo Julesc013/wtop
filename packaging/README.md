@@ -51,11 +51,13 @@ single-package authoring redirects its program-files and HKMU registrations:
 
 ```powershell
 msiexec /i PATH-TO-CANDIDATE.msi ALLUSERS=2 MSIINSTALLPERUSER=1
-msiexec /i PATH-TO-CANDIDATE.msi ALLUSERS=2 MSIINSTALLPERUSER=""
+msiexec /i PATH-TO-CANDIDATE.msi ALLUSERS=1
 ```
 
-The second command requests machine scope and may require elevation. The
-candidate does not add PATH tokens, startup entries, services, scheduled tasks or
+The second command explicitly requests machine scope and may require elevation.
+With `ALLUSERS=1`, Windows Installer ignores the per-user selector authored as
+the package's default. This also avoids shell-dependent empty-value quoting.
+The candidate does not add PATH tokens, startup entries, services, scheduled tasks or
 an updater. Use the full executable path. Optional owned PATH integration remains
 unimplemented. MSI is not a delivery mechanism for DOS, Win16, CE or ordinary
 WinPE images. A Windows Installer mechanism floor is not Wtop's qualified floor.
@@ -120,6 +122,7 @@ performed by these scripts.
 ## Primary references checked 2026-11-17
 
 - [Microsoft: single-package authoring and HKMU redirection](https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring)
+- [Microsoft: MSIINSTALLPERUSER and explicit ALLUSERS selection](https://learn.microsoft.com/en-us/windows/win32/msi/msiinstallperuser)
 - [Microsoft: custom-action sequencing](https://learn.microsoft.com/en-us/windows/win32/msi/sequencing-custom-actions)
 - [Microsoft: file versioning rules](https://learn.microsoft.com/en-us/windows/win32/msi/file-versioning-rules)
 - [Microsoft: rollback custom actions](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions)

@@ -30,10 +30,10 @@ try {
     [IO.File]::Move($temporary, $target)
     Write-Output "Verified artifact: $target (SHA256 $($actual.ToLowerInvariant()))"
     if ($Install) {
-        $perUser = if ($Scope -eq 'User') { '1' } else { '""' }
+        $scopeArguments = if ($Scope -eq 'User') { 'ALLUSERS=2 MSIINSTALLPERUSER=1' } else { 'ALLUSERS=1' }
         # Native Windows Installer remains the owner. This script does not edit
         # PATH, registration, application data or installer-owned payloads.
-        $arguments = '/i "' + $target + '" ALLUSERS=2 MSIINSTALLPERUSER=' + $perUser + ' /norestart'
+        $arguments = '/i "' + $target + '" ' + $scopeArguments + ' /norestart'
         $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru
         if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
             throw "Windows Installer returned $($process.ExitCode)."

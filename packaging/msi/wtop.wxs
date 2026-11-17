@@ -9,7 +9,8 @@
     <MediaTemplate EmbedCab="yes" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/Julesc013/wtop" />
-    <Property Id="MSIINSTALLPERUSER" Secure="yes" />
+    <!-- Scope owns ALLUSERS=2 and MSIINSTALLPERUSER=1. Re-declaring either
+         Property, even without a Value, duplicates its WiX 4 symbol. -->
     <Property Id="INSTALLFOLDER" Secure="yes" />
     <Upgrade Id="$(var.UpgradeCode)">
       <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes" Property="WTOP_RELATED" />

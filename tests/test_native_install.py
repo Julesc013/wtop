@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
 import uuid
 from pathlib import Path
 
@@ -26,6 +27,25 @@ from package_candidate import sha256, verify
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def install_scope_arguments(scope):
+    # ALLUSERS=1 explicitly selects machine scope and ignores the package's
+    # MSIINSTALLPERUSER default. Avoid an empty property whose required literal
+    # quotes would be consumed or escaped by generic argv serialization.
+    if scope == "machine":
+        return ["ALLUSERS=1"]
+    if scope == "user":
+        return ["ALLUSERS=2", "MSIINSTALLPERUSER=1"]
+    raise ValueError("unknown installation scope")
+
+
+class InstallScopeArguments(unittest.TestCase):
+    def test_explicit_machine_scope_has_no_inherited_user_selector(self):
+        self.assertEqual(subprocess.list2cmdline(install_scope_arguments("machine")), "ALLUSERS=1")
+        self.assertEqual(install_scope_arguments("user"), ["ALLUSERS=2", "MSIINSTALLPERUSER=1"])
+        with self.assertRaises(ValueError):
+            install_scope_arguments("unknown")
 
 
 def msi_call(arguments, log: Path, expect_success=True, expected_reason=None):
@@ -115,7 +135,7 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
     product = manifest["installer"]["product_code"]
     original = (candidate / "wtop.exe").read_bytes()
     modified = original + b"Wtop installer regression fixture\r\n"
-    scope_arguments = ["ALLUSERS=2", "MSIINSTALLPERUSER=" + ("" if machine else "1")]
+    scope_arguments = install_scope_arguments(scope)
     foreign_value = "FixtureForeign-" + uuid.uuid4().hex
     installed = False
     try:
