@@ -20,6 +20,11 @@ int wtop_actions_run(const wtop_action_request *requests, size_t count,
     size_t i;
     int stopped = 0;
     if (count > capacity || (count && (!requests || !results)) || !execute) return 0;
+    /* Reject an invalid operation anywhere before dispatching any target. This
+       prevents a malformed batch from becoming a partially applied mutation. */
+    for (i=0;i<count;++i)
+        if (requests[i].kind < WTOP_ACTION_TERMINATE ||
+            requests[i].kind > WTOP_ACTION_PRIORITY_DOWN) return 0;
     for (i=0;i<count;++i) {
         memset(&results[i],0,sizeof(results[i]));
         results[i].request = requests[i];

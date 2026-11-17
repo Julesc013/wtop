@@ -508,7 +508,7 @@ static int SortProcessBy##Attribute(const void *A, const void *B) \
 SORT_PROCESS_BY_INTEGER(ID);
 SORT_PROCESS_BY_METRIC(PercentProcessorTime, CpuState, CpuObservedTick);
 SORT_PROCESS_BY_METRIC(UsedMemory, MemoryState, ObservedTick);
-SORT_PROCESS_BY_METRIC(UpTime, AgeState, ObservedTick);
+SORT_PROCESS_BY_METRIC(UpTime, AgeState, CpuObservedTick);
 SORT_PROCESS_BY_INTEGER(BasePriority);
 SORT_PROCESS_BY_INTEGER(ThreadCount);
 SORT_PROCESS_BY_INTEGER(ParentPID);

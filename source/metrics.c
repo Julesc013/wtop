@@ -122,11 +122,18 @@ wtop_metric_state wtop_commit_bytes(wtop_counter pages, wtop_counter limit_pages
     unsigned long page_size, wtop_counter *bytes, wtop_counter *limit_bytes,
     double *fraction)
 {
-    if (!bytes || !limit_bytes || !fraction) return WTOP_METRIC_ERROR;
+    wtop_counter measured_bytes, measured_limit;
+    double measured_fraction;
+    if (!bytes || !limit_bytes || !fraction || bytes == limit_bytes) return WTOP_METRIC_ERROR;
     if (!page_size || (!limit_pages.high && !limit_pages.low)) return WTOP_METRIC_ERROR;
-    if (!wtop_counter_multiply(pages,page_size,bytes) ||
-        !wtop_counter_multiply(limit_pages,page_size,limit_bytes)) return WTOP_METRIC_CAPACITY;
-    *fraction = wtop_counter_double(pages)/wtop_counter_double(limit_pages);
+    /* Publish all outputs together. An overflowing limit must not leave a new
+       byte count paired with an old limit/fraction in caller-owned storage. */
+    if (!wtop_counter_multiply(pages,page_size,&measured_bytes) ||
+        !wtop_counter_multiply(limit_pages,page_size,&measured_limit)) return WTOP_METRIC_CAPACITY;
+    measured_fraction = wtop_counter_double(pages)/wtop_counter_double(limit_pages);
+    *bytes = measured_bytes;
+    *limit_bytes = measured_limit;
+    *fraction = measured_fraction;
     return WTOP_METRIC_VALID;
 }
 wtop_metric_state wtop_sample_freshness(wtop_counter now_ms,

@@ -33,5 +33,16 @@ int main(void)
     assert(wtop_actions_run(request,4,result,4,execute,stop,&f)); assert(f.count==2);
     assert(result[1].native_error==5 && result[2].state==WTOP_ACTION_NOT_ATTEMPTED && result[3].state==WTOP_ACTION_NOT_ATTEMPTED);
     assert(result[2].native_error==0);
+    /* Invalid operation at the END must not execute any earlier target. */
+    f.count=0; f.stop_after=5;
+    request[3].kind=(wtop_action_kind)999;
+    memset(result,0x5a,sizeof(result));
+    assert(!wtop_actions_run(request,4,result,4,execute,stop,&f));
+    assert(f.count==0 && ((unsigned char *)result)[0]==0x5a);
+    request[3].kind=WTOP_ACTION_TERMINATE;
+    f.stop_after=0;
+    assert(wtop_actions_run(request,4,result,4,execute,stop,&f));
+    assert(f.count==0);
+    for(i=0;i<4;++i) assert(result[i].state==WTOP_ACTION_NOT_ATTEMPTED);
     return 0;
 }

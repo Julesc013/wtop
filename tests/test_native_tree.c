@@ -146,12 +146,42 @@ static void test_index_failure_retains_all_rows(void)
     assert(!RootProcess.FirstChild && !RootProcess.LastChild && !TreeUnresolvedParentCount);
 }
 
+/* NTop #36/#54/#78: test the actual comparator above and below 4 GiB,
+   invalid data ordering, and deterministic ties on both x86 and x64. */
+static void test_large_metric_sort(void)
+{
+    process rows[4];
+    memset(rows, 0, sizeof(rows));
+    LastSampleInterval = 1000;
+    SortObservedTick = 4500;
+    for(unsigned i=0;i<4;++i) {
+        rows[i].ID=i+1; rows[i].CreationTime=i+10;
+        rows[i].MemoryState=METRIC_OK; rows[i].ObservedTick=4000;
+    }
+    rows[0].UsedMemory=4294967295ULL;
+    rows[1].UsedMemory=4294967297ULL;
+    rows[2].UsedMemory=8589934599ULL;
+    rows[3].UsedMemory=18446744073709551615ULL; rows[3].MemoryState=METRIC_DENIED;
+    SortOrder=ASCENDING; qsort(rows,4,sizeof(rows[0]),SortProcessByUsedMemory);
+    assert(rows[0].ID==1 && rows[1].ID==2 && rows[2].ID==3 && rows[3].ID==4);
+    SortOrder=DESCENDING; qsort(rows,4,sizeof(rows[0]),SortProcessByUsedMemory);
+    assert(rows[0].ID==3 && rows[1].ID==2 && rows[2].ID==1 && rows[3].ID==4);
+    /* Age freshness belongs to its CPU/age acquisition, not a later memory read. */
+    rows[0].ID=1; rows[0].AgeState=METRIC_OK; rows[0].UpTime=999;
+    rows[0].CpuObservedTick=1000; rows[0].ObservedTick=4500;
+    rows[1].ID=2; rows[1].AgeState=METRIC_OK; rows[1].UpTime=1;
+    rows[1].CpuObservedTick=4000; rows[1].ObservedTick=4000;
+    assert(SortProcessByUpTime(&rows[0],&rows[1])>0);
+    SortOrder=ASCENDING; assert(SortProcessByUpTime(&rows[0],&rows[1])>0);
+}
+
 int main(void)
 {
     printf("native tree fixture memory: %llu bytes\n", (unsigned long long)MAX_PROCESS_ROWS * sizeof(*ProcessList));
     ProcessList = calloc(MAX_PROCESS_ROWS, sizeof(*ProcessList));
     ViMessage = calloc(DEFAULT_STR_SIZE, sizeof(*ViMessage));
     assert(ProcessList && ViMessage);
+    test_large_metric_sort();
     test_wide_tree();
     test_deep_reverse_tree();
     test_shuffled_preorder();
