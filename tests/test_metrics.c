@@ -20,6 +20,10 @@ int main(void)
     wtop_cpu_observation a,b;
     wtop_cpu_value value;
     double ratio,age;
+    assert(wtop_metric_sort_availability(WTOP_METRIC_VALID, WTOP_METRIC_DENIED) == -1);
+    assert(wtop_metric_sort_availability(WTOP_METRIC_STALE, WTOP_METRIC_VALID) == 1);
+    assert(wtop_metric_sort_availability(WTOP_METRIC_ERROR, WTOP_METRIC_WARMING_UP) == 0);
+    assert(wtop_metric_sort_availability(WTOP_METRIC_VALID, WTOP_METRIC_VALID) == 0);
     assert(wtop_counter_subtract(c(2097152UL,16),c(2097152UL,1),&result));
     assert(result.high==0 && result.low==15);
     assert(wtop_counter_subtract(c(2,0),c(1,4294967295UL),&result));

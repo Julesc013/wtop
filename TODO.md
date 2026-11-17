@@ -15,49 +15,54 @@ Historical observations
 remain attached to the revision they describe. Unchecked items below are closure
 criteria; some already have candidate code and need evidence rather than rewriting.
 
-## 0. Audited checkpoint and first-release priorities
+## 0. Current implementation and first-release gates
 
-The [17 November 2026 audit](docs/wtop-release-readiness-2026-11-17.md) reviews
-canonical master `1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`. The first planned
-Wtop release is **0.4.0**; the audited application remains **0.1.0-dev.2**.
-These implementation checkmarks do not close the broader acceptance cases below:
+The current application is **0.4.0-dev.1**. The earlier
+[17 November source audit](docs/wtop-release-readiness-2026-11-17.md) describes
+`1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`; the
+[current implementation record](docs/implementation-verification-2026-11-17.md)
+describes its follow-up. Checkmarks here mean candidate implementation, not full
+acceptance or a supported release.
 
-- [x] Default htop controls and colors; selectable vi/vim and Emacs presets.
-- [x] Default-visible, hideable, clickable final-row function bar.
-- [x] Native mouse selection/wheel/header/tab/button handling and keyboard fallback.
-- [x] Ordered/hidden built-in meters and columns, per-tab sorting/filter/tree,
-  up to eight named views and explicit configuration save/export.
-- [x] Source relocation, root TODO/ROADMAP, portable tests and scoped native CI.
-- [x] Audit all 24 named external forks and reachable advertised branches/tags
-  from the wider listing; record adaptation and rejection decisions in the
-  [fork audit](docs/ntop-fork-audit-2026-11-17.md).
+- [x] Source relocation, root TODO/ROADMAP, pinned NTop ancestry and canonical master.
+- [x] Audit the named NTop forks and retain per-change reuse/rejection decisions.
+- [x] **WT-W020:** exact process CPU deltas with measured intervals and named
+  normalization; system commit from system totals; typed system summary/schema 2.
+- [x] **WT-W030:** retained per-target action outcomes, lifetime revalidation,
+  sample timestamps/freshness, private collection and single-slot publication.
+- [x] **WT-W040:** htop defaults, vi/Emacs alternatives, contextual visible/hidden
+  function bar, adjacent live status, graceful mouse and scalar-safe ASCII fallback.
+- [x] **WT-W040/050:** Setup tab create/duplicate/rename/confirmed-delete/reorder,
+  stable IDs and bounded saved columns/rows/filters/sort/colors.
+- [x] **WT-W050:** version-2 settings, explicit owner/path resolution, byte-baseline
+  conflict checks, cooperative lock, replacement verification and migration recovery.
+- [x] **WT-W010/035:** checked CLI catalog/help, inherited `-d` compatibility,
+  explicit delay units, query/inspect and finite complete-record JSONL logging.
+- [x] **WT-W035/110:** isolated command-line/service/account/per-core providers,
+  bounded protocol/capacity/deadlines and explicit retirement/admission state.
+- [x] **WT-W060:** PE inspection, unchanged EXE/ZIP packaging, candidate MSI
+  wrappers and direct ownership/refusal fixtures; promotion remains blocked.
+- [x] **WT-W080/090:** shared historical probe/report code, DOS1 COM and DOS2+ MZ
+  artifacts, NT probe and Win16/OS2 entrypoints. These are not full monitor ports.
 
-Prioritize these source-confirmed gaps and qualification tasks before stable
-promotion; the audit's CUR IDs are finding references, not a second work queue:
+Remaining first-release blockers and evidence work:
 
-- [ ] **WT-W020 / CUR-001/002:** correct system-commit scope and process CPU
-  observation-window/capacity semantics, with independent expected-value fixtures.
-- [ ] **WT-W030/040 / CUR-003/004/010:** retain every bulk target's result, expose
-  sample freshness/stale state, and fault-test stalled work and normal/emergency exit.
-- [ ] **WT-W040 / CUR-005/006/011:** finish contextual hints/live status and qualify
-  Unicode cells/mouse/resize; decide the first-release tab-editing boundary.
-- [ ] **WT-W050 / CUR-007/013:** close file metadata/concurrent-writer behavior
-  and portable/per-user/machine ownership before advertising managed installation.
-- [ ] **WT-W010/035 / CUR-008:** resolve htop `-d` versus inherited dump semantics;
-  freeze long options, aliases and units independently of TUI keymap selection.
-- [ ] **WT-W000/070/130 / CUR-009/012:** reconcile narrow CI evidence with formal
-  cases, measure resource costs and qualify exact supported payloads/channels.
-- [ ] **WT-W020/035:** consider typed system-summary output from x1y9's idea;
-  current snapshots contain process records and metadata, not system totals.
-- [ ] **WT-W035/040/080/110:** adapt command-line/path/service inspection,
-  per-core/provider and legacy-build ideas through current ownership contracts;
-  retain already inherited fixes rather than bulk-merging fork branches.
+- [ ] Close native CI regressions and record exact passing source/artifact scope.
+- [ ] Qualify advertised Windows OS/architecture/console/token combinations;
+  native ARM64, stock RT, WinPE, ReactOS and historical guests remain unverified.
+- [ ] Qualify real CPU groups/hotplug, protected processes, Unicode/console hosts,
+  hostile filesystem/path races, actual blocked work and resource/performance bounds.
+- [ ] Close MSI preflight-to-operation races, upgrades/rollback/interruption,
+  unelevated scope behavior and optional exactly owned PATH integration.
+- [ ] Establish release version mapping, signing/source correspondence, actual
+  download verification and WinGet publication only after payload qualification.
+- [ ] Implement remaining CLI mutations/detail/thread/affinity/provider scope and
+  historical monitoring capabilities toward the complete 1.0 goal.
+- [ ] Map full acceptance cases to complete native evidence before promoting the
+  work/target registries. A narrower passing fixture does not close a broad case.
 
-No runtime source was changed by this audit. All 51 formal acceptance cases
-remain unpromoted; existing checks are real but narrower. Read the proposed
-[0.4.0 closure and 1.0.0 scope](docs/wtop-release-readiness-2026-11-17.md) before
-choosing an implementation slice. Historical targets remain part of the declared
-long-term goal, and the GUI remains deferred.
+GUI work stays deferred. The following sections retain the complete closure
+criteria; many now have candidate code and need qualification, not a rewrite.
 
 ## 1. Source, specification and contributor baseline — WT-W000
 
@@ -85,7 +90,7 @@ References: [governance](spec/foundation/governance.md),
   Test conflicting meanings, especially htop `k` versus vi `k`.
 - [ ] Verify the common F1–F10 route, help/setup recovery, navigation, tagging,
   following, search/filter, tree and sorting in every map and input context.
-- [ ] Make keyboard hints, command execution and mouse hitboxes use shared action
+- [ ] Qualify keyboard hints, command execution and mouse hitboxes using shared action
   identities. A hidden/unsupported action must not leave an active click target.
 - [ ] Verify Emacs modifiers and text editing independently of ordinary list
   actions; retain an unambiguous cancellation path.
@@ -138,16 +143,16 @@ References: WT-AC-031-01 through WT-AC-031-07 in
   temporary write/replacement, failed-write preservation and temp cleanup.
 - [ ] Verify explicit/adjacent/legacy/user precedence, legacy preservation,
   unavailable user-folder lookup and user-directory creation only on save.
-- [ ] Define concurrent-edit behavior for multiple instances and external editors;
+- [ ] Qualify implemented concurrent-edit behavior for multiple instances and external editors;
   a byte comparison before replacement is not an atomic compare-and-swap.
 - [ ] Test paths with spaces/non-ASCII characters, read-only media, denied paths,
   missing parents, full disks and interrupted replacement. Qualify customized
   file ACL/metadata preservation separately from byte-content preservation.
-- [ ] Implement the later installed/portable path resolver, ownership records,
+- [ ] Qualify the implemented installed/portable path resolver, ownership records,
   user/system precedence and migration without guessing from directory names or
   writability. Keep managed data outside package payload directories.
 - [ ] Define and test settings compatibility across stable versions and side-by-side
-  copies before adding migration. Keep ordinary startup/exit read-only.
+  copies, including implemented schema-1 migration. Keep ordinary startup/exit read-only.
 - [ ] Keep themes/keymaps declarative and inert; plugins or executable callbacks
   are not needed for ordinary customization.
 
@@ -162,7 +167,7 @@ References: WT-AC-040-01 through WT-AC-040-04,
   and zero console/config writes.
 - [ ] Finish responsibility-sized extraction of the typed snapshot and selectors
   from inherited native globals, keeping working behavior at each step.
-- [ ] Define CPU denominator, processor groups/topology, counter epoch and sample
+- [ ] Qualify documented CPU denominator, processor groups/topology, counter epoch and sample
   timestamp precisely. Test first sample, reset, wrap, missing data and zero time.
 - [ ] Preserve process creation identity and per-field availability/provenance;
   do not invent SYSTEM ownership or zero utilization for failed observations.
@@ -188,7 +193,7 @@ References: [invocation](spec/interfaces/invocation.md),
   the wall-clock cutoff is not an atomic kernel generation guarantee.
 - [ ] Revalidate selected/tagged process identities immediately before mutation;
   verify confirmations cannot silently change targets while the list refreshes.
-- [ ] Report per-target failures for bulk actions. Preserve least privilege and
+- [ ] Qualify retained per-target outcomes for bulk actions. Preserve least privilege and
   never create a service, driver or host policy change merely to observe processes.
 - [ ] Measure repeated-instance CPU, allocations, handles and cleanup. Any optional
   single-instance behavior must remain user/session scoped and not block scripts.
@@ -198,12 +203,12 @@ References: [lifecycle](spec/architecture/lifecycle.md),
 
 ## 6. Query, inspection, diagnostics and logging — WT-W035
 
-- [ ] Implement a shared selector/field grammar for bounded read-only query and
+- [ ] Extend the implemented shared selector grammar with field selection for read-only query and
   process/system inspection; distinguish invalid selectors from empty results.
-- [ ] Add effective configuration/path/provider diagnostics and true runtime
+- [ ] Extend implemented path/provider diagnostics to effective configuration and full runtime
   capability negotiation, distinct from current build-capability metadata.
-- [ ] Add bounded continuous logging/export with explicit interval, duration,
-  destination, rotation/size policy, cancellation and partial-failure results.
+- [ ] Qualify implemented finite logging with interval, duration, destination, complete-record
+  size cap, cancellation and partial outcomes; rotation remains a separate extension.
 - [ ] Keep output schemas/units stable and diagnostics off stdout; do not prompt
   or initialize a TUI when input/output is redirected.
 - [ ] Define supported process-control subcommands using the same typed actions
@@ -218,8 +223,8 @@ References: [command catalog](spec/catalog/commands.json),
 
 - [ ] Produce one qualified application payload per ABI/CPU/API profile and reuse
   those bytes in standalone EXE, portable ZIP and appropriate setup packages.
-- [ ] Implement explicit portable/per-user/machine ownership and exact removable
-  PATH/registration changes; no implicit installation on first execution.
+- [ ] Qualify implemented portable/per-user/machine ownership and registry changes; add
+  optional exactly removable PATH integration. No implicit first-run installation.
 - [ ] Test update, rollback, side-by-side versions, foreign/modified files,
   locked executables and interrupted install/uninstall.
 - [ ] Keep preferences outside WinGet/MSI payload ownership; provide explicit

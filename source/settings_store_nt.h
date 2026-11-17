@@ -62,6 +62,7 @@ typedef struct wtop_settings_store {
     size_t expected_length;
     int expected_exists;
     int baseline_loaded;
+    unsigned long target_schema_version; /* Existing destination, independent of source document. */
     int disabled;
     int explicit_required;
     int canonical_aliases; /* Final-path normalization available; hard links refused. */

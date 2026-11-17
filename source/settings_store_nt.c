@@ -247,13 +247,13 @@ int wtop_store_resolve(wtop_settings_store *store, const wtop_store_request *req
     if (!store || !request || store->expected_bytes || store->module_path[0])
         return finish(result, WTOP_STORE_INVALID, ERROR_INVALID_PARAMETER, "settings owner must be zero-initialized before resolve");
     store->disabled = request->no_config;
-    if (request->no_config) return finish(result, WTOP_STORE_OK, 0, "file settings disabled");
     directory = (WCHAR *)malloc(PATH_BYTES); candidate = (WCHAR *)malloc(PATH_BYTES);
     if (!directory || !candidate) { free(directory); free(candidate); return io_failure(result, ERROR_NOT_ENOUGH_MEMORY, "cannot allocate settings paths"); }
     store->canonical_aliases = final_path_api() != NULL;
     length = GetModuleFileNameW(NULL, candidate, WTOP_STORE_PATH_CHARS);
     if (!length || length >= WTOP_STORE_PATH_CHARS || !canonical_path(candidate, store->module_path) ||
         !copy_path(directory, store->module_path) || !parent_path(directory)) goto path_failure;
+    if (request->no_config) { ok = 1; goto done; }
     store->owner = WTOP_STORE_UNREGISTERED;
     if (request->explicit_path) {
         store->owner = WTOP_STORE_EXPLICIT;
@@ -383,6 +383,10 @@ int wtop_store_load(wtop_settings_store *store, wtop_settings *settings,
     if (store->disabled) return finish(result, WTOP_STORE_OK, 0, "file settings disabled");
     if (!store->read_path[0]) {
         if (!capture_baseline(store, result)) return 0;
+        if(store->expected_exists) {
+            store->baseline_loaded = 0;
+            return finish(result, WTOP_STORE_CONFLICT, ERROR_REVISION_MISMATCH, "settings appeared after source resolution; reload before saving");
+        }
         return finish(result, WTOP_STORE_OK, 0, "compiled defaults selected");
     }
     handle = CreateFileW(store->read_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -408,6 +412,12 @@ int wtop_store_load(wtop_settings_store *store, wtop_settings *settings,
         wtop_config_document_free(&parsed); store->baseline_loaded = 0;
         return finish(result, WTOP_STORE_CONFLICT, ERROR_REVISION_MISMATCH, "settings changed while loading; reload before editing");
     }
+    if(_wcsicmp(store->read_path, store->write_path) && store->expected_exists) {
+        wtop_config_document_free(&parsed); store->baseline_loaded = 0;
+        return finish(result, WTOP_STORE_CONFLICT, ERROR_REVISION_MISMATCH,
+            "a destination appeared while loading another source; reload before saving");
+    }
+    if(!_wcsicmp(store->read_path, store->write_path)) store->target_schema_version = parsed.schema_version;
     failure = ERROR_SUCCESS;
     *settings = candidate; wtop_config_document_free(document); *document = parsed;
     return finish(result, WTOP_STORE_OK, failure, "settings document loaded without writing");
@@ -477,7 +487,8 @@ int wtop_store_save(wtop_settings_store *store, const wtop_settings *settings,
     baseline = (char *)malloc(length + 1); lock_path = (WCHAR *)malloc(PATH_BYTES);
     if (!baseline || !lock_path) { free(candidate); free(baseline); free(lock_path); return io_failure(result, ERROR_NOT_ENOUGH_MEMORY, "cannot allocate save transaction"); }
     memcpy(baseline, candidate, length + 1);
-    result->migrated = document && document->original && document->schema_version < WTOP_CONFIG_VERSION;
+    result->migrated = (document && document->original && document->schema_version < WTOP_CONFIG_VERSION) ||
+        (store->expected_exists && store->target_schema_version < WTOP_CONFIG_VERSION);
     keep_backup = result->migrated && store->expected_exists;
     if (store->user_directory[0] && !CreateDirectoryW(store->user_directory, NULL)) {
         failure = GetLastError();
@@ -554,6 +565,7 @@ int wtop_store_save(wtop_settings_store *store, const wtop_settings *settings,
     }
     free(store->expected_bytes); store->expected_bytes = baseline; baseline = NULL;
     store->expected_length = length; store->expected_exists = 1;
+    store->target_schema_version = WTOP_CONFIG_VERSION;
     if (document) {
         wtop_config_document_free(document); document->original = candidate; candidate = NULL;
         document->length = length; document->schema_version = WTOP_CONFIG_VERSION; document->tab_count = settings->tab_count;

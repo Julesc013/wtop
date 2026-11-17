@@ -2,6 +2,11 @@
 #include "metrics.h"
 #include <float.h>
 #include <string.h>
+
+int wtop_metric_sort_availability(wtop_metric_state left, wtop_metric_state right)
+{
+    return (right == WTOP_METRIC_VALID) - (left == WTOP_METRIC_VALID);
+}
 #define LIMB 4294967295UL
 static int counter_valid(wtop_counter c) { return c.high <= LIMB && c.low <= LIMB; }
 const char *wtop_metric_state_name(wtop_metric_state state)

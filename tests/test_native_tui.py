@@ -288,14 +288,14 @@ class Console:
             events.append(event)
         self.records(events)
 
-    def start(self, exe, config, pids, *options):
+    def start(self, exe, config, pids, *options, interval=250):
         self.check(self.k.FlushConsoleInputBuffer(self.input))
         startup = subprocess.STARTUPINFO()
         startup.dwFlags |= subprocess.STARTF_USESTDHANDLES
         startup.hStdInput = self.input
         startup.hStdOutput = startup.hStdError = self.original_output
         self.process = subprocess.Popen(
-            [exe, "--tui", "--config", str(config), "--interval", "250",
+            [exe, "--tui", "--config", str(config), "--interval", str(interval),
              "-p", ",".join(map(str, pids)), *options],
             startupinfo=startup, close_fds=False,
         )
@@ -427,6 +427,31 @@ def new_config(exe, path):
     result = subprocess.run([exe, "--no-config", "--write-config", str(path)],
                             capture_output=True, timeout=5)
     assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+
+
+def sampling_click_contract(console, exe, directory, pids, observations):
+    config = directory / "sampling-clicks.conf"
+    new_config(exe, config)
+    console.start(exe, config, pids, "--status-bar", interval=50)
+    console.wait(lambda f: is_main(f) and has_bar(f), "50 ms sampling function bar")
+    # A pending collector publication used to invalidate the visible frame
+    # before input, silently dropping valid mouse presses. Every iteration
+    # must acknowledge its one click; retries would conceal that regression.
+    for iteration in range(8):
+        command = ":unfinished-sample-" + str(iteration)
+        console.type(command)
+        console.wait(lambda f: editor_contains(f, command),
+                     "sampling click command " + str(iteration))
+        click_function(console, 1, "Help")
+        console.wait(lambda f: overlay_contains(f, "Help"),
+                     "single Help click during 50 ms sampling " + str(iteration))
+        console.key(27, "\x1b")
+        console.wait(lambda f: is_main(f) and has_bar(f)
+                     and not editor_contains(f, ":"),
+                     "sampling click leaves editor cancelled " + str(iteration))
+    console.stop()
+    observations["checks"].append(
+        "eight single Help clicks at 50 ms sampling each acknowledge and cancel the editor, without click retries")
 
 
 def setup_contract(console, exe, directory, pids, observations):
@@ -762,6 +787,7 @@ def worker(exe, output):
             console.stop(send_key=False)
             assert all(p.poll() is None for p in fixtures), "input after quit mutated an owned process"
             observations["checks"].append("queued actions after quit are discarded before mutation")
+            sampling_click_contract(console, exe, Path(temp), pids, observations)
             setup_contract(console, exe, Path(temp), pids, observations)
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
             churn_contract(console, exe, Path(temp), pids, fixtures, observations)

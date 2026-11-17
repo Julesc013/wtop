@@ -64,6 +64,7 @@ typedef struct wtop_provider_result {
     ULONGLONG started_ms, observed_ms; /* GetTickCount64; actual worker observations, not delivery time. */
     double elapsed_ms, acquisition_ms;
     int retirement_confirmed; /* Parent-owned: a response is not worker exit. */
+    int response_received; /* Parent-owned: complete validated response, even if the child has not exited. */
     int legacy_processor_scope; /* Processor(*) fallback cannot claim group parity. */
     union {
         WCHAR command_line[WTOP_PROVIDER_COMMAND_CHARS];

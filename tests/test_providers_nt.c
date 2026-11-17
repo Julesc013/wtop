@@ -23,6 +23,45 @@ static void closed(const wtop_provider_session *session, const wtop_provider_res
     assert(result->retirement_confirmed);
     assert(!session->process && !session->job && !session->pipe);
 }
+/* First use of Windows process creation can initialize process-wide facilities
+   outside the provider's ownership. Exercise that API independently, without
+   protocol pipes or a resumed child, before measuring per-collection handle
+   balance. This does not permit a single handle of drift in the provider loop. */
+static void prime_process_creation(void)
+{
+    WCHAR *path = calloc(32768, sizeof(*path));
+    WCHAR *command = calloc(32768, sizeof(*command));
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+    HANDLE job;
+    BOOL assigned;
+    DWORD length;
+    assert(path && command);
+    length = GetModuleFileNameW(NULL, path, 32768);
+    assert(length && length < 32600);
+    assert(_snwprintf_s(command, 32768, _TRUNCATE, L"\"%s\"", path) > 0);
+    memset(&startup, 0, sizeof(startup)); startup.cb = sizeof(startup);
+    memset(&process, 0, sizeof(process));
+    memset(&limits, 0, sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    job = CreateJobObjectW(NULL, NULL);
+    assert(job);
+    assert(SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)));
+    assert(CreateProcessW(path, command, NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+        NULL, NULL, &startup, &process));
+    /* Never resume the preflight child. It owns no application resources. */
+    assigned = AssignProcessToJobObject(job, process.hProcess);
+    /* Even a fixture containment failure must retire our suspended child. */
+    if(assigned) assert(TerminateJobObject(job, 0));
+    else assert(TerminateProcess(process.hProcess, 1));
+    assert(WaitForSingleObject(process.hProcess, 3000) == WAIT_OBJECT_0);
+    assert(CloseHandle(process.hThread));
+    assert(CloseHandle(process.hProcess));
+    assert(CloseHandle(job));
+    free(command); free(path);
+    assert(assigned);
+}
 int wmain(int argc, WCHAR **argv)
 {
     wtop_provider_session session;
@@ -30,22 +69,29 @@ int wmain(int argc, WCHAR **argv)
     wtop_provider_result *result;
     HANDLE cancel, thread;
     FILETIME created, exited, kernel, user;
-    DWORD before, after, sequence;
+    DWORD cold, before, after, sequence;
     int code, i;
     ULONGLONG started;
     if(wtop_provider_worker_dispatch(argc, argv, &code)) return code;
     result = calloc(1, sizeof(*result));
     assert(result);
     wtop_provider_session_init(&session);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &cold));
+    prime_process_creation();
     assert(GetProcessHandleCount(GetCurrentProcess(), &before));
+    fprintf(stderr, "native process-creation preflight handles: cold=%lu, warm=%lu\n", cold, before);
+    fflush(stderr);
     request_kind(&request, WTOP_PROVIDER_TEST_VALID);
     for(i = 0; i < 5; ++i) {
         assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_VALID);
         closed(&session, result);
+        assert(result->response_received);
         assert(result->started_ms <= result->observed_ms);
+        assert(GetProcessHandleCount(GetCurrentProcess(), &after));
+        fprintf(stderr, "native provider handles after iteration %d: expected=%lu, actual=%lu\n", i, before, after);
+        fflush(stderr);
+        assert(before == after);
     }
-    assert(GetProcessHandleCount(GetCurrentProcess(), &after));
-    assert(before == after);
 
     request_kind(&request, WTOP_PROVIDER_TEST_DELAY);
     started = GetTickCount64();
@@ -72,15 +118,18 @@ int wmain(int argc, WCHAR **argv)
     closed(&session, result);
     request_kind(&request, WTOP_PROVIDER_TEST_BAD_PROTOCOL);
     assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_PROTOCOL);
+    assert(!result->response_received);
     closed(&session, result);
     request_kind(&request, WTOP_PROVIDER_TEST_PARTIAL);
     assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_PROTOCOL);
+    assert(!result->response_received);
     closed(&session, result);
     request_kind(&request, WTOP_PROVIDER_TEST_EXTRA);
     assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_PROTOCOL);
     closed(&session, result);
     request_kind(&request, WTOP_PROVIDER_TEST_RESPONSE_THEN_BLOCK);
-    assert(wtop_provider_collect(&session, &request, 150, NULL, result) == WTOP_PROVIDER_TIMEOUT);
+    assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_TIMEOUT);
+    assert(result->response_received); /* Prove the fixture reached the post-response block. */
     closed(&session, result); /* A complete response was not claimed as child exit. */
 
     request_kind(&request, WTOP_PROVIDER_TEST_RETIRE_PENDING);

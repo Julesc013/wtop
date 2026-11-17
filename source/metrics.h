@@ -12,6 +12,9 @@ typedef enum wtop_metric_state {
     WTOP_METRIC_CAPACITY, WTOP_METRIC_STALE
 } wtop_metric_state;
 const char *wtop_metric_state_name(wtop_metric_state state);
+/* Valid observations precede unavailable/stale values in either sort direction.
+   The caller compares numeric values only when both states are valid. */
+int wtop_metric_sort_availability(wtop_metric_state left, wtop_metric_state right);
 int wtop_counter_compare(wtop_counter a, wtop_counter b);
 int wtop_counter_add(wtop_counter a, wtop_counter b, wtop_counter *out);
 int wtop_counter_subtract(wtop_counter a, wtop_counter b, wtop_counter *out);

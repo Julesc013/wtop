@@ -2,6 +2,19 @@
 
 ## 2026-11-17
 
+- Implemented 0.4.0-dev.1 measurement/actions/text/context policy modules, native
+  settings/provider/output adapters, typed schema-2 snapshots, query/inspect/log,
+  schema-2 stable-tab settings and explicit owner/path discovery. Preserved `-d`
+  as dump; added long aliases and explicit decisecond delay. Help now derives
+  from the checked command catalog.
+- Added exact-byte delivery/MSI candidates and historical capability probes;
+  neither promotes target support or release qualification. Recorded first
+  native CI failures and follow-up fixes in the implementation verification
+  record. Touched work units are active while full acceptance remains unpromoted;
+  the user-deferred GUI is marked deferred. No work unit is falsely completed.
+
+### Earlier audit/design checkpoint (unchanged historical scope)
+
 - Added an informative implementation design for the eight requested workstreams,
   with code reuse/extraction boundaries, CPU/action/freshness contracts,
   configuration/CLI migration choices, packaging and historical qualification

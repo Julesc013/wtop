@@ -57,6 +57,7 @@ class NativeProviderTests(unittest.TestCase):
         provider = data["providers"][name]
         self.assertIn(provider["status"], STATES)
         self.assertIsInstance(provider["retirement_confirmed"], bool)
+        self.assertIsInstance(provider["response_received"], bool)
         self.assertIsInstance(provider["error_domain"], int)
         self.assertIsInstance(provider["native_error"], int)
         self.assertGreaterEqual(provider["total_count"], provider["count"])
@@ -64,6 +65,7 @@ class NativeProviderTests(unittest.TestCase):
         self.assertTrue(str(provider["observed_ms"]).isdigit())
         if provider["status"] in ("valid", "capacity"):
             self.assertTrue(provider["retirement_confirmed"])
+            self.assertTrue(provider["response_received"])
             self.assertGreater(int(provider["started_ms"]), 0)
             self.assertGreaterEqual(int(provider["observed_ms"]), int(provider["started_ms"]))
         for name in ("elapsed_ms", "acquisition_ms"):
@@ -134,6 +136,27 @@ class NativeProviderTests(unittest.TestCase):
                     self.assertIsNone(row["busy_percent"])
                 if provider["scope"] == "legacy-processor":
                     self.assertIsNone(row["group"])
+
+    def test_optional_per_core_work_does_not_age_the_process_snapshot(self):
+        result = subprocess.run(
+            [EXE, "--snapshot", "--per-core", "--interval", "50", "--pid", str(os.getpid()),
+             "--format", "json", "--no-config"],
+            stdin=subprocess.DEVNULL, capture_output=True,
+            encoding="utf-8", errors="strict", timeout=20,
+        )
+        self.assertIn(result.returncode, (0, 3), result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(data["schema"], 2)
+        self.assertEqual([row["pid"] for row in data["processes"]], [os.getpid()])
+        row = data["processes"][0]
+        # Native measurement of this owned, live process is independently
+        # available. A slow/unsupported optional PDH query must not stale it.
+        for name in ("cpu_percent", "working_set_bytes"):
+            self.assertEqual(row[name]["status"], "valid", (name, row[name], data["sample"]))
+            self.assertIsNotNone(row[name]["value"])
+        core = self.provider(data, "per_core")
+        if core["status"] in ("valid", "capacity"):
+            self.assertLessEqual(int(core["observed_ms"]), int(row["cpu_observed_ms"]))
 
     def test_private_worker_rejects_missing_or_invalid_inherited_handles(self):
         for args in (("--wtop-provider-v1",), ("--wtop-provider-v1", "0", "0"),

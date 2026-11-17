@@ -9,21 +9,22 @@ bindings, and explicit command-line output and settings operations.
 the unmodified NTop starting revision. Develop Wtop on short-lived branches from
 `master`; see [branch and upstream policy](docs/development.md#branches-and-upstream).
 
-**Status: development candidate, version 0.1.0-dev.2.** The current application
-backend is Windows NT. Historical DOS, Win16, Win9x, early NT, CE and OS/2 ports
-are specified work, not implemented support. Compiling for a CPU architecture
-does not qualify an operating system. The GUI is deferred; `--gui` reports that
-it is unavailable. This branch publishes no supported release, WinGet package or
-installer. Automated checks and native acceptance are separate evidence.
+**Status: development candidate, version 0.4.0-dev.1.** The current application
+backend is Windows NT. This increment implements the eight-workstream design:
+corrected measurements/actions, sample freshness, contextual TUI and Setup,
+versioned settings ownership, query/inspect/log, bounded optional providers,
+exact-byte delivery candidates and separate historical probes.
 
-**Next release target: 0.4.0.** The
-[17 November release audit](docs/wtop-release-readiness-2026-11-17.md) separates
-implemented features from remaining correctness, lifecycle, presentation,
-packaging and native-support gates. It identifies open system-commit/CPU-sampling
-semantics and bulk-result/freshness gaps; current CI does not close those cases.
-The [NTop fork audit](docs/ntop-fork-audit-2026-11-17.md) records useful external
-ideas, already inherited fixes and patches that should not be imported unchanged.
-Neither audit changes the application version or announces a release.
+**This is not a supported 0.4.0 release.** Modern x86/x64/ARM64 builds, native
+execution and packaging checks have different evidence scopes. The current
+[implementation and verification record](docs/implementation-verification-2026-11-17.md)
+records failures, fixes and remaining gates. DOS/Win16/OS2 probes are not full
+monitors; Win9x, early NT, CE, RT, WinPE and ReactOS support is unqualified.
+There is no published WinGet package, stable installer or native GUI.
+
+The [earlier release audit](docs/wtop-release-readiness-2026-11-17.md) and
+[NTop fork audit](docs/ntop-fork-audit-2026-11-17.md) remain evidence for their
+pinned source revisions. They are not descriptions of this newer implementation.
 
 ## Start here
 
@@ -35,8 +36,8 @@ Neither audit changes the application version or announces a release.
 - [Current native TUI/settings evidence](docs/presentation-verification.md).
 - [0.4.0 / 1.0.0 release readiness](docs/wtop-release-readiness-2026-11-17.md) and
   [NTop fork source audit](docs/ntop-fork-audit-2026-11-17.md).
-- [Implementation design](docs/implementation-plan-2026-11-17.md): proposed
-  interfaces, reuse boundaries, tests and integration slices for the remaining work.
+- [Implementation design](docs/implementation-plan-2026-11-17.md) and
+  [current implementation record](docs/implementation-verification-2026-11-17.md).
 - [Distribution, paths and removal](docs/installation.md).
 - [Codex workflow](docs/codex.md), [contribution guide](CONTRIBUTING.md) and
   [repository instructions](AGENTS.md).
@@ -65,6 +66,13 @@ wtop --snapshot --format text -n explorer -s CPU%
 wtop --snapshot --format json -p 1234 > snapshot.json
 wtop --no-config --write-config .\wtop.conf
 wtop --config .\wtop.conf
+wtop --paths --format json
+wtop --portable --tui
+wtop query system --per-core --format json
+wtop query services --format json
+wtop inspect 1234 --command-line --services --format json
+wtop log --output .\observations.jsonl --samples 10 --interval 1000
+wtop log --output - --duration 5000 --max-bytes 1048576
 ```
 
 `wtop` defaults to the TUI and requires console input and output. Redirected
@@ -79,20 +87,27 @@ collector; it is not a full runtime probe.
 | `--tui` | Interactive process table, also the default. |
 | `--snapshot`, `--dump`, `-d` | Collect a bounded snapshot and print text or JSON. |
 | `--format text` or `--format json` | Select output format; alone selects snapshot mode. |
-| `--interval MILLISECONDS` | Sampling/redraw interval, 50–60000 ms; default 1000 ms. |
+| `--interval MILLISECONDS`; `--delay DECISECONDS` | 50–60000 ms or 1–600 deciseconds; default 1000 ms. `-d` retains NTop's dump meaning. |
+| `query processes\|system\|services`; `inspect PID` | Shared snapshot model; inspect can request `--command-line` and `--services`. |
+| `--per-core` | Optional isolated PDH provider; physical collection requires at least one second. |
+| `log --output PATH\|-` | JSONL only; explicit sample count or duration required. Default 16 MiB complete-record output cap; existing files are refused. |
+| `--cpu-normalization core\|machine` | Default one core = 100%; machine uses the observed active logical processor capacity. |
+| `--readonly` | Disable process mutations, shell execution and configuration saves; explicitly requested telemetry logging remains permitted. |
+| `--paths` | Resolve module/configuration/owner paths without loading settings or starting collectors. |
+| `--portable`; `--portable-root PATH` | Explicit portable ownership beside the executable or in a named directory. No implicit installation. |
 | `--capabilities` | Build features and explicit unavailable areas. |
-| `--help`, `-h`; `--version`, `-v` | Print metadata and exit before collection. |
+| `--help`, `-h`; `--version`, `-v`, `-V` | Print metadata and exit before collection. |
 | `--config PATH`; `--no-config` | Read an explicit configuration, or disable file settings and implicit TUI save destination. These options conflict with each other. |
 | `--write-config PATH` | Explicitly write effective settings to the named file and exit without process collection. Can be combined with `--no-config` to export defaults and CLI overrides. |
 | `--keymap htop\|vi\|vim\|emacs` | Select controls; `vim` aliases `vi`. Default `htop`. |
 | `--theme htop\|ntop\|monochrome` | Select a built-in palette; default `htop`. Selecting a theme resets its color roles. |
-| `-C` | Force monochrome presentation after theme selection. |
-| `--mouse auto\|on\|off`; `--no-mouse` | Request native mouse reporting with keyboard fallback; default `auto`. `--no-mouse` means `off`. |
-| `--status-bar`; `--no-status-bar` | Show/hide the last-row function bar; shown by default. Prompts and error messages remain available. |
-| `-p PID,PID` | Filter process IDs. |
-| `-n NAME,NAME` | Filter names by case-sensitive substring. |
-| `-u USER` | Filter by exact owner account name, case-insensitively. |
-| `-s COLUMN` | Sort by ID, USER, PRI, CPU%, MEM, THRD, I/O, AGE or PROCESS. |
+| `-C`, `--no-color`, `--no-colour` | Force monochrome presentation after theme selection. |
+| `--mouse auto\|on\|off`; `--no-mouse`, `-M` | Request native mouse reporting with keyboard fallback; default `auto`. `--no-mouse` means `off`. |
+| `--status-bar` / `--function-bar`; negative forms | Show/hide the last-row function bar; shown by default. Live status, prompts and errors remain visible. |
+| `-p`, `--pid PID,PID` | Filter process IDs. |
+| `-n`, `--name NAME,NAME` | Filter names by case-sensitive substring. |
+| `-u`, `--user USER` | Exact SID or resolved account name. Unresolved name filtering is explicitly partial. |
+| `-s`, `--sort-key COLUMN` | Sort by ID, USER, PRI, CPU%, MEM, THRD, I/O, AGE or PROCESS. |
 | `--gui` | Reserved; returns an explicit unsupported-mode error. |
 
 CLI settings override file settings. `--write-config` is a separate action and
@@ -101,25 +116,44 @@ process selectors. It does accept presentation preferences to be saved. Help,
 version and capability output do not write configuration. Ordinary startup and
 exit also make no settings write.
 
-The JSON snapshot is an initial versioned schema. A field carries its availability
-state, and unavailable values are `null`, never an invented zero. Exact 64-bit
-integers, including process creation FILETIME, working-set bytes and age in
-milliseconds, use decimal strings so ordinary JSON consumers retain precision.
-CPU is the process share of the system sampling denominator; the I/O counter is
-process read/write transfer activity, not a claim of physical disk bandwidth.
-Commit is committed memory, not page-file residency. The TUI keeps decimal byte
-units in compact values such as `1.2GB` and `123MB/s`; elapsed age uses explicit
-units such as `2m05s`, `2h03m` or `2d03h`. Narrow fields must not silently turn a
-clipped number into a different measurement. See
-[metric semantics](spec/architecture/model-metrics.md).
+### Measurements and output compatibility
 
-Dedicated `query`, `inspect`, continuous `log`, install/uninstall commands, richer
-runtime negotiation and provider backends are roadmap items. Do not infer them
-from planned command-catalog entries.
+Snapshot JSON **schema 2** contains a typed system summary, process records and
+requested provider results. It replaces the old ambiguous `cpu_share` with
+`cpu_percent`; the default is one core = 100%, so a multithreaded process can
+exceed 100%. CPU uses exact execution-counter subtraction and measured QPC
+observation intervals. `--cpu-normalization machine` names its active-CPU
+capacity. System commit is `CommitTotal * PageSize` against `CommitLimit`,
+separate from physical memory and page-file residency.
+
+Unavailable values have status and `null`, never invented zero. Exact 64-bit
+integers use decimal strings. Each observation retains its collection timestamps;
+process freshness is three requested intervals, and optional per-core data has
+its own observation time. The TUI shows stale/partial state. `owner.value` is a
+SID; optional `account_name`, its status and observation time are separate.
+Process I/O is read/write transfer activity, not physical disk bandwidth.
+
+Information output remains schema 1. Unknown/malformed options fail with exit 2;
+runtime failure is 1, explicit partial/provider/capacity results are 3,
+cooperative cancellation is 130, and forced own-process shutdown is 124.
+Long options accept `--name=value`; option aliases and units are independent of
+keymap. Help is generated from the checked command catalog. See the
+[CLI/output compatibility contract](docs/cli-output.md) for fields, statuses, units
+and exit/stream semantics.
+
+Logging stays in the foreground, creates an explicitly named new file (or writes
+to stdout), and requires `--samples` and/or `--duration` in milliseconds. It stages
+each complete JSON record before committing within `--max-bytes`. Known waits are
+shortened to the remaining duration. Duration is a collection stopping condition,
+not a hard deadline for arbitrary blocking native calls or output devices. The
+same qualification applies to baseline collection and emergency shutdown; see
+[provider/lifecycle limits](docs/implementation-verification-2026-11-17.md).
 
 ## Interactive controls
 
-The function keys provide a common route through all three keymaps. Process
+The table below describes process-view keys. Help, Setup, editors, confirmations
+and retained action results have their own context labels and disabled reasons,
+shared by keyboard and mouse. The function keys provide a common route through all three keymaps. Process
 mutations require native permissions and a revalidated process creation identity;
 PID reuse or unavailable identity must not turn a selection into another process.
 
@@ -168,12 +202,12 @@ closes the panel. Column settings belong to the active tab; meters, colors,
 keymap, mouse, interval and bar visibility are global.
 
 The function bar is shown on the final row by default. Hiding it returns that
-row to the view; active prompts and errors are still displayed. Its current
-F1–F10 cells remain common navigation across panels; fully contextual overlay
-labels are a remaining roadmap task. The view starts
-with **Main** and **I/O** tabs. Each tab has its own columns, order, filter, sort
-direction and tree preference. Setup changes visibility/order; creating,
-renaming or removing tabs currently requires editing the configuration file.
+row to the view; active prompts and errors are still displayed. Labels and enabled states follow the active context. The adjacent live status
+reports freshness, view/filter/sort, selections and unsaved changes. The view
+starts with **Main** and **I/O** tabs. Each tab has its own columns, order, filter, sort
+direction and tree preference. Setup supports visibility/order and bounded create, duplicate, rename and confirmed
+delete operations. Stable numeric IDs follow tabs through reordering; eight tabs
+are the limit, and at least one remains visible.
 
 Mouse input uses native console reporting when available. Click process rows to
 select, headers to sort, tabs to switch, or function cells to invoke their
@@ -183,8 +217,10 @@ While a text editor is active, other mouse controls are ignored; function keys
 and function-bar actions cancel that editor before changing context. Cancelling
 a live filter restores its prior value. Console-host behavior, resize races and
 visual usability require native acceptance, not just portable key-map tests.
-CJK/combining-character display-cell width remains an open renderer qualification;
-valid UTF-8 settings alone do not establish full Unicode layout support.
+The current renderer projects each non-ASCII Unicode scalar to a single `?` cell
+and reports substitution; raw strings are retained in settings/JSON. This makes
+clipping and mouse geometry deterministic. A true CJK/combining/emoji cell renderer
+remains separate qualification work.
 
 ### Color roles
 
@@ -215,7 +251,8 @@ current defaults are in [source/wtop.conf](source/wtop.conf);
 current example follows:
 
 ```text
-ConfigVersion 1
+ConfigVersion 2
+NextTabId 3
 Theme htop
 Keymap htop
 Mouse auto
@@ -225,6 +262,7 @@ RedrawInterval 1000
 HeaderRows title,cpu,memory,commit,summary
 TabCount 2
 ActiveTab 0
+Tab0.Id 1
 Tab0.Name Main
 Tab0.Visible 1
 Tab0.Sort CPU%
@@ -232,6 +270,7 @@ Tab0.Descending 1
 Tab0.Tree 0
 Tab0.Columns ID,USER,PRI,CPU%,MEM,THRD,I/O,AGE,PROCESS
 Tab0.Filter ""
+Tab1.Id 2
 Tab1.Name I/O
 Tab1.Visible 1
 Tab1.Sort I/O
@@ -262,8 +301,11 @@ Configuration discovery and explicit save destinations are described in
 [installation and storage](docs/installation.md) and the
 [configuration contract](spec/configuration/settings.md). No settings are saved
 simply by quitting. F2 `s`, `:save` and `--write-config PATH` are the explicit write
-routes; a failure is reported and must preserve the previous file. Full managed
-installation ownership and migration remain separate work.
+routes; a failure is reported and must preserve the previous file. Version 2 migrates older settings on an explicit save, assigns stable tab IDs and
+retains a recovery backup. Native writes compare the loaded bytes, use a
+cooperative zero-wait lock and verify replacement; concurrent changes are refused.
+Candidate MSI ownership detection is implemented; installer qualification remains
+separate work.
 
 ## Source layout and build
 
@@ -271,7 +313,11 @@ installation ownership and migration remain separate work.
 | --- | --- |
 | `source/ntop.c`, `source/ntop.h` | NTop-derived native process collection, console adapter and application lifecycle; extraction remains incremental. |
 | `source/util.c/.h`, `source/vi.c/.h` | Native helpers and explicit command/editor handling. |
-| `source/core.c/.h`, `source/settings.c/.h`, `source/ui.c/.h` | Portable option/format helpers, settings model/parser and key/action/layout policy. |
+| `source/core.c/.h`, `source/settings.c/.h`, `source/ui.c/.h` | Portable options, settings and contextual action/layout policy. |
+| `source/metrics.c/.h`, `source/actions.c/.h`, `source/text.c/.h` | Exact counters, typed action results, bounded Unicode decoding and conservative cell projection. |
+| `source/settings_store_nt.c/.h`, `source/providers_nt.c/.h`, `source/output_nt.c/.h` | Native settings transactions, isolated optional collection and complete-record logging. |
+| `source/legacy/` | Independently built capability probes, not historical monitor support. |
+| `packaging/`, `tools/package_candidate.py` | Exact-payload ZIP/MSI candidates, PE inspection and acquisition tooling; release promotion is blocked. |
 | `source/wtop.conf` | Complete current default configuration generated from the settings model. |
 | `source/ntop.conf` | Legacy NTop configuration retained as an import example. |
 | `source/build.bat` | Convenience wrapper around the root CMake build. |
@@ -288,7 +334,7 @@ cmake --build out/windows-x64 --config Release --parallel 2
 ctest --test-dir out/windows-x64 -C Release --output-on-failure
 ```
 
-The portable core/settings/UI policy can be tested on a development host. Python
+The portable core/settings/UI/metrics/actions/text policy can be tested on a development host. Python
 is used by repository checks, not by the application. See
 [development instructions](docs/development.md) for host tests, target choices,
 native verification and CI limitations. CI builds candidates and never creates a

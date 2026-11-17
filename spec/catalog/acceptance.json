@@ -258,7 +258,7 @@
         "WT-REQ-040-01"
       ],
       "method": "native",
-      "oracle": "Run from a different working directory with explicit, adjacent, legacy and user sentinel configs, denied/malformed paths and --no-config; verify read source, precedence and zero writes.",
+      "oracle": "Use explicit, portable, adjacent, legacy, registered user/machine and unrelated-current-directory sentinels; include denied/malformed paths and `--no-config`. Verify owner/source/read/write fields, exact no-config path output, preference precedence and zero startup/exit/path-query writes.",
       "status": "not_run",
       "evidence": []
     },
@@ -268,7 +268,7 @@
         "WT-REQ-040-02"
       ],
       "method": "native",
-      "oracle": "Read-only portable, multi-user and side-by-side install fixtures preserve sentinels and disclose inability to save.",
+      "oracle": "Exercise markers, explicit roots, both registry scopes, wrong/absent owner records, read-only media, unavailable folder resolution, multiple users and side-by-side profiles. Preserve sentinels and disclose missing save destinations. Candidate MSI fixtures do not promote installer support.",
       "status": "not_run",
       "evidence": []
     },
@@ -278,7 +278,7 @@
         "WT-REQ-040-03"
       ],
       "method": "fixture",
-      "oracle": "Malformed, oversized, unknown-key and interrupted-save fixtures cannot execute content or destroy the original.",
+      "oracle": "Test malformed/oversized input, both legacy formats, v2 identity validation, ID exhaustion, insert/duplicate/rename/reorder/hide/delete, unknown fields on moved/deleted/unknown scopes, and exact-byte migration recovery. Include defaults exported over a legacy destination and future-schema refusal.",
       "status": "not_run",
       "evidence": []
     },
@@ -498,7 +498,7 @@
         "WT-REQ-040-04"
       ],
       "method": "native",
-      "oracle": "Exercise explicit/legacy/user destinations, unavailable folder lookup, denied/read-only/missing parent, external changes, existing-file preservation, temporary cleanup and restart round-trip; ordinary startup/exit makes no settings write.",
+      "oracle": "Exercise existing/new destinations, readonly policy, missing parents, foreign/stale locks, exact external edits, concurrent writers, flush/close failures, partial replacement failures, committed-but-unverified outcomes, retained migration originals and recovery files, restart round-trips and independent export provenance. Qualify actual artifacts/filesystems and interruption behavior separately; do not substitute source inspection or mocked failure injection for native runtime evidence.",
       "status": "not_run",
       "evidence": []
     },

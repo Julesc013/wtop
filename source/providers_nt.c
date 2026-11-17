@@ -265,6 +265,7 @@ static int valid_response(const response_packet *packet, const request_packet *r
        result->kind != request->request.kind || result->pid != request->request.pid ||
        result->creation.dwHighDateTime != request->request.creation.dwHighDateTime ||
        result->creation.dwLowDateTime != request->request.creation.dwLowDateTime ||
+       result->retirement_confirmed || result->response_received ||
        result->state < WTOP_PROVIDER_VALID || result->state > WTOP_PROVIDER_ADMISSION_CLOSED ||
        result->error_domain < WTOP_PROVIDER_ERROR_NONE || result->error_domain > WTOP_PROVIDER_ERROR_EXIT_CODE ||
        result->started_ms > result->observed_ms || result->count > result->total_count || !(result->elapsed_ms >= 0) || result->elapsed_ms > DBL_MAX ||
@@ -304,6 +305,7 @@ wtop_provider_state wtop_provider_collect(wtop_provider_session *session,
     response_packet *response;
     ULONGLONG started;
     DWORD received = 0;
+    int response_validated = 0;
     wtop_provider_state state;
     if(!result) return WTOP_PROVIDER_ERROR;
     memset(result, 0, sizeof(*result)); result->state = WTOP_PROVIDER_ERROR;
@@ -339,6 +341,11 @@ wtop_provider_state wtop_provider_collect(wtop_provider_session *session,
         }
         if(got && !remaining) { result->state = WTOP_PROVIDER_PROTOCOL; break; }
         received += got;
+        if(received == sizeof(*response) && !response_validated) {
+            if(!valid_response(response, &packet)) { result->state = WTOP_PROVIDER_PROTOCOL; break; }
+            response_validated = 1;
+            result->response_received = 1;
+        }
         if(cancel_event && WaitForSingleObject(cancel_event, 0) == WAIT_OBJECT_0) { result->state = WTOP_PROVIDER_CANCELLED; break; }
         if(WaitForSingleObject(session->process, 0) == WAIT_OBJECT_0) {
             DWORD exit_code = 0;
@@ -359,6 +366,7 @@ wtop_provider_state wtop_provider_collect(wtop_provider_session *session,
             if(!valid_response(response, &packet)) { result->state = WTOP_PROVIDER_PROTOCOL; break; }
             *result = response->result;
             result->retirement_confirmed = 1;
+            result->response_received = 1;
             release_exited(session);
             free(response);
             return result->state;

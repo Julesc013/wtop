@@ -13,8 +13,8 @@ sources: [{"id": "user", "resource": "../references/sources.json#user"}]
 # Invocation and command model
 
 [commands.json](../catalog/commands.json) owns tokens, arguments, defaults,
-candidate/implemented status and acceptance references. Documentation and later
-help generation derive from that registry. At this bootstrap, registry candidate
+candidate/implemented status and acceptance references. Documentation and checked
+help generation derive from that registry. Registry candidate
 means implementation is being developed and needs evidence; planned entries must
 not be advertised as completed commands.
 
@@ -42,8 +42,33 @@ selectors. Presentation settings, interval and active-tab sort can be exported.
 Its destination and encoding are documented by the settings contract; it is not
 an installer.
 
-Future query/inspect/log/export and typed process actions share the model and
-selector parser. Do not overload ambiguous positional words or execute an unknown
+Candidate `query processes|system|services`, `inspect PID` and finite `log`
+now share the model and selector parser. Inspect accepts optional command-line
+and service providers; snapshots/query/log can request per-core collection.
+`query system|services` does not open every process for unused row metrics.
+`--paths` resolves ownership without loading configuration or collecting processes.
+`--readonly` blocks process mutations, shell execution and settings writes, while
+explicit telemetry logging is permitted. Typed CLI mutation commands remain planned.
+
+Inherited `-d` remains dump; htop's decisecond delay is spelled `--delay` (1..600).
+`--interval` is milliseconds (50..60000); later values win. Short/long aliases are
+keymap-independent; long options accept equals syntax. A final `--` is accepted,
+but unsupported positional operands still fail. Help is generated from the sole
+command catalog and CI checks it for drift.
+
+Snapshot schema 2 replaces `cpu_share` with `cpu_percent` plus named core/machine
+normalization, adds typed system totals, per-observation timing and optional
+provider results. Information commands remain schema 1. Exact 64-bit values are
+decimal strings; unavailable values are null with status. Account SID is the
+stable owner value; display-name lookup carries separate state and timing.
+
+`log --output PATH|-` requires `--samples` and/or `--duration` in milliseconds;
+its output is JSON Lines with a default 16 MiB complete-record cap. Existing
+files are refused. Sampling and optional-provider waits are clamped to remaining
+duration, but blocking native calls/streams have no hard wall-time guarantee.
+The output cap does not cap temporary staging I/O: one bounded full model record
+is staged before its size is checked. No background service is created.
+ Do not overload ambiguous positional words or execute an unknown
 command through a shell. Inherited :exec remains an explicit interactive shell
 action, never a configuration or telemetry interpretation. New process mutations
 require explicit target identity and action, with per-target outcomes.
@@ -56,11 +81,14 @@ does not modify terminal buffers or cursor state. Broken pipes and cancellation
 are handled without success claims for an incomplete requested export.
 
 The baseline exit policy is 0 for completed success, 1 for runtime failure,
-2 for invalid/conflicting/unavailable invocation, and a distinct documented
-cancellation result where the host supports it. Partial results include explicit
+2 for invalid/conflicting/unavailable invocation, 3 for explicitly partial/provider/capacity results, 130 for cooperative
+cancellation and 124 for emergency own-process shutdown. Partial results include explicit
 status and may require a nonzero exit; each future command decides this in its
 registry entry. Unknown options and malformed numeric/CSV selectors are errors,
 not silently ignored. Numeric parsing checks signs, overflow and trailing bytes.
+
+The [candidate output contract](../../docs/cli-output.md) records schema-2 field
+types, provider error domains, identity/timing and exit semantics.
 
 ## Requirements and acceptance
 

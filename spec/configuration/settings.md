@@ -12,121 +12,299 @@ sources: [{"id": "user", "resource": "../references/sources.json#user"}, {"id": 
 
 # Configuration, themes and storage paths
 
-The current settings work extends the compatibility reader with an explicit
-save/export operation and versioned presentation preferences. Normal startup/exit
-stays read-only. Saving requires an explicit action and a disclosed destination;
-no first-run migration, implicit writeback, registry operation or managed-install
-claim follows from that action. Full installed/portable ownership detection and
-migration remain planned.
+This is the settings contract for the current version-2 implementation candidate.
+Implemented source and host-side tests are not proof of historical Windows
+support, crash durability, installation qualification or a stable release. The
+native NT adapter, portable data model and delivery candidates have separate
+responsibilities; an old target needs its own qualified storage adapter.
 
-Current read precedence is explicit --config PATH; otherwise an existing
-executable-adjacent wtop.conf, legacy ntop.conf, then the roaming user's
-Wtop/wtop.conf, then compiled defaults. This chooses one settings source rather
-than implicitly merging files. Errors in an existing selected file are reported,
-not bypassed by falling through to another profile. --no-config disables file
-reads and the implicit TUI save destination; an explicitly named --write-config
-PATH remains allowed and performs no process collection.
+## Model and precedence
 
-Explicit TUI save writes the selected --config path or adjacent wtop.conf; an
-imported adjacent ntop.conf saves to sibling wtop.conf and leaves the legacy file
-unchanged. With no adjacent file, the candidate resolves the roaming user folder
-without creating it during lookup and saves to Wtop/wtop.conf only on request.
-The selected user subdirectory may be created for explicit saving; an arbitrary
-explicit destination requires an existing parent. An unavailable user-folder API
-leaves in-memory operation usable and saving unavailable. Never fall back to a
-different writable folder after a save failure. Expose the resolved destination.
+One selected configuration document is applied over compiled defaults, followed
+by CLI preference overrides. There is no implicit merge of adjacent, user and
+machine files. Loading, ordinary startup and exit are read-only. An existing
+selected file that is malformed, denied or unsupported is reported as an error;
+Wtop must not silently bypass it by selecting a different profile.
 
-The current NT adapter resolves roaming AppData through optional SHGetFolderPath
-without CSIDL_FLAG_CREATE. This is a native implementation choice, not an old-OS
-support claim or managed-install detection. Side-by-side instances still need a
-qualified concurrent-edit policy: checking loaded bytes before replacement can
-catch ordinary changes but is not a filesystem compare-and-swap transaction.
+The resolver applies this order:
 
-The eventual precedence is command-line override, explicit config path, explicit
-portable root, installed user preference, system defaults, compiled defaults.
---no-config suppresses all file-derived settings. Never use the current working
-directory as an implicit configuration search root: it may be an untrusted or
-unrelated folder. Executable-relative paths are resolved from the actual module
-path, not argv[0]. An explicit portable mode/marker establishes ownership; a
-writable executable directory alone does not.
+1. `--no-config` suppresses file-derived settings, installation-owner discovery
+   and the implicit TUI save destination. The actual module path is still
+   resolved. An explicit `--write-config PATH` remains allowed unless readonly
+   policy forbids writes.
+2. `--config PATH` selects that exact document and save destination. It conflicts
+   with `--no-config` and explicit portable selection.
+3. `--portable-root DIR`, `--portable`, or an executable-adjacent `wtop.portable`
+   file selects portable ownership. An explicit root is independent of the
+   executable's placement; otherwise the actual module directory is used. Read
+   `wtop.conf`, then legacy `ntop.conf`, then defaults. Save to `wtop.conf` under
+   that same root. Do not fall through to an installed user profile.
+4. A registered owner matched to the actual module directory selects installed
+   user or machine ownership. Read the current user's roaming `Wtop/wtop.conf`,
+   then machine application-data `Wtop/wtop.conf`, then defaults. Explicit saves
+   target the current user's file. A machine default is never edited in place.
+5. An unregistered executable retains compatibility discovery: adjacent
+   `wtop.conf`, adjacent legacy `ntop.conf`, user roaming `Wtop/wtop.conf`, then
+   defaults. An adjacent file owns its selected save path; legacy input saves to
+   sibling `wtop.conf`. Otherwise the resolved user file is the save target.
 
-A future portable ZIP may carry an explicit wtop.portable marker; a bare
-executable can be forced into portable mode with the planned --portable option.
-An installed/package-managed executable is identified through a registered
-installation owner record matched against its canonical path. Do not infer
-ownership from a writable directory or a hard-coded WinGet default path.
-An unregistered bare executable still runs without installation; absent an
-explicit persistence choice it must not create machine integration or write
-settings implicitly. This detection/write policy is planned, not a claim about
-the current explicit-reader/save candidate.
+The current directory is never an implicit search root. An explicitly supplied
+relative config, export or portable-root path is resolved against the caller's
+current directory once because that path was requested. Module-relative lookup
+uses the actual module path, not `argv[0]`. A writable directory is not proof of
+portable ownership or managed installation. Explicit portable selection precedes
+registration. `--no-config` overrides an accompanying portable selection.
 
-Portable settings live under the chosen portable root, alongside the application
-or a named data subdirectory. A read-only portable folder remains usable with
-defaults and an explicit diagnostic; do not silently fall back to an installed
-profile or write elsewhere. Installed modern Windows preferences/themes/keymaps
-belong under the user's roaming application-data Wtop directory, while caches,
-history/logs and machine-specific state belong under local application data.
-System defaults belong under the machine application-data location, remain
-read-only to ordinary users and never replace individual preferences.[^known-folders]
-The planned modern paths are %APPDATA%\Wtop\wtop.conf for roaming
-preferences, %APPDATA%\Wtop\themes and keymaps for user customization,
-%LOCALAPPDATA%\Wtop for machine-specific cache/history, and
-%PROGRAMDATA%\Wtop for system defaults. Use known-folder APIs, not literal
-environment-string concatenation; the strings describe roles, not fixed paths.
+## Ownership and native path resolution
 
-An all-users program install still uses each user's own settings. It does not
-write mutable preferences under Program Files. Legacy profiles use an explicitly
-qualified adapter and distinguish real per-user isolation from mere directory
-convention. DOS/early single-user systems may expose only a selected configuration
-directory. WinPE uses an explicit writable external path or in-memory settings.
-Package-manager payload directories are not durable user-data locations. A
-manager may replace files or remove an extracted package directory during update
-or uninstall; installed preferences therefore stay under the separate user root.
+The native candidate reads up to 128 child records from
+`HKCU\Software\Wtop\Installations`, then HKLM in the executable's registry
+view. A child matches when `SchemaVersion` is REG_DWORD `1` and `InstallPath` is
+an absolute REG_SZ payload directory that canonicalizes to the module directory.
+HKCU wins a dual match. Lookup writes no registry values. Registration guides
+settings ownership; it is not authentication of an installation or verification
+of a binary's provenance.
 
-Use a small versioned declarative file with stable keys, bounded line/value/file
-lengths and comments. Unknown safe keys survive supported edits. A malformed file
-does not trigger partial writes or a shell action. Migration preserves the original, records schema versions and changes only owned files.
-The initial compatibility reader does not silently migrate legacy input. Saving uses a
-same-directory temporary file, checked flush and replacement where the target
-supports it; degraded durability on old filesystems is disclosed.
+The candidate MSI uses a canonical target profile as the child key and adds
+string values `Owner=msi`, `ProductCode` and `PayloadSha256`. Its authoring and
+ownership guard remain unqualified delivery work. A future package-manager path
+must either supply an agreed owner record or explicitly select suitable storage;
+Wtop does not infer WinGet ownership from directory names or generic uninstall
+metadata. See [delivery](../distribution/packaging.md) and
+[the current packaging implementation](../../packaging/README.md).
 
-The initial presentation model contains built-in theme selection with color-role
-overrides, htop/vi/Emacs keymap selection, mouse and function-bar preferences,
-ordered visible header rows, and bounded named tabs with ordered stable column
-IDs, sort direction and tree preference. Main and I/O are initial real views.
-Reject duplicate columns/tabs, invalid IDs, unsupported versions and oversized
-values before applying a partial configuration. Preserve unknown inert records
-within declared limits; syntax outside those limits fails explicitly.
+On the native NT candidate, optional `SHGetFolderPathW` resolves roaming/common
+application data without a create flag. The role names `%APPDATA%\Wtop` and
+`%PROGRAMDATA%\Wtop` are explanatory; resolution does not simply concatenate
+those environment strings. If the user folder cannot be resolved, memory-only
+operation remains possible and the implicit save path is unavailable. The
+application-owned user `Wtop` directory may be created during an explicit save.
+Arbitrary explicit export parents and portable roots are not automatically
+created. Read-only portable media never causes an undisclosed fallback.
 
-Themes contain color roles and optional glyph choices. Keymaps name command IDs;
-column profiles name metric IDs. Paths and overrides have one resolver shared by
-CLI/TUI/install code. Report the resolved path and source on demand without
-leaking unrelated environment or credentials. Logs are opt-in and bounded.
+Existing paths use handle-based `GetFinalPathNameByHandleW` when available;
+absent destinations resolve through their parent where possible. Older APIs
+have a disclosed lexical fallback. This canonicalization reduces ordinary
+case/short-name/reparse aliases but is not a general filesystem race barrier.
+Settings inputs and existing destinations must be disk files with one link;
+hard-linked files and directories are refused. Native calls are synchronous and
+have no hard elapsed-time bound.
 
-[^known-folders]: Microsoft's modern folder roles; older APIs require a target adapter.
+An all-users installation uses each user's own mutable preferences outside the
+payload. Current theme/keymap/color/view preferences are inline in `wtop.conf`;
+separate theme/keymap directories and automatic cache/history storage are not
+implemented. Logs are explicit, bounded telemetry outputs at the requested path.
+Historical systems, WinPE and systems without a usable user-folder API can use a
+qualified explicit-path adapter or in-memory operation; the modern NT source is
+not evidence that those systems run it.
+
+## Path inspection and readonly behavior
+
+`--paths` returns resolution only, before settings parsing, collection or TUI
+initialization. It may inspect module/file metadata, read owner registration and
+resolve native folder roles; it creates no files or registration. A malformed or
+absent explicit config can therefore be reported without claiming it will load.
+The current text/JSON surfaces use one resolver.
+
+The JSON object has schema `1`, kind `settings-paths`, and these fields:
+
+| Field | Contract |
+| --- | --- |
+| `owner` | `memory`, `explicit`, `portable`, `installed-user`, `installed-machine`, or `unregistered`. |
+| `source` | `compiled`, `explicit-file`, `portable-file`, `adjacent-file`, `legacy-file`, `user-file`, or `machine-defaults`. |
+| `module` | Actual resolved executable path, including when `--no-config` is selected. |
+| `read`, `write` | Resolved source and implicit save paths; empty means no selected source/destination. |
+| `saving_disabled` | True for `--no-config` or `--readonly`; this policy flag does not establish destination writability or availability. |
+| `canonical_aliases` | Whether the handle-based canonicalization API is available; not proof that every absent path or future race is resolved. |
+
+For `--paths --no-config`, owner is `memory`, source is `compiled`, read/write are
+empty and saving is disabled. Config/installation-owner discovery is skipped;
+module identity is retained. `--readonly` retains normal resolution but forbids
+settings writes through TUI and export. Explicit telemetry logging is allowed by
+that policy. A new `--paths` invocation cannot report recovery names from a prior
+process; those belong to the original transaction's diagnostics and filesystem.
+
+## Version 2 and stable views
+
+Configuration is a bounded inert UTF-8 document, not executable content. Current
+limits are 32768 file bytes, 1023 bytes per physical line, eight views, nine
+columns, five ordered header-row roles, 31 UTF-8 bytes per view name and 127 bytes
+per view filter. Parsing validates the complete candidate before replacing the
+live model or owned original document. Unsupported future versions, malformed
+reserved keys, duplicate recognized keys, duplicate columns/names/IDs and invalid
+UTF-8 fail explicitly. Comments and supported unknown inert keys survive edits
+within the document limits.
+
+`ConfigVersion 2` requires `NextTabId` and `TabN.Id` for every active view. Each
+identity is an explicitly bounded positive 32-bit integer, independent of its
+name or index and of the compiler's `unsigned long` width. `NextTabId` is a
+monotonic allocator; zero means exhaustion, and IDs are not silently reused.
+Fresh defaults have Main/I/O identities 1/2 and next identity 9. Missing version
+and version 1 are legacy input with deterministic identity assignment; identity
+fields in those formats are refused rather than reinterpreted.
+
+Insert, duplicate, rename, reorder, delete and visibility edits validate a copy
+before changing the model. At most eight views and at least one visible view are
+retained. The active view follows its stable identity when views move. Duplicate
+copies recognized presentation settings and consumes a new identity; it does not
+silently duplicate unknown extension ownership.
+
+For an editable source document, every scoped `TabN.*` record is bound to its
+original view ID. Saving a reorder rewrites only its positional prefix so known
+and unknown fields follow the same view. Explicit deletion preserves unknown
+fields for the removed identity as inert comments. An unknown scoped field
+outside the document's original view set has no provable owner: serialization
+refuses that ambiguous rewrite rather than assigning it to another view.
+Oversized preservation output also fails before filesystem mutation.
+
+The implemented presentation model includes htop/vi/Emacs keymaps, htop/NTop/
+monochrome built-in themes, color-role overrides, mouse/function-bar/tab-strip
+preferences, ordered visible header rows and named views with filters, ordered
+stable column IDs, sort direction and tree preference. The exact Setup exposure
+and bindings are specified by [the TUI contract](../interfaces/tui.md); settings
+storage is not a claim that every future UI feature is implemented.
+
+## Explicit migration and independent export
+
+Loading legacy/version-1 input does not migrate it on disk. An explicit save
+writes version 2 and records migration. Replacing an older destination retains
+its original bytes in
+`<destination>.migration-original-<pid>-<tick>-<sequence>`. If source and new
+destination differ, such as `ntop.conf` to absent sibling `wtop.conf`, the old
+source remains untouched. Target schema is tracked independently of source
+schema: exporting defaults with `--no-config` over a version-1 destination must
+still retain that destination's original. Migration originals have no automatic
+expiry and must not be deleted by generic cleanup or store disposal.
+
+`--write-config PATH` owns a separate store and a deep copy of the selected
+editable document. It must not rebase active source ownership, comments or dirty
+revision. An existing export target is privately validated as a supported
+configuration before replacement; its values are not applied to the live model.
+Future-version and malformed destinations are refused. Export preserves the
+selected source's supported extensions, not a merge of unrelated destination
+extensions. Arbitrary existing files are not a general output-overwrite API.
+
+## Save transaction, concurrency and recovery
+
+Settings have a live revision. Save captures a revision and serializes the full
+validated candidate before any replacement. A verified completion clears dirty
+state only if the live revision still equals that captured revision. Failed or
+unverified saves retain edits. Current TUI saves are synchronous; this revision
+rule also prevents a later asynchronous adapter from clearing newer edits.
+
+The native candidate performs the following explicit transaction:
+
+1. Validate the candidate, resolve an already selected destination and ensure its
+   exact loaded bytes/existence are available as the baseline.
+2. Make one exclusive `CREATE_NEW` attempt for the destination's `.wtop-lock`
+   sidecar, using delete-on-close for the owned handle. An existing lock returns
+   `busy` without waiting or deleting a sentinel. Filesystem crashes may leave a
+   stale name requiring inspection.
+3. Compare exact destination bytes/existence against the baseline under the
+   cooperative lock. Refuse an external change or a file that appeared after
+   source selection/loading. Do not silently adopt bytes never applied to the UI.
+4. Create an exclusive same-directory `.wtop-tmp-*` candidate, with at most 16
+   name attempts, and check write, flush and close. Recheck the baseline before
+   replacement.
+5. For an existing file, reserve an owned `.wtop-backup-*` or migration-original
+   sibling and call `ReplaceFileW` without flags that ignore merge/ACL failures.
+   For a new file, use non-overwriting `MoveFileExW`. A racing creation is a
+   conflict. Replacement metadata/durability remains a native qualification case.
+6. Reopen and compare the installed destination with the exact candidate. Only
+   verified completion adopts the candidate document and saved revision. Remove
+   an ordinary backup after verification; retain migration originals.
+
+Outcomes are typed: `ok`, `conflict`, `busy`, `denied`, `invalid`, `unavailable`,
+`unchanged-failure`, `committed-unverified`, and `recovery-required`, with native
+error and commit/revision facts. Before replacement, only owned temporary files
+may be cleaned up. A failed replacement can move names or leave recoverable data
+under backup/candidate paths; do not promise the old file still occupies its
+original name. Preserve those paths and invalidate the save baseline on uncertain
+commit. If replacement reports success but the candidate cannot be verified,
+report `committed-unverified` and never adopt unrelated observed bytes.
+
+A verified save whose ordinary backup cleanup fails reports that retained backup
+and requires reload before another save. Disposal releases memory/handles but
+must not delete recovery files. CLI export failure reports retained paths on
+stderr; TUI keeps the failure outcome and edits. Recovery requires inspecting the
+destination, candidate and backup before deciding which copy is authoritative.
+An empty reservation is possible; names alone do not prove contents.
+
+This protocol serializes cooperating writers, not arbitrary external editors.
+It is not a filesystem compare-and-swap, a native-I/O timeout, or a guarantee of
+power-loss durability. The remaining path-race window, metadata/ACL behavior,
+reparse changes, unusual filesystems, partial `ReplaceFileW` failures and shutdown
+while saving require independently recorded native evidence. Microsoft's
+[ReplaceFileW documentation](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew)
+describes partial-failure states; code must retain their uncertainty instead of
+claiming universal unchanged-file behavior.
+
+## Implementation and evidence boundaries
+
+The portable implementation is in [settings.c](../../source/settings.c) and
+[settings.h](../../source/settings.h), with parsing/identity/migration tests in
+[test_settings.c](../../tests/test_settings.c). The NT ownership and transaction
+adapter is [settings_store_nt.c](../../source/settings_store_nt.c), exercised by
+[test_settings_store_nt.c](../../tests/test_settings_store_nt.c) and the settings
+cases in [test_native_cli.py](../../tests/test_native_cli.py). Fixtures exist for
+exact migration originals, conflict/busy behavior, future-schema export refusal,
+flush failures, replacement failures and committed-but-unverified outcomes.
+These are implementation/test references, not native pass or support records;
+only source/artifact-bound evidence may satisfy release acceptance.
 
 ## Requirements and acceptance
 
 ### WT-REQ-040-01
 
-Configuration loading and ordinary startup/exit MUST remain read-only and obey explicit-path/no-config/executable-adjacent/user-fallback precedence without searching arbitrary current directories or silently bypassing an invalid selected file.
+Configuration loading and ordinary startup/exit MUST remain read-only, select
+one document according to the ownership precedence above, and apply CLI
+preferences afterward. They MUST NOT search arbitrary current directories or
+silently bypass an invalid selected file. `--paths` MUST resolve without loading
+settings or starting collection; `--no-config` MUST suppress implicit persistence
+while preserving module identity in path reports.
 
-Acceptance: WT-AC-040-01 — Run from a different working directory with explicit, adjacent, legacy and user sentinel configs, denied/malformed paths and --no-config; verify read source, precedence and zero writes.
+Acceptance: WT-AC-040-01 — Use explicit, portable, adjacent, legacy, registered
+user/machine and unrelated-current-directory sentinels; include denied/malformed
+paths and `--no-config`. Verify owner/source/read/write fields, exact no-config
+path output, preference precedence and zero startup/exit/path-query writes.
 
 ### WT-REQ-040-02
 
-Future portable/per-user/system settings MUST follow explicit ownership and MUST not silently redirect or overwrite another installation's data.
+Portable, per-user and machine settings MUST follow explicit ownership and MUST
+NOT silently redirect or overwrite another owner's data. Registration matching
+MUST use the actual module path and agreed schema; writability alone MUST NOT
+establish ownership. Installed user preferences MUST remain outside the payload.
 
-Acceptance: WT-AC-040-02 — Read-only portable, multi-user and side-by-side install fixtures preserve sentinels and disclose inability to save.
+Acceptance: WT-AC-040-02 — Exercise markers, explicit roots, both registry scopes,
+wrong/absent owner records, read-only media, unavailable folder resolution,
+multiple users and side-by-side profiles. Preserve sentinels and disclose missing
+save destinations. Candidate MSI fixtures do not promote installer support.
 
 ### WT-REQ-040-03
 
-Config/theme/keymap parsing and migration MUST be bounded, inert and versioned, preserving unknown safe settings during supported edits.
+Settings parsing and migration MUST be bounded, inert and versioned. View IDs
+MUST survive reorder/rename and preserve supported unknown scoped records with
+their owner. Ambiguous ownership, future schemas, exhausted identities and
+oversized preservation MUST fail without partial model application. Explicit
+migration MUST retain the prior source or destination as recoverable original.
 
-Acceptance: WT-AC-040-03 — Malformed, oversized, unknown-key and interrupted-save fixtures cannot execute content or destroy the original.
+Acceptance: WT-AC-040-03 — Test malformed/oversized input, both legacy formats,
+v2 identity validation, ID exhaustion, insert/duplicate/rename/reorder/hide/delete,
+unknown fields on moved/deleted/unknown scopes, and exact-byte migration recovery.
+Include defaults exported over a legacy destination and future-schema refusal.
 
 ### WT-REQ-040-04
 
-Settings writes MUST require an explicit save/export action, disclose the destination, and preserve the previous file on failure without implicit machine integration.
+Settings writes MUST require an explicit save/export action, disclose the
+selected destination, retain correct dirty/revision state and report individual
+transaction outcomes. Cooperating writers MUST use bounded lock acquisition and
+baseline checks. Uncertain replacement MUST preserve recoverable copies and
+report uncertainty without implicit redirection, integration or blind cleanup.
 
-Acceptance: WT-AC-040-04 — Exercise explicit/legacy/user destinations, unavailable folder lookup, denied/read-only/missing parent, external changes, existing-file preservation, temporary cleanup and restart round-trip; ordinary startup/exit makes no settings write.
+Acceptance: WT-AC-040-04 — Exercise existing/new destinations, readonly policy,
+missing parents, foreign/stale locks, exact external edits, concurrent writers,
+flush/close failures, partial replacement failures, committed-but-unverified
+outcomes, retained migration originals and recovery files, restart round-trips
+and independent export provenance. Qualify actual artifacts/filesystems and
+interruption behavior separately; do not substitute source inspection or mocked
+failure injection for native runtime evidence.

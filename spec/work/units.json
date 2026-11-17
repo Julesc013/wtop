@@ -50,7 +50,7 @@
     {
       "id": "WT-W010",
       "title": "Invocation and bounded snapshot surface",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W000"
       ],
@@ -84,7 +84,7 @@
     {
       "id": "WT-W020",
       "title": "Shared metric model and truthful machine output",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W010"
       ],
@@ -118,7 +118,7 @@
     {
       "id": "WT-W030",
       "title": "Sampling lifecycle and safe process actions",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W020"
       ],
@@ -151,7 +151,7 @@
     {
       "id": "WT-W035",
       "title": "Unified query, inspection and bounded logging",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W020",
         "WT-W030"
@@ -184,7 +184,7 @@
     {
       "id": "WT-W040",
       "title": "Table-first TUI parity and rendering",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W020",
         "WT-W030"
@@ -221,7 +221,7 @@
     {
       "id": "WT-W050",
       "title": "Owned configuration and themes",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W020"
       ],
@@ -250,7 +250,7 @@
     {
       "id": "WT-W060",
       "title": "Portable artifacts and installation channels",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W040",
         "WT-W050"
@@ -282,7 +282,7 @@
     {
       "id": "WT-W070",
       "title": "Modern native target qualification",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W040",
         "WT-W060"
@@ -313,7 +313,7 @@
     {
       "id": "WT-W080",
       "title": "Legacy Win32 startup and provider prototypes",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W020"
       ],
@@ -343,7 +343,7 @@
     {
       "id": "WT-W090",
       "title": "DOS, Win16 and OS2 research profiles",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W020"
       ],
@@ -436,7 +436,7 @@
     {
       "id": "WT-W120",
       "title": "Future native GUI in the target application",
-      "status": "planned",
+      "status": "deferred",
       "dependencies": [
         "WT-W040",
         "WT-W050",

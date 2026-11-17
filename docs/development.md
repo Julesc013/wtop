@@ -52,8 +52,13 @@ macros alone do not establish historical support.
 Application files live under `source/`. The root `CMakeLists.txt` remains the
 build entry point. The inherited `source/ntop.c/.h`, `source/util.c/.h` and
 `source/vi.c/.h` retain the working native foundation. Portable policy belongs in
-`source/core.c/.h`, `source/settings.c/.h` and `source/ui.c/.h`; Windows handles,
+`source/core.c/.h`, `source/settings.c/.h`, `source/ui.c/.h`, `source/text.c/.h`,
+`source/metrics.c/.h` and `source/actions.c/.h`; Windows handles,
 console events and filesystem replacement stay with the native adapter.
+`settings_store_nt`, `providers_nt` and `output_nt` own native configuration
+transactions, isolated optional work and complete-record logging respectively.
+Historical capability probes live under `source/legacy/`, with separate build
+and evidence profiles; see [historical backends](historical-backends.md).
 
 `source/_config.yml` is inherited site configuration, not a Wtop settings file.
 `source/ntop.nuspec` retains old NTop packaging metadata and is not a Wtop release
@@ -92,13 +97,15 @@ application's installed runtime.
 
 ```sh
 python tools/specctl.py validate
+python tools/command_help.py --check
 python -m unittest discover -s tests -p 'test_*.py' -v
 cmake -S . -B out/host -DCMAKE_BUILD_TYPE=Debug
 cmake --build out/host --parallel 2
 ctest --test-dir out/host --output-on-failure
 ```
 
-CMake registers separate `portable_core`, `portable_settings` and `portable_ui`
+CMake registers separate `portable_core`, `portable_settings`, `portable_ui`,
+`portable_text`, `portable_metrics`, `portable_actions` and `portable_legacy_probe`
 tests. Their contracts cover option conflicts/output arithmetic, bounded
 transactional settings and round trips, and key/action/visible-layout decisions.
 Expected results must come from the behavior contract, not another call to the
@@ -112,8 +119,9 @@ builds and raw logs outside tracked source paths.
 ## Native automated checks
 
 On Windows, CMake adds CLI version, capability, reserved-GUI and snapshot checks.
-When a Python interpreter is available, it also adds `native_cli_behavior` and
-`native_tui_interaction`. The latter creates its own console, injects native input
+It also runs native settings-store, isolated-provider and log-output fixtures.
+When Python is available, `native_cli_behavior`, `native_provider_behavior` and
+`native_tui_interaction` exercise the actual application. The latter creates its own console, injects native input
 and observes the console buffer/settings. It must not attach to an unrelated
 interactive user's console or terminate arbitrary processes.
 
@@ -168,3 +176,18 @@ original cross-build and host-test results, toolchain failures and remaining
 gates. Those records do not qualify later source revisions. Record new evidence
 with its own revision rather than editing old hashes or silently promoting
 acceptance and release status.
+
+## Exact-payload delivery and current evidence
+
+Use [packaging/README](../packaging/README.md) to inspect and wrap the final EXE;
+packaging must not rebuild/relink different bytes for each install scope. CI
+builds x86/x64/ARM64, executes native tests on the hosted x64 machine for x86/x64,
+and creates separate candidate manifests. ARM64 compilation is not native ARM64
+execution. The x64 lane builds pinned WiX wrappers and runs disposable user/machine
+fixtures; promotion is deliberately rejected. No push publishes a release.
+
+The [implementation record](implementation-verification-2026-11-17.md) retains
+the first failed native run and follow-up scope. Do not rewrite historical
+bootstrap/presentation observations or promote broad acceptance on the strength
+of narrower fixtures. Test from a fresh checkout, read the actual binary imports,
+and preserve source/toolchain/OS/console/token/digest identities.

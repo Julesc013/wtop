@@ -79,7 +79,9 @@ static BOOL InteractiveMode = TRUE;
 static CRITICAL_SECTION SyncLock;
 static HANDLE ShutdownEvent;
 static HANDLE CleanupDoneEvent;
-static HANDLE ProcessListThread;
+static HANDLE ProcessListThread, PerCoreThread;
+static wtop_provider_result *PendingCoreObservation;
+static ULONGLONG CollectionDeadline, LogStartedTick;
 static volatile LONG ShutdownRequested;
 static DWORD CollectorError;
 static ULONGLONG LastSampleElapsed;
@@ -230,6 +232,20 @@ static BOOL ReadConfigFile(const wtop_options *Options)
     return TRUE;
 }
 
+/* Full recovery names go to the invoking diagnostic stream even after a
+   successful verified save retained an original/cleanup warning. In TUI mode
+   the caller's stream survives our alternate screen and is readable on return. */
+static void ReportSettingsRecovery(const wtop_settings_store *Store, const wtop_store_result *Result)
+{
+    if(Result->outcome == WTOP_STORE_OK && Result->native_error)
+        fprintf(stderr, "wtop: settings saved with warning: %s (Win32 %lu)\n", Result->message, Result->native_error);
+    if(Store->recovery_temporary[0] || Store->recovery_backup[0]) {
+        char *Temporary = ToUtf8(Store->recovery_temporary), *Backup = ToUtf8(Store->recovery_backup);
+        fprintf(stderr, "wtop: recoverable temporary=%s backup=%s\n", Temporary ? Temporary : "", Backup ? Backup : "");
+        free(Temporary); free(Backup);
+    }
+}
+
 static BOOL ExportConfigFile(const char *Path, wtop_store_result *Result)
 {
     if(ReadOnlyMode) {
@@ -262,11 +278,7 @@ static BOOL ExportConfigFile(const char *Path, wtop_store_result *Result)
             Ok = wtop_store_save(Export, &Settings, &Document, SettingsRevision, Result);
         }
     }
-    if(!Ok && (Export->recovery_temporary[0] || Export->recovery_backup[0])) {
-        char *Temporary = ToUtf8(Export->recovery_temporary), *Backup = ToUtf8(Export->recovery_backup);
-        fprintf(stderr, "wtop: recoverable temporary=%s backup=%s\n", Temporary ? Temporary : "", Backup ? Backup : "");
-        free(Temporary); free(Backup);
-    }
+    ReportSettingsRecovery(Export, Result);
     wtop_config_document_free(&Document);
     wtop_store_dispose(Export);
     free(Export);
@@ -330,6 +342,7 @@ typedef struct process {
     WCHAR OwnerSid[WTOP_PROVIDER_SID_CHARS];
     wtop_provider_state OwnerNameState;
     ULONGLONG OwnerNameObservedTick;
+    BOOL OwnerNameStale;
 	DWORD BasePriority;
 	double PercentProcessorTime;
 	unsigned __int64 UsedMemory;
@@ -356,10 +369,12 @@ typedef struct process {
 	struct process *Next;
 	struct process *Parent;
 	struct process *FirstChild;
+	struct process *LastChild;
 } process;
 
 #define PROCLIST_BUF_INCREASE 64
 #define MAX_PROCESS_ROWS 65536UL
+#define MAX_TAGGED_IDENTITIES 4096UL
 
 static process *ProcessList;
 static DWORD ProcessListSize = PROCLIST_BUF_INCREASE;
@@ -370,8 +385,6 @@ static DWORD ProcessListSize = PROCLIST_BUF_INCREASE;
    samples are freed outside it. Memory is bounded by front/pending/in-flight. */
 typedef struct pending_sample {
     process *rows;
-    wtop_provider_result *cores;
-    ULONGLONG core_observed;
     DWORD count, observed_count, unresolved_owner_filter, running, capacity, interval;
     BOOL complete;
     metric_state cpu_state;
@@ -383,7 +396,7 @@ static ULONGLONG CollectorSequence;
 
 static void FreePendingSample(pending_sample *Sample)
 {
-    if(Sample) { free(Sample->rows); free(Sample->cores); free(Sample); }
+    if(Sample) { free(Sample->rows); free(Sample); }
 }
 
 typedef struct process_identity { DWORD ID; ULONGLONG CreationTime; } process_identity;
@@ -402,8 +415,12 @@ static void ToggleTaggedProcess(const process *Selected)
             return;
         }
     }
+    if(TaggedProcessListCount >= MAX_TAGGED_IDENTITIES) {
+        SetViMessage(VI_ERROR, _T("Tag limit reached (4096 identities); clear tags with U before adding more"));
+        return;
+    }
     if(TaggedProcessListCount == TaggedProcessListSize) {
-        DWORD Capacity = TaggedProcessListSize + PROCLIST_BUF_INCREASE;
+        DWORD Capacity = min(MAX_TAGGED_IDENTITIES, TaggedProcessListSize + PROCLIST_BUF_INCREASE);
         process_identity *Larger = realloc(TaggedProcessList, (size_t)Capacity * sizeof(*Larger));
         if(!Larger) { SetViMessage(VI_ERROR, _T("Cannot tag process: out of memory")); return; }
         TaggedProcessList = Larger; TaggedProcessListSize = Capacity;
@@ -448,39 +465,54 @@ static sort_order SortOrder = DESCENDING;
 
 typedef int (*process_sort_fn_t)(const void *, const void *);
 
+/* A frozen comparison timestamp keeps qsort's ordering transitive even if the
+   sample ages across the sort. Missing values always sort after known values. */
+static ULONGLONG SortObservedTick;
+static int CompareIdentity(const process *Left, const process *Right)
+{
+    if(Left->ID != Right->ID) return Left->ID < Right->ID ? -1 : 1;
+    return (Left->CreationTime > Right->CreationTime) - (Left->CreationTime < Right->CreationTime);
+}
+static int DirectedCompare(int Compare, const process *Left, const process *Right)
+{
+    return Compare ? (SortOrder == ASCENDING ? Compare : -Compare) : CompareIdentity(Left, Right);
+}
+
 #define SORT_PROCESS_BY_INTEGER(Attribute) \
 static int SortProcessBy##Attribute(const void *A, const void *B) \
 { \
     const process *Left = A, *Right = B; \
     int Compare = (Left->Attribute > Right->Attribute) - (Left->Attribute < Right->Attribute); \
-    return SortOrder == ASCENDING ? Compare : -Compare; \
+    return DirectedCompare(Compare, Left, Right); \
 }
-#define SORT_PROCESS_BY_UINT64(Attribute) SORT_PROCESS_BY_INTEGER(Attribute)
 
-#define SORT_PROCESS_BY_DOUBLE(Attribute)                                               \
-static int SortProcessBy##Attribute(const void *A, const void *B)                       \
-{												                                        \
-	double Diff = (((const process *)A)->Attribute - ((const process *)B)->Attribute);  \
-	if (Diff > 0.0) return (SortOrder == ASCENDING) ? 1 : -1;                      		\
-	if (Diff < 0.0) return (SortOrder == ASCENDING) ? -1 : 1;                           \
-	return 0;                                                                           \
-}												                                        \
+#define SORT_PROCESS_BY_METRIC(Attribute, State, Tick) \
+static int SortProcessBy##Attribute(const void *A, const void *B) \
+{ \
+    const process *Left = A, *Right = B; \
+    metric_state L = FreshMetricState(Left->State, Left->Tick, SortObservedTick); \
+    metric_state R = FreshMetricState(Right->State, Right->Tick, SortObservedTick); \
+    int Available = wtop_metric_sort_availability(L, R); \
+    if(Available) return Available; \
+    if(L != METRIC_OK) return CompareIdentity(Left, Right); \
+    return DirectedCompare((Left->Attribute > Right->Attribute) - (Left->Attribute < Right->Attribute), Left, Right); \
+}
 
-#define SORT_PROCESS_BY_STRING(Attribute, MaxLength)								\
-static int SortProcessBy##Attribute(const void *A, const void *B)						\
-{														\
-	int Compare = _tcsncicmp(((const process *)A)->Attribute, ((const process *)B)->Attribute, MaxLength);	\
-	return (SortOrder == ASCENDING) ? Compare : -Compare;							\
-}														\
+#define SORT_PROCESS_BY_STRING(Attribute, MaxLength) \
+static int SortProcessBy##Attribute(const void *A, const void *B) \
+{ \
+    const process *Left = A, *Right = B; \
+    return DirectedCompare(_tcsncicmp(Left->Attribute, Right->Attribute, MaxLength), Left, Right); \
+}
 
 SORT_PROCESS_BY_INTEGER(ID);
-SORT_PROCESS_BY_DOUBLE(PercentProcessorTime);
-SORT_PROCESS_BY_UINT64(UsedMemory);
-SORT_PROCESS_BY_INTEGER(UpTime);
+SORT_PROCESS_BY_METRIC(PercentProcessorTime, CpuState, CpuObservedTick);
+SORT_PROCESS_BY_METRIC(UsedMemory, MemoryState, ObservedTick);
+SORT_PROCESS_BY_METRIC(UpTime, AgeState, ObservedTick);
 SORT_PROCESS_BY_INTEGER(BasePriority);
 SORT_PROCESS_BY_INTEGER(ThreadCount);
 SORT_PROCESS_BY_INTEGER(ParentPID);
-SORT_PROCESS_BY_DOUBLE(DiskUsage);
+SORT_PROCESS_BY_METRIC(DiskUsage, IoState, ObservedTick);
 SORT_PROCESS_BY_STRING(ExeName, MAX_PATH);
 SORT_PROCESS_BY_STRING(UserName, UNLEN);
 
@@ -504,54 +536,100 @@ static DWORD CurrentCpuCapacity(void)
 
 void AddChildProcess(process *ParentProcess, process *Process)
 {
-	if(ParentProcess == Process) return;
-
-	if (ParentProcess->FirstChild == NULL) {
-		ParentProcess->FirstChild = Process;
-	} else {
-		process *ChildProcess = ParentProcess->FirstChild;
-		while (ChildProcess->Next != NULL) {
-			ChildProcess = ChildProcess->Next;
-			if(ChildProcess == Process) return;
-		}
-		ChildProcess->Next = Process;
-	}
-
-	Process->Parent = ParentProcess;
+    if(ParentProcess == Process) return;
+    if(ParentProcess->LastChild) ParentProcess->LastChild->Next = Process;
+    else ParentProcess->FirstChild = Process;
+    ParentProcess->LastChild = Process;
+    Process->Parent = ParentProcess;
 }
 
 /* The "root" process which does not actually exist, acts as process tree root */
 static process RootProcess;
+/* These counts qualify tree presentation without inventing parent identity.
+   Rows with absent/equal/newer/unknown parent creation remain visible roots. */
+static DWORD TreeUnresolvedParentCount;
+static BOOL TreeIndexUnavailable;
+#ifdef WTOP_TREE_TESTING
+static BOOL TreeFailIndexAllocation;
+#endif
 
-/* Finds and assigns parent and child processes */
+static int CompareTreeProcessId(const void *Left, const void *Right)
+{
+    const process *A = *(process *const *)Left;
+    const process *B = *(process *const *)Right;
+    return (A->ID > B->ID) - (A->ID < B->ID);
+}
+
+static process *FindIndexedParent(process *const *Index, DWORD Id)
+{
+    DWORD Begin = 0, End = ProcessCount;
+    while(Begin < End) {
+        DWORD Middle = Begin + (End - Begin) / 2;
+        if(Index[Middle]->ID < Id) Begin = Middle + 1;
+        else End = Middle;
+    }
+    if(Begin == ProcessCount || Index[Begin]->ID != Id) return NULL;
+    /* Duplicate PIDs in a source sample are ambiguous, never an arbitrary match. */
+    if(Begin + 1 < ProcessCount && Index[Begin + 1]->ID == Id) return NULL;
+    return Index[Begin];
+}
+
+/* O(n log n) indexed joins plus O(n) adjacency and depth traversal. A strict
+   creation ordering proves acyclicity, including malformed PID parent graphs;
+   no per-node ancestry scan or recursion is proportional to the tree depth.
+   FILETIME equality does not prove who came first, so those rows stay roots. */
 void FindParentChildProcesses(void)
 {
+    process **Index = NULL;
     memset(&RootProcess, 0, sizeof(RootProcess));
+    TreeUnresolvedParentCount = 0;
+    TreeIndexUnavailable = FALSE;
     for(DWORD i = 0; i < ProcessCount; ++i) {
         ProcessList[i].TreeDepth = 0;
-        ProcessList[i].Next = ProcessList[i].Parent = ProcessList[i].FirstChild = NULL;
+        ProcessList[i].Next = ProcessList[i].Parent = ProcessList[i].FirstChild = ProcessList[i].LastChild = NULL;
     }
+    if(!ProcessCount) return;
+#ifdef WTOP_TREE_TESTING
+    if(!TreeFailIndexAllocation)
+#endif
+        Index = malloc((size_t)ProcessCount * sizeof(*Index));
+    if(!Index) {
+        /* Keep every row, preserving iteration order. No partial tree is
+           published and allocation failure does not terminate the monitor. */
+        TreeIndexUnavailable = TRUE;
+        for(DWORD i = 0; i < ProcessCount; ++i) {
+            AddChildProcess(&RootProcess, &ProcessList[i]);
+            if(ProcessList[i].ParentPID) ++TreeUnresolvedParentCount;
+        }
+        SetViMessage(VI_ERROR, _T("Tree index unavailable; all processes remain visible as roots"));
+        return;
+    }
+    for(DWORD i = 0; i < ProcessCount; ++i) Index[i] = &ProcessList[i];
+    qsort(Index, ProcessCount, sizeof(*Index), CompareTreeProcessId);
     for(DWORD i = 0; i < ProcessCount; ++i) {
         process *Child = &ProcessList[i];
         process *Parent = &RootProcess;
-        for(DWORD j = 0; j < ProcessCount; ++j) {
-            process *Candidate = &ProcessList[j];
-            if(i == j || !Child->ParentPID || Candidate->ID != Child->ParentPID) continue;
-            if(Child->CreationTime && Candidate->CreationTime && Candidate->CreationTime > Child->CreationTime) continue;
-            process *Ancestor = Candidate;
-            DWORD Steps = 0;
-            while(Ancestor && Ancestor != Child && ++Steps <= ProcessCount) Ancestor = Ancestor->Parent;
-            if(Ancestor == Child || Steps > ProcessCount) continue;
-            Parent = Candidate;
-            break;
+        if(Child->ParentPID) {
+            process *Candidate = FindIndexedParent(Index, Child->ParentPID);
+            if(Candidate && Candidate != Child && Candidate->CreationTime &&
+               Child->CreationTime && Candidate->CreationTime < Child->CreationTime) Parent = Candidate;
+            else ++TreeUnresolvedParentCount;
         }
         AddChildProcess(Parent, Child);
     }
-    for(DWORD i = 0; i < ProcessCount; ++i) {
-        process *Parent = ProcessList[i].Parent;
-        while(Parent && Parent != &RootProcess && ProcessList[i].TreeDepth < ProcessCount) {
-            ++ProcessList[i].TreeDepth;
-            Parent = Parent->Parent;
+    free(Index);
+    process *Node = RootProcess.FirstChild;
+    DWORD Depth = 0, Visited = 0;
+    while(Node && Visited < ProcessCount) {
+        Node->TreeDepth = Depth;
+        ++Visited;
+        if(Node->FirstChild) { Node = Node->FirstChild; ++Depth; }
+        else {
+            while(Node && Node != &RootProcess && !Node->Next) {
+                Node = Node->Parent;
+                if(Depth) --Depth;
+            }
+            Node = Node && Node != &RootProcess ? Node->Next : NULL;
         }
     }
 }
@@ -573,6 +651,7 @@ void ProcessTreeToList(process *Root, process *Dest, int *Index)
 static void SortProcessList(void)
 {
     if(!ProcessCount) return;
+    SortObservedTick = GetTickCount64();
 	if(ProcessSortType != SORT_BY_TREE)
 	{
 		process_sort_fn_t SortFn = 0;
@@ -613,7 +692,7 @@ static void SortProcessList(void)
 			qsort(ProcessList, ProcessCount, sizeof(*ProcessList), SortFn);
 		}
 
-		FindParentChildProcesses();
+        /* Flat views do not need the potentially expensive ancestry graph. */
 	} else {
 		SortOrder = ASCENDING;
 		qsort(ProcessList, ProcessCount, sizeof(*ProcessList), SortProcessByParentPID);
@@ -851,12 +930,69 @@ static BOOL MatchesStaticFilter(const process *Process)
     return TRUE;
 }
 
+static DWORD RemainingCollectionWait(DWORD Requested)
+{
+    if(!CollectionDeadline) return Requested;
+    ULONGLONG Now = GetTickCount64();
+    if(Now >= CollectionDeadline) return 0;
+    return (DWORD)min((ULONGLONG)Requested, CollectionDeadline - Now);
+}
+
+static wtop_provider_result *CollectCoreObservation(DWORD Interval)
+{
+    wtop_provider_result *Result = calloc(1, sizeof(*Result));
+    if(!Result) return NULL;
+    wtop_provider_request Request;
+    memset(&Request, 0, sizeof(Request));
+    Request.kind = WTOP_PROVIDER_PER_CORE; Request.interval_ms = Interval;
+    DWORD Timeout = RemainingCollectionWait(min(60000UL, max(3000UL, Interval + 2000UL)));
+    if(!Timeout) { Result->kind = Request.kind; Result->state = WTOP_PROVIDER_TIMEOUT; Result->retirement_confirmed = 1; }
+    else wtop_provider_collect(&CoreProvider, &Request, Timeout, ShutdownEvent, Result);
+    return Result;
+}
+
+static DWORD WINAPI PollCoreThreadProc(LPVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+    unsigned Failures = 0;
+    while(!ShouldStop()) {
+        DWORD Interval = (DWORD)InterlockedCompareExchange(&CollectorInterval, 0, 0);
+        wtop_provider_result *Result = CollectCoreObservation(Interval);
+        if(!Result) return ERROR_NOT_ENOUGH_MEMORY;
+        wtop_provider_state State = Result->state;
+        EnterCriticalSection(&SyncLock);
+        wtop_provider_result *Superseded = PendingCoreObservation;
+        PendingCoreObservation = Result;
+        LeaveCriticalSection(&SyncLock);
+        free(Superseded);
+        if(State == WTOP_PROVIDER_VALID || State == WTOP_PROVIDER_CAPACITY) Failures = 0;
+        else ++Failures;
+        if(State == WTOP_PROVIDER_UNSUPPORTED || State == WTOP_PROVIDER_DENIED ||
+           CoreProvider.admission_closed || Failures >= 3) break;
+        if(Failures && WaitForSingleObject(ShutdownEvent, max(1000UL, Interval)) != WAIT_TIMEOUT) break;
+    }
+    return 0;
+}
+
+static BOOL AdoptPendingCore(void)
+{
+    EnterCriticalSection(&SyncLock);
+    wtop_provider_result *Next = PendingCoreObservation;
+    PendingCoreObservation = NULL;
+    LeaveCriticalSection(&SyncLock);
+    if(!Next) return FALSE;
+    free(CoreObservation); CoreObservation = Next;
+    CoreObservedTick = Next->observed_ms;
+    RenderInvalidated = TRUE;
+    return TRUE;
+}
+
 #define OWNER_CACHE_ENTRIES 32
 static struct owner_cache_entry {
     WCHAR sid[WTOP_PROVIDER_SID_CHARS];
     WCHAR name[UNLEN + 1];
     wtop_provider_state state;
-    ULONGLONG observed;
+    ULONGLONG observed, attempted;
 } OwnerCache[OWNER_CACHE_ENTRIES];
 static unsigned OwnerCacheNext;
 static unsigned OwnerLookupAllowance;
@@ -872,7 +1008,7 @@ static void ResolveObservedOwner(process *Process)
     for(unsigned i = 0; i < OWNER_CACHE_ENTRIES; ++i) {
         if(!wcscmp(OwnerCache[i].sid, Process->OwnerSid)) { Entry = &OwnerCache[i]; break; }
     }
-    BOOL Expired = !Entry || Now - Entry->observed > 60000;
+    BOOL Expired = !Entry || Now - Entry->attempted > 60000;
     if(Expired && OwnerLookupAllowance && Now < OwnerLookupDeadline && !ShouldStop() && !OwnerProvider.admission_closed) {
         --OwnerLookupAllowance;
         wtop_provider_request Request;
@@ -886,7 +1022,7 @@ static void ResolveObservedOwner(process *Process)
             if(!Entry) Entry = &OwnerCache[OwnerCacheNext++ % OWNER_CACHE_ENTRIES];
             memset(Entry, 0, sizeof(*Entry));
             wcscpy_s(Entry->sid, _countof(Entry->sid), Process->OwnerSid);
-            Entry->observed = GetTickCount64(); Entry->state = Result->state;
+            Entry->attempted = GetTickCount64(); Entry->observed = Result->observed_ms; Entry->state = Result->state;
             if(Result->state == WTOP_PROVIDER_VALID)
                 wcsncpy_s(Entry->name, _countof(Entry->name), Result->data.account.name, _TRUNCATE);
             free(Result);
@@ -895,6 +1031,8 @@ static void ResolveObservedOwner(process *Process)
     if(Entry) {
         Process->OwnerNameState = Entry->state;
         Process->OwnerNameObservedTick = Entry->observed;
+        Process->OwnerNameStale = Entry->state == WTOP_PROVIDER_VALID &&
+            (!Entry->observed || GetTickCount64() - Entry->observed > 60000);
         if(Entry->state == WTOP_PROVIDER_VALID)
             wcscpy_s(Process->UserName, _countof(Process->UserName), Entry->name);
     }
@@ -905,7 +1043,7 @@ static BOOL PollProcessList(DWORD UpdateTime)
 {
     ULONGLONG ObservationStarted = GetTickCount64();
     OwnerLookupAllowance = 2;
-    OwnerLookupDeadline = ObservationStarted + 400;
+    OwnerLookupDeadline = ObservationStarted + RemainingCollectionWait(400);
     FILETIME SnapshotStarted;
     GetSystemTimeAsFileTime(&SnapshotStarted);
     HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -934,6 +1072,7 @@ static BOOL PollProcessList(DWORD UpdateTime)
         _tcsncpy_s(Process.ExeName, _countof(Process.ExeName), Entry.szExeFile, _TRUNCATE);
         _tcscpy_s(Process.UserName, _countof(Process.UserName), _T("?"));
         Process.OwnerState = Process.CpuState = Process.MemoryState = Process.IoState = Process.AgeState = METRIC_UNAVAILABLE;
+        Process.OwnerNameState = WTOP_PROVIDER_UNAVAILABLE;
         if(!MatchesStaticFilter(&Process)) continue;
         if(Count >= MAX_PROCESS_ROWS) { Complete = FALSE; continue; }
         Process.Handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Process.ID);
@@ -979,7 +1118,8 @@ static BOOL PollProcessList(DWORD UpdateTime)
         }
         if(FilterByUserName) {
             BOOL SidSelector = !_tcsnicmp(FilterUserName, _T("S-1-"), 4);
-            BOOL Known = Process.OwnerState == METRIC_OK && (SidSelector || Process.OwnerNameState == WTOP_PROVIDER_VALID);
+            BOOL Known = Process.OwnerState == METRIC_OK &&
+                (SidSelector || (Process.OwnerNameState == WTOP_PROVIDER_VALID && !Process.OwnerNameStale));
             if(!Known && UnresolvedOwners < MAXDWORD) ++UnresolvedOwners;
             if(!Known || _tcsicmp(SidSelector ? Process.OwnerSid : Process.UserName, FilterUserName)) {
                 if(Process.Handle) CloseHandle(Process.Handle);
@@ -1023,7 +1163,7 @@ static BOOL PollProcessList(DWORD UpdateTime)
         } else Process->IoState = LastMetricError();
         Process->SampleTick = GetTickCount64();
     }
-    if(WaitForSingleObject(ShutdownEvent, UpdateTime) != WAIT_TIMEOUT) {
+    if(WaitForSingleObject(ShutdownEvent, RemainingCollectionWait(UpdateTime)) != WAIT_TIMEOUT) {
         CloseSampleHandles(Sample, Count); free(Sample); return FALSE;
     }
     FILETIME Idle, Kernel, User;
@@ -1095,16 +1235,6 @@ static BOOL PollProcessList(DWORD UpdateTime)
     pending_sample *Published = calloc(1, sizeof(*Published));
     if(!Published) { free(Sample); CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
     Published->rows = Sample;
-    if(CollectPerCore) {
-        Published->cores = calloc(1, sizeof(*Published->cores));
-        if(Published->cores) {
-            wtop_provider_request Request;
-            memset(&Request, 0, sizeof(Request));
-            Request.kind = WTOP_PROVIDER_PER_CORE; Request.interval_ms = UpdateTime;
-            wtop_provider_collect(&CoreProvider, &Request, min(60000UL, UpdateTime + 2000UL), ShutdownEvent, Published->cores);
-            Published->core_observed = Published->cores->observed_ms;
-        }
-    }
     Published->count = Count; Published->observed_count = ObservedCount;
     Published->unresolved_owner_filter = UnresolvedOwners;
     Published->running = Running; Published->capacity = MachineCapacity;
@@ -1133,8 +1263,6 @@ static BOOL AdoptPendingSample(void)
     ULONGLONG SelectedCreated = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
     free(ProcessList);
     ProcessList = Sample->rows; Sample->rows = NULL;
-    free(CoreObservation); CoreObservation = Sample->cores; Sample->cores = NULL;
-    CoreObservedTick = Sample->core_observed;
     ProcessCount = Sample->count;
     ObservedProcessCount = Sample->observed_count;
     UnresolvedOwnerFilterCount = Sample->unresolved_owner_filter;
@@ -1396,7 +1524,9 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
         Text[0] = 0;
         switch(Span->id) {
         case WTOP_COLUMN_ID: _stprintf_s(Text, _countof(Text), _T("%lu"), Process->ID); break;
-        case WTOP_COLUMN_USER: _tcscpy_s(Text, _countof(Text), Process->UserName); break;
+        case WTOP_COLUMN_USER:
+            _stprintf_s(Text, _countof(Text), _T("%s%s"), Process->OwnerNameStale ? _T("~") : _T(""), Process->UserName);
+            break;
         case WTOP_COLUMN_PRIORITY:
             if(Process->BasePriority <= 999) _stprintf_s(Text, _countof(Text), _T("%lu"), Process->BasePriority);
             else _tcscpy_s(Text, _countof(Text), _T("?"));
@@ -1496,8 +1626,8 @@ static int PrintInformation(const wtop_options *Options)
         if(Options->json) printf("{\"schema\":1,\"name\":\"wtop\",\"version\":\"%s\",\"profile\":\"%s\"}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
         else printf("Wtop %s (%s)\nDerived from NTop; Copyright (c) 2019 Gian Sass and Wtop contributors.\nGPL-3.0-only. Historical OS support is not verified.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
     } else {
-        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"snapshot_schema\":2,\"tui\":true,\"snapshot\":true,\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
-        else printf("Wtop %s: build capabilities (%s; no runtime probe)\nTUI with htop/vi/Emacs keys, optional mouse, setup and explicit config save.\nText/JSON snapshot, process tree/search/sort and NTop commands.\nMetric access varies by process rights; unavailable fields carry status/null.\nGUI, installers, GPU telemetry and historical OS ports are not implemented.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"snapshot_schema\":2,\"tui\":true,\"snapshot\":true,\"query\":true,\"inspect\":true,\"log\":true,\"settings_schema\":2,\"optional_providers\":[\"command_line\",\"services\",\"per_core\",\"account_name\"],\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+        else printf("Wtop %s: build capabilities (%s; no runtime probe)\nTUI with htop/vi/Emacs keys, optional mouse, setup and explicit config save.\nText/JSON schema-2 snapshots, query/inspect, finite JSONL logging.\nOptional isolated command-line, service, account-name and per-core providers.\nVersion-2 settings, ownership/path reports, contextual Setup and action results.\nMetric access varies by process rights; unavailable fields carry status/null.\nNo self-install, GUI or GPU telemetry. Delivery candidates and historical probes\nare separate development tools; their target support is unqualified.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
     }
     return fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
 }
@@ -1576,7 +1706,12 @@ static void WriteVi(void)
     Status.age_ms = Age > ULONG_MAX ? ULONG_MAX : (unsigned long)Age;
     Status.stale = SampleSequence && LastSampleInterval && Age > LastSampleInterval * 3UL;
     Status.partial = CollectorError != 0 || !SampleComplete || UnresolvedOwnerFilterCount != 0;
-    Status.provider_notice = DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID) ? "ASCII substitution" : ReadOnlyMode ? "read-only" : NULL;
+    char ProviderNotice[128];
+    _snprintf_s(ProviderNotice, sizeof(ProviderNotice), _TRUNCATE, "%s%s%s",
+        DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID) ? "ASCII substitution; " : "",
+        ReadOnlyMode ? "read-only; " : "",
+        ProcessSortType == SORT_BY_TREE && TreeUnresolvedParentCount ? "unverified parents shown as roots" : "");
+    Status.provider_notice = ProviderNotice[0] ? ProviderNotice : NULL;
     Status.observed_rows = ObservedProcessCount;
     Status.selected_rows = ViewCount;
     char Text[4096]; unsigned Flags;
@@ -1791,8 +1926,11 @@ static wtop_ui_context_options CurrentUiContext(void)
     Context.kill_supported = Context.priority_supported = 1;
     Context.save_available = !ConfigStore.disabled && ConfigStore.write_path[0];
     Context.setup_tabs = Overlay == OVERLAY_SETUP && SetupPage == 3;
-    Context.can_add_tab = Settings.tab_count < WTOP_MAX_TABS;
-    Context.can_delete_tab = Settings.tab_count > 1;
+    Context.can_add_tab = Settings.tab_count < WTOP_MAX_TABS && Settings.next_tab_id != 0;
+    int VisibleViews = 0;
+    for(int i = 0; i < Settings.tab_count; ++i) VisibleViews += Settings.tabs[i].visible != 0;
+    Context.can_delete_tab = Settings.tab_count > 1 &&
+        (SetupIndex >= 0 && SetupIndex < Settings.tab_count) && (!Settings.tabs[SetupIndex].visible || VisibleViews > 1);
     Context.can_move_left = SetupIndex > 0;
     Context.can_move_right = SetupIndex + 1 < Settings.tab_count;
     if(Overlay == OVERLAY_KILL) {
@@ -1832,14 +1970,19 @@ int SavePresentationSettings(void)
     if(!ConfigStore.write_path[0]) { SetViMessage(VI_ERROR, _T("Configuration destination unavailable; select --config PATH or --portable")); return 0; }
     unsigned long CapturedRevision = SettingsRevision;
     wtop_store_result Result;
-    if(!wtop_store_save(&ConfigStore, &Settings, &ConfigDocument, CapturedRevision, &Result)) {
-        SetViMessage(VI_ERROR, _T("Settings %hs: %hs (error %lu); edits retained"),
-            wtop_store_outcome_name(Result.outcome), Result.message, Result.native_error);
+    BOOL Saved = wtop_store_save(&ConfigStore, &Settings, &ConfigDocument, CapturedRevision, &Result);
+    ReportSettingsRecovery(&ConfigStore, &Result);
+    if(!Saved) {
+        SetViMessage(VI_ERROR, _T("Settings %hs: %hs (error %lu); edits retained%hs"),
+            wtop_store_outcome_name(Result.outcome), Result.message, Result.native_error,
+            ConfigStore.recovery_temporary[0] || ConfigStore.recovery_backup[0] ? "; recovery paths in invoking stderr" : "");
         return 0;
     }
     if(SettingsRevision == Result.saved_revision) ConfigDirty = FALSE;
-    SetViMessage(VI_NOTICE, _T("Saved configuration: %s%hs"), ConfigStore.write_path,
-        Result.migrated ? " (migration original retained)" : "");
+    if(Result.native_error)
+        SetViMessage(VI_ERROR, _T("Saved configuration with warning: %hs; full recovery paths in invoking stderr"), Result.message);
+    else SetViMessage(VI_NOTICE, _T("Saved configuration: %s%hs"), ConfigStore.write_path,
+        Result.migrated ? " (original retained; path in invoking stderr)" : "");
     return 1;
 }
 
@@ -2413,6 +2556,7 @@ static wtop_provider_result *CommandObservation, *ServicesObservation;
 
 static int CollectInspection(const wtop_options *Options)
 {
+    if(ShouldStop()) return 130;
     if(Options->mode == WTOP_INSPECT && !ProcessCount) return 3;
     int ExitCode = Options->mode == WTOP_QUERY && UnresolvedOwnerFilterCount ? 3 : 0;
     wtop_provider_request Request;
@@ -2427,6 +2571,7 @@ static int CollectInspection(const wtop_options *Options)
         if(!CommandObservation) return 1;
         Request.kind = WTOP_PROVIDER_COMMAND_LINE;
         wtop_provider_collect(&InspectionProvider, &Request, 2500, ShutdownEvent, CommandObservation);
+        if(ShouldStop()) return 130;
         if(CommandObservation->state != WTOP_PROVIDER_VALID) ExitCode = 3;
     }
     if(Options->services || (Options->mode == WTOP_QUERY && Options->query_target == WTOP_QUERY_SERVICES)) {
@@ -2434,6 +2579,7 @@ static int CollectInspection(const wtop_options *Options)
         if(!ServicesObservation) return 1;
         Request.kind = WTOP_PROVIDER_SERVICES;
         wtop_provider_collect(&InspectionProvider, &Request, 2500, ShutdownEvent, ServicesObservation);
+        if(ShouldStop()) return 130;
         if(ServicesObservation->state != WTOP_PROVIDER_VALID) ExitCode = 3;
     }
     if(Options->per_core && (!CoreObservation || CoreObservation->state != WTOP_PROVIDER_VALID)) ExitCode = 3;
@@ -2447,10 +2593,10 @@ static BOOL WriteProvider(FILE *Output, const char *Name, const wtop_provider_re
     *First = FALSE;
     fprintf(Output, "\"%s\":{\"status\":\"%s\",\"error_domain\":%d,\"native_error\":%lu,"
         "\"started_ms\":\"%llu\",\"observed_ms\":\"%llu\",\"elapsed_ms\":%.6f,\"acquisition_ms\":%.6f,"
-        "\"retirement_confirmed\":%s,\"pid\":%lu,\"creation_filetime\":",
+        "\"retirement_confirmed\":%s,\"response_received\":%s,\"pid\":%lu,\"creation_filetime\":",
         Name, wtop_provider_state_name(Result->state), (int)Result->error_domain, Result->native_error,
         (unsigned long long)Result->started_ms, (unsigned long long)Result->observed_ms, Result->elapsed_ms, Result->acquisition_ms,
-        Result->retirement_confirmed ? "true" : "false", Result->pid);
+        Result->retirement_confirmed ? "true" : "false", Result->response_received ? "true" : "false", Result->pid);
     if(FileTimeValue(&Result->creation)) fprintf(Output, "\"%llu\"", (unsigned long long)FileTimeValue(&Result->creation));
     else fputs("null", Output);
     fprintf(Output, ",\"count\":%lu,\"total_count\":%lu", Result->count, Result->total_count);
@@ -2524,7 +2670,10 @@ static int WriteSnapshot(FILE *Output, const wtop_options *Options)
         JsonMetricInteger(Output, "commit_bytes", FreshMetricState(SystemCommitState, SystemMemoryObservedTick, Now), CommitBytes, "bytes");
         JsonMetricInteger(Output, "commit_limit_bytes", FreshMetricState(SystemCommitState, SystemMemoryObservedTick, Now), CommitLimitBytes, "bytes");
         JsonMetricInteger(Output, "uptime_ms", METRIC_OK, UpTime, "milliseconds");
-        fputs("},\"processes\":[", Output);
+        fprintf(Output, "},\"tree\":{\"enabled\":%s,\"unresolved_parent_count\":%lu,\"index_unavailable\":%s},\"processes\":[",
+            ProcessSortType == SORT_BY_TREE ? "true" : "false",
+            ProcessSortType == SORT_BY_TREE ? TreeUnresolvedParentCount : 0,
+            ProcessSortType == SORT_BY_TREE && TreeIndexUnavailable ? "true" : "false");
         for(DWORD i = 0; i < OutputCount; ++i) {
             const process *Process = &ProcessList[i];
             if(i) fputc(',', Output);
@@ -2537,12 +2686,16 @@ static int WriteSnapshot(FILE *Output, const wtop_options *Options)
                    "\"cpu_acquisition_ms\":%.6f,\"owner\":{\"status\":\"%s\",\"value\":",
                    (unsigned long long)Process->ObservedTick, (unsigned long long)Process->CpuObservedTick,
                    Process->CpuElapsedMs, Process->CpuAcquisitionMs, MetricStateName(Process->OwnerState));
-            if(Process->OwnerState == METRIC_OK) { if(!JsonTString(Output, Process->UserName)) return 1; }
+            if(Process->OwnerState == METRIC_OK) { if(!JsonTString(Output, Process->OwnerSid)) return 1; }
             else fputs("null", Output);
             fputs(",\"sid\":", Output);
             if(Process->OwnerSid[0]) JsonTString(Output, Process->OwnerSid); else fputs("null", Output);
-            fprintf(Output, ",\"account_name_status\":\"%s\",\"account_name_observed_ms\":\"%llu\"}",
-                wtop_provider_state_name(Process->OwnerNameState), (unsigned long long)Process->OwnerNameObservedTick);
+            fprintf(Output, ",\"account_name_status\":\"%s\",\"account_name_observed_ms\":\"%llu\",\"account_name\":",
+                Process->OwnerNameStale ? "stale" : wtop_provider_state_name(Process->OwnerNameState),
+                (unsigned long long)Process->OwnerNameObservedTick);
+            if(Process->OwnerNameState == WTOP_PROVIDER_VALID) JsonTString(Output, Process->UserName);
+            else fputs("null", Output);
+            fputc('}', Output);
             JsonMetricDouble(Output, "cpu_percent", FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now), Process->PercentProcessorTime, "percent");
             JsonMetricInteger(Output, "working_set_bytes", FreshMetricState(Process->MemoryState, Process->ObservedTick, Now), Process->UsedMemory, "bytes");
             JsonMetricDouble(Output, "io_read_write_bytes_per_second", FreshMetricState(Process->IoState, Process->ObservedTick, Now), Process->DiskUsage, "bytes/second");
@@ -2605,15 +2758,21 @@ static int RunLog(const wtop_options *Options)
         free(Path); return 1;
     }
     free(Path);
-    ULONGLONG Started = GetTickCount64();
+    ULONGLONG Started = LogStartedTick;
     unsigned long Count = 0;
-    int Result = 0;
+    int Result = 0, Partial = 0;
     while(!ShouldStop()) {
         if(Count) {
             if(Options->duration_ms && GetTickCount64() - Started >= Options->duration_ms) break;
+            if(CollectPerCore) {
+                free(CoreObservation); CoreObservation = CollectCoreObservation((DWORD)Settings.interval_ms);
+                if(!CoreObservation) { Result = 1; break; }
+                CoreObservedTick = CoreObservation->observed_ms;
+            }
             if(!PollProcessList((DWORD)Settings.interval_ms)) { Result = ShouldStop() ? 130 : 1; break; }
             AdoptPendingSample(); PollSystemInfo();
         }
+        if(CollectPerCore && (!CoreObservation || CoreObservation->state != WTOP_PROVIDER_VALID)) Partial = 1;
         FILE *Record = wtop_log_begin(&Sink);
         if(!Record || WriteSnapshot(Record, Options)) { Result = 1; break; }
         wtop_log_result Committed = wtop_log_commit(&Sink);
@@ -2629,6 +2788,7 @@ static int RunLog(const wtop_options *Options)
     }
     if(ShouldStop()) Result = 130;
     if(!wtop_log_close(&Sink)) Result = 1;
+    if(!Result && Partial) Result = 3;
     return Result;
 }
 
@@ -2944,8 +3104,10 @@ int _tmain(int argc, TCHAR *argv[])
     char **Utf8Argv = calloc((size_t)argc, sizeof(*Utf8Argv));
     if(!Utf8Argv) return 1;
     for(int i = 0; i < argc; ++i) {
-        Utf8Argv[i] = ToUtf8(argv[i]);
+        unsigned TextFlags = 0;
+        Utf8Argv[i] = ToUtf8WithStatus(argv[i], &TextFlags);
         if(!Utf8Argv[i]) { Result = 1; goto Finish; }
+        if(TextFlags) { fputs("wtop: command line contains invalid Unicode\n", stderr); Result = 2; goto Finish; }
     }
     wtop_options Options;
     const char *Error;
@@ -3010,6 +3172,19 @@ int _tmain(int argc, TCHAR *argv[])
     wtop_provider_session_init(&InspectionProvider);
     PollInitialSystemInfo();
     PollSystemInfo();
+    InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
+    LogStartedTick = GetTickCount64();
+    if(Options.mode == WTOP_LOG && Options.duration_ms) CollectionDeadline = LogStartedTick + Options.duration_ms;
+    if(CollectPerCore) {
+        if(InteractiveMode) {
+            PerCoreThread = CreateThread(NULL, 0, PollCoreThreadProc, NULL, 0, NULL);
+            if(!PerCoreThread) { Result = 1; goto Cleanup; }
+        } else {
+            CoreObservation = CollectCoreObservation((DWORD)Settings.interval_ms);
+            if(!CoreObservation) { Result = 1; goto Cleanup; }
+            CoreObservedTick = CoreObservation->observed_ms;
+        }
+    }
     if(!PollProcessList(InteractiveMode ? 50 : (DWORD)Settings.interval_ms)) {
         Result = CollectorError ? 1 : 130;
         goto Cleanup;
@@ -3020,8 +3195,10 @@ int _tmain(int argc, TCHAR *argv[])
         if(Options.mode == WTOP_LOG) Result = RunLog(&Options);
         else {
             int Inspection = CollectInspection(&Options);
+            if(Inspection == 130 || ShouldStop()) { Result = 130; goto Cleanup; }
             Result = WriteSnapshot(stdout, &Options);
             if(!Result) Result = Inspection;
+            if(ShouldStop()) Result = 130;
         }
         goto Cleanup;
     }
@@ -3043,11 +3220,17 @@ int _tmain(int argc, TCHAR *argv[])
     ULONGLONG LastDraw = 0;
     BOOL Redraw = TRUE;
     while(!ShouldStop()) {
-        if(AdoptPendingSample()) Redraw = TRUE;
+        /* Consume input against the last displayed model. Adopting a sample
+           first invalidates that frame and can silently discard an otherwise
+           valid function-bar click. Geometry changes still invalidate hits;
+           native actions independently revalidate their captured lifetimes.
+           Publish the next front only after input, then paint it this turn. */
         if(PollConsoleInfo()) Redraw = TRUE;
         ProcessInput(&Redraw);
         InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
         if(ShouldStop()) break;
+        if(AdoptPendingSample()) Redraw = TRUE;
+        if(AdoptPendingCore()) Redraw = TRUE;
         ULONGLONG Now = GetTickCount64();
         if(Redraw || RedrawAtCursor || Now - LastDraw >= Settings.interval_ms) {
             PollSystemInfo();
@@ -3078,6 +3261,15 @@ Cleanup:
         CloseHandle(ProcessListThread);
         ProcessListThread = NULL;
     }
+    if(PerCoreThread) {
+        if(WaitForSingleObject(PerCoreThread, SHUTDOWN_GRACE_MS) != WAIT_OBJECT_0) {
+            OutputDebugString(_T("wtop: per-core worker did not retire; own monitor exit 124.\n"));
+            TerminateProcess(GetCurrentProcess(), EXIT_FORCED_SHUTDOWN);
+            ExitProcess(EXIT_FORCED_SHUTDOWN);
+        }
+        CloseHandle(PerCoreThread); PerCoreThread = NULL;
+    }
+    free(PendingCoreObservation); PendingCoreObservation = NULL;
     if(!wtop_provider_session_close(&OwnerProvider, 1000)) {
         fputs("wtop: owner-provider retirement not confirmed; exiting with owned job cleanup\n", stderr);
         Result = EXIT_FORCED_SHUTDOWN;
