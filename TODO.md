@@ -47,7 +47,8 @@ acceptance or a supported release.
 
 Remaining first-release blockers and evidence work:
 
-- [ ] Close native CI regressions and record exact passing source/artifact scope.
+- [x] Close the observed native CI regressions and record exact passing
+  source/artifact scope in the implementation record (run 44069558700).
 - [ ] Qualify advertised Windows OS/architecture/console/token combinations;
   native ARM64, stock RT, WinPE, ReactOS and historical guests remain unverified.
 - [ ] Qualify real CPU groups/hotplug, protected processes, Unicode/console hosts,

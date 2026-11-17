@@ -59,7 +59,7 @@ construction entirely.
 Providers run a private protocol in another instance of the same executable.
 The child is created suspended, placed in its owned job, and resumed only after
 successful containment. An explicit handle allowlist, 1 MiB wire limit, one-process
-job limit and 256 MiB job commit limit bound admitted work. Service/core arrays
+job limit and 256 MiB per-process commit limit bound admitted work. Service/core arrays
 are capped at 512 and command-line text at its declared protocol capacity.
 Optional COM/WMI/PDH entrypoints are dynamically resolved; they do not become
 mandatory loader dependencies.
@@ -74,9 +74,10 @@ PDH requires an effective collection interval of at least one second. Its own
 observation time is retained. TUI per-core collection has a separate owned thread
 and single pending result; it cannot delay baseline sample publication. The
 noninteractive path collects optional per-core data before the baseline sample.
-Unsupported/denied providers stop; consecutive failures back off and stop after
-three attempts. Domain-name lookup is similarly isolated with limited cold
-lookups per process sample.
+The TUI per-core loop stops on unsupported/denied results; consecutive failures
+back off and stop after three attempts. This policy is separate from explicit
+CLI provider requests. Domain-name lookup is similarly isolated with limited
+cold lookups per process sample.
 
 Baseline kernel/console/filesystem calls do not all have a proven hard deadline.
 Normal cleanup restores the caller's console, stops/joins owned work and releases
@@ -136,9 +137,10 @@ Its first actual Windows run
 passed the specification/portable-core and ARM64 build lanes, but failed x86/x64
 native checks. The failures were retained and investigated:
 
-- Provider handle accounting compared the first process launch with a cold
-  runtime. An independent launch/retire preflight and per-iteration exact counts
-  now distinguish one-time initialization from a repeated provider leak.
+- Provider handle accounting compared the first process launch and pipe use with
+  a cold runtime. Independent process and pipe primitive probes now establish the
+  baseline before any provider is invoked; every provider iteration must retain
+  that exact count. The initial stderr-initialization hypothesis was disproved.
 - A readonly-save test expected no siblings, contradicting the new recovery
   contract. The replacement assertion requires unchanged original bytes, complete
   loadable replacement data and disclosure of every owned recovery sibling.
@@ -146,16 +148,80 @@ native checks. The failures were retained and investigated:
   loop now handles the displayed view before adopting the next sample. The
   single-click acknowledgement and readonly refusal assertions remain strict.
 
-Follow-up local checks have passed seven C90 core suites; focused Windows
-x64 cross-compilation is useful build evidence but does not execute Windows APIs.
-Native follow-up results must be recorded here before merging. Linux unittest
-skips for native/optional emulator cases are not passes. Sanitizer scope covers
-portable C policy, not Windows handle ownership or arbitrary native callbacks.
+Further failures were retained rather than bypassed. Windows path comparisons
+now resolve existing 8.3 aliases while preserving absent destination components.
+The new mouse fixture waits for the initial complete footer before issuing its
+single click; it never retries a lost click. Native pipe diagnostics identified
+one additional File handle on the first independent anonymous-pipe call, distinct
+from both returned endpoints, with both endpoints verified closed. Five later
+primitive cycles and five provider invocations each retain an exact count of 75
+on the recorded x64 host. This supports attribution to first-use behavior outside
+the provider; the specific internal Windows/runtime owner is not established.
+No handle-count tolerance or provider warmup was added. The candidate MSI build
+then exposed a duplicate WiX-generated scope property; the duplicate was removed
+and machine fixtures explicitly request `ALLUSERS=1`.
 
-The native fixtures cover actual CLI output, isolated console input, settings
-conflicts/recovery, provider protocol/retirement, finite logs and disposable
-process actions. Candidate MSI fixtures run only on a disposable runner and
-preserve logs. Their elevated token does not qualify an unelevated install.
+### Passing source and host
+
+[Run 44069558700](https://github.com/Julesc013/wtop/actions/runs/44069558700)
+completed successfully on 2026-11-17 at 10:59:04 UTC, with all four jobs green.
+The PR head is
+[`8733cf278227e5cbefef9b8f078bc66c0c55e298`](https://github.com/Julesc013/wtop/commit/8733cf278227e5cbefef9b8f078bc66c0c55e298);
+Actions checked out synthetic merge `d981abff2a03e07819def21d64432e30a5e74489`.
+Both have source tree `401dfa272dcea0c7b029683f872c84ad6a044320`.
+The [machine-readable observation](evidence/implementation-2026-11-17.json)
+retains exact artifact IDs/digests, provenance, native receipts and limits. It is
+an informative observation, not a second acceptance registry.
+
+The Windows execution host was Server 2025, kernel `10.0.26100`, x64, runner
+image `20261103.298.1`; the compiler was MSVC `19.51.36260.0` through the Visual
+Studio 18 2026 generator. The recorded provenance does not establish the exact
+Windows SDK revision; that field remains explicitly unverified.
+
+| Lane | Observed result | Scope limit |
+| --- | --- | --- |
+| Linux specification/core | Specification/help checks passed; 69 Python cases discovered, 36 passed and 33 skipped; seven C90 CTest suites passed with ASan/UBSan | Skips are not passes; sanitizers cover portable policy, not native handles/callbacks |
+| Windows x86 | All 18 CTest entries passed, including 25 CLI cases, six provider cases and 13 grouped TUI scenarios | x86 execution on this x64 Windows host; no old Windows support implied |
+| Windows x64 | All 18 CTest entries passed with the same nested CLI/provider/TUI scope | One OS/token/console-host environment, not a performance or support matrix |
+| Windows ARM64 | Application/tests built and candidate PE/ZIP verification passed | No ARM64-native execution |
+| x64 MSI | Build, user and machine install, exact payload, collision/refusal, unchanged removal and preservation checks passed | Elevated runner; automatic upgrades deliberately refused; races/rollback remain open |
+
+The native entries include settings conflict/recovery, provider protocol and
+retirement, finite log delivery, tree capacity and disposable process actions.
+The nested Python cases are included in the 18 CTest entries, not additional
+independent full suites. TUI receipts explicitly record
+`human_visual_acceptance: false`.
+
+Both x86 and x64 provider receipts report actual valid command-line observations,
+four observed PDH cores and 259 SCM service records, with a received response and
+confirmed worker retirement. The zero-service result for the disposable inspected
+process is separate from the nonempty system inventory. These observed successes
+are stronger than the typed-degradation cases alone, which may also pass when a
+provider is unavailable.
+
+### Exact candidate payloads
+
+All five downloaded Actions artifact archives were checked against their reported
+SHA-256 digest. `tools/package_candidate.py verify` passed independently on each
+downloaded candidate directory. The native x86/x64 provider receipts match the
+downloaded executable hashes; both MSI scope receipts match the same x64 payload.
+
+| Profile | EXE bytes | EXE SHA-256 |
+| --- | ---: | --- |
+| `win-nt-x86` | 305152 | `f278fe3989c56f74e8a86a2ec1a5d9b789e765682ae0be1d2cf775d93a13daa7` |
+| `win-nt-x64` | 355328 | `29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61` |
+| `win-nt-arm64` | 358400 | `6809bb996e23c57f544ab53fbc5468ae24eda782f7e6f737565968981d501b09` |
+
+The x64 candidate MSI is 319488 bytes, SHA-256
+`f7ce6bf948bc923b34a21bb40c8af032363ba97a87ccb77647380e4d6f456225`.
+It contains the x64 payload above. These are hashes for this run, not promises of
+byte-for-byte reproducibility on a later rebuild or evidence of signing.
+
+Candidate MSI fixtures preserve their raw logs. User and machine scope checks
+both preserved foreign files/registry values and user settings, and refused
+modified-payload repair/removal and automatic upgrades. The receipt keeps
+`qualified: false`: preflight-to-operation races, standard-user UAC, interruption,
+rollback, other hosts and the upgrade implementation remain unresolved.
 
 Historical DOS instruction tests use scripted emulator interrupt services where
 available; they are not tests inside licensed DOS/Windows/OS2 installations.
