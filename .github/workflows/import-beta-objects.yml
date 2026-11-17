@@ -19,7 +19,21 @@ jobs:
       - name: Validate packet, apply data-only patches and create exact Git objects
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 transfer/import_objects.py
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'transfer')
+          import import_objects
+          original = import_objects.api
+          def preserve_message(path, payload):
+              if path == 'commits':
+                  payload = dict(payload)
+                  payload['message'] += '\n'
+              return original(path, payload)
+          import_objects.api = preserve_message
+          import_objects.main()
+          PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: wtop-beta-object-import-${{ github.sha }}
