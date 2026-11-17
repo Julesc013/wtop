@@ -18,6 +18,7 @@
 #ifndef NTOP_H
 #define NTOP_H
 
+#include <stddef.h>
 #include <tchar.h>
 #include <windows.h>
 
@@ -54,6 +55,8 @@ typedef enum vi_message_type {
 void SetViMessage(vi_message_type MessageType, TCHAR *Fmt, ...);
 void ClearViMessage(void);
 void RequestShutdown(void);
+int WtopIsReadOnly(void);
 int KillObservedProcess(DWORD pid);
+int KillObservedProcesses(const DWORD *pids, size_t count);
 
 #endif

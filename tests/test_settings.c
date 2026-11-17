@@ -40,6 +40,15 @@ static char *serialize(const wtop_settings *settings, const wtop_config_document
     bytes[length] = 0;
     assert(!ferror(file));
     assert(!fclose(file));
+    {
+        char *memory;
+        size_t memory_length;
+        memory = NULL;
+        memory_length = 0;
+        assert(wtop_settings_serialize(settings, document, &memory, &memory_length, &error));
+        assert(memory_length == length && !memcmp(memory, bytes, length + 1));
+        free(memory);
+    }
     return bytes;
 }
 
@@ -117,7 +126,7 @@ static void preservation_and_layout(void)
     assert(strstr(first, "Future.Extension keep this exact inert value ; future-owned comment\n"));
     assert(strstr(first, "CPUBarColor 0x05 # custom aggregate color\n"));
     assert(strstr(first, "Tab0.Filter \"\" # keep even this empty-filter comment\n"));
-    assert(strstr(first, "ConfigVersion 1\n"));
+    assert(strstr(first, "ConfigVersion 2\n"));
     assert(strstr(first, "Tab2.Sort I/O\n"));
     wtop_settings_defaults(&reread);
     assert(read_text(first, &reread, &second_document, &error));
@@ -134,7 +143,7 @@ static void preservation_and_layout(void)
 static void malformed_is_transactional(void)
 {
     static const char *const rejected[] = {
-        "ConfigVersion 2\n", "RedrawInterval 49\n", "FGColor 256\n",
+        "ConfigVersion 3\n", "RedrawInterval 49\n", "FGColor 256\n",
         "RedrawInterval 100ms\n", "Keymap unknown\n", "Theme default-script\n",
         "Mouse yes\n", "FunctionBar 2\n", "HeaderRows cpu,cpu\n",
         "HeaderRows cpu,\n", "HeaderRows gpu\n", "TabCount 0\n", "TabCount 9\n",
@@ -203,12 +212,180 @@ static void bounds_and_unicode(void)
     wtop_config_document_free(&document);
 }
 
+static void stable_view_identity(void)
+{
+    wtop_settings settings;
+    wtop_settings reread;
+    wtop_config_document document;
+    wtop_config_document next_document;
+    const char *error;
+    char *bytes;
+    char *again;
+    unsigned long left;
+    unsigned long right;
+    memset(&document, 0, sizeof(document));
+    memset(&next_document, 0, sizeof(next_document));
+    wtop_settings_defaults(&settings);
+    assert(read_text("ConfigVersion 1\nTab0.Future owner-left # left\n"
+                     "  Tab1.Future owner-right # right\nTab1.Name Work # work name\n",
+                     &settings, &document, &error));
+    left = settings.tabs[0].id;
+    right = settings.tabs[1].id;
+    settings.active_tab = 1;
+    assert(wtop_settings_tab_move(&settings, 0, 1, &error));
+    assert(settings.tabs[0].id == right && settings.tabs[1].id == left);
+    assert(settings.active_tab == 0);
+    bytes = serialize(&settings, &document);
+    assert(strstr(bytes, "Tab1.Future owner-left # left\n"));
+    assert(strstr(bytes, "  Tab0.Future owner-right # right\n"));
+    assert(strstr(bytes, "Tab0.Name \"Work\" # work name\n"));
+    wtop_settings_defaults(&reread);
+    assert(read_text(bytes, &reread, &next_document, &error));
+    assert(reread.tabs[0].id == right && reread.tabs[1].id == left);
+    again = serialize(&reread, &next_document);
+    assert(!strcmp(bytes, again));
+    free(bytes);
+    free(again);
+    wtop_config_document_free(&next_document);
+    assert(wtop_settings_tab_delete(&settings, 1, &error));
+    assert(wtop_settings_tab_insert(&settings, 1, "New", &error));
+    assert(settings.tabs[1].id != left);
+    bytes = serialize(&settings, &document);
+    assert(strstr(bytes, "# Removed view 1; original extension follows:\n# Tab0.Future owner-left # left\n"));
+    assert(!strstr(bytes, "\nTab1.Future owner-left"));
+    wtop_settings_defaults(&reread);
+    assert(read_text(bytes, &reread, &next_document, &error));
+    assert(reread.tabs[1].id == settings.tabs[1].id);
+    free(bytes);
+    wtop_config_document_free(&document);
+    wtop_config_document_free(&next_document);
+}
+
+static void view_crud_and_capacity(void)
+{
+    wtop_settings settings;
+    wtop_settings before;
+    const char *error;
+    char name[32];
+    unsigned long original;
+    int i;
+    wtop_settings_defaults(&settings);
+    original = settings.tabs[1].id;
+    assert(wtop_settings_tab_duplicate(&settings, 1, 0, "Clone", &error));
+    assert(settings.tabs[0].id != original && settings.tabs[0].sort_column == WTOP_COLUMN_IO);
+    assert(settings.active_tab == 1);
+    assert(wtop_settings_tab_rename(&settings, 0, "Copy", &error));
+    before = settings;
+    assert(!wtop_settings_tab_rename(&settings, 0, "MAIN", &error));
+    assert(!memcmp(&before, &settings, sizeof(settings)));
+    assert(wtop_settings_tab_delete(&settings, 0, &error));
+    assert(settings.active_tab == 0 && settings.tabs[1].id == original);
+    assert(wtop_settings_tab_set_visible(&settings, 0, 0, &error));
+    assert(settings.active_tab == 1);
+    before = settings;
+    assert(!wtop_settings_tab_set_visible(&settings, 1, 0, &error));
+    assert(!memcmp(&before, &settings, sizeof(settings)));
+    assert(!wtop_settings_tab_delete(&settings, 1, &error));
+    assert(!memcmp(&before, &settings, sizeof(settings)));
+    assert(wtop_settings_tab_set_visible(&settings, 0, 1, &error));
+    for (i = settings.tab_count; i < WTOP_MAX_TABS; ++i) {
+        sprintf(name, "Extra %d", i);
+        assert(wtop_settings_tab_insert(&settings, settings.tab_count, name, &error));
+    }
+    before = settings;
+    assert(!wtop_settings_tab_insert(&settings, settings.tab_count, "Overflow", &error));
+    assert(!memcmp(&before, &settings, sizeof(settings)));
+    wtop_settings_defaults(&settings);
+    settings.next_tab_id = WTOP_TAB_ID_MAX;
+    assert(wtop_settings_tab_insert(&settings, 2, "Last identity", &error));
+    assert(settings.tabs[2].id == WTOP_TAB_ID_MAX && settings.next_tab_id == 0);
+    assert(wtop_settings_tab_delete(&settings, 2, &error));
+    before = settings;
+    assert(!wtop_settings_tab_insert(&settings, 2, "No reuse", &error));
+    assert(!memcmp(&before, &settings, sizeof(settings)));
+}
+
+static void view_schema_validation(void)
+{
+    static const char *const rejected[] = {
+        "ConfigVersion 2\n",
+        "ConfigVersion 2\nNextTabId 3\nTab0.Id 1\nTab1.Id 1\n",
+        "ConfigVersion 2\nNextTabId 2\nTab0.Id 1\nTab1.Id 2\n",
+        "ConfigVersion 2\nNextTabId 4294967296\nTab0.Id 1\nTab1.Id 2\n",
+        "ConfigVersion 2\nNextTabId 3\nTab0.Id 0\nTab1.Id 2\n",
+        "ConfigVersion 1\nTab0.Id 1\n",
+        "NextTabId 3\n"
+    };
+    wtop_settings settings;
+    wtop_settings before;
+    wtop_config_document document;
+    const char *error;
+    size_t i;
+    memset(&document, 0, sizeof(document));
+    wtop_settings_defaults(&settings);
+    before = settings;
+    for (i = 0; i < sizeof(rejected) / sizeof(rejected[0]); ++i) {
+        assert(!read_text(rejected[i], &settings, &document, &error));
+        assert(!memcmp(&before, &settings, sizeof(settings)) && !document.original);
+    }
+    assert(read_text("ConfigVersion 02\nNextTabId 43\nTab0.Id 42\nTab1.Id 8\n",
+                     &settings, &document, &error));
+    assert(document.schema_version == 2 && settings.tabs[0].id == 42);
+    wtop_config_document_free(&document);
+}
+
+static void orphan_extension_is_not_rebound(void)
+{
+    wtop_settings settings;
+    wtop_config_document document = {0};
+    const char *error;
+    char *bytes;
+    size_t length;
+    wtop_settings_defaults(&settings);
+    assert(read_text("Tab7.Future unknown original owner\n", &settings, &document, &error));
+    bytes = NULL; length = 71;
+    assert(!wtop_settings_serialize(&settings, &document, &bytes, &length, &error));
+    assert(!bytes && length == 71 && strstr(error, "outside the original view set"));
+    assert(!strcmp(document.original, "Tab7.Future unknown original owner\n"));
+    wtop_config_document_free(&document);
+}
+
+static void document_clone_is_independent(void)
+{
+    wtop_settings settings;
+    wtop_config_document source = {0};
+    wtop_config_document copy = {0};
+    wtop_config_document invalid;
+    const char *error;
+    char *original;
+    wtop_settings_defaults(&settings);
+    assert(read_text("# preserved\nTab0.Future original owner\n", &settings, &source, &error));
+    assert(wtop_config_document_clone(&copy, &source, &error));
+    assert(copy.original != source.original && !strcmp(copy.original, source.original));
+    assert(copy.schema_version == source.schema_version && copy.tab_ids[0] == source.tab_ids[0]);
+    invalid = source; invalid.schema_version = WTOP_CONFIG_VERSION + 1;
+    original = copy.original;
+    assert(!wtop_config_document_clone(&copy, &invalid, &error));
+    assert(copy.original == original && !strcmp(copy.original, source.original));
+    wtop_config_document_free(&source);
+    assert(!strcmp(copy.original, "# preserved\nTab0.Future original owner\n"));
+    assert(wtop_config_document_clone(&copy, &copy, &error));
+    assert(wtop_config_document_clone(&copy, &source, &error));
+    assert(!copy.original && !copy.length && !copy.schema_version);
+    wtop_config_document_free(&copy);
+}
+
 int main(void)
 {
     defaults_and_overrides();
     preservation_and_layout();
     malformed_is_transactional();
     bounds_and_unicode();
+    stable_view_identity();
+    view_crud_and_capacity();
+    view_schema_validation();
+    orphan_extension_is_not_rebound();
+    document_clone_is_independent();
     puts("settings: defaults, overrides, layout, preservation, UTF-8 and transactional bounds passed");
     return 0;
 }

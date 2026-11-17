@@ -17,6 +17,7 @@
 
 #include <windows.h>
 #include <psapi.h>
+#include <sddl.h>
 #include <lmcons.h>
 #include <tchar.h>
 #include <tlhelp32.h>
@@ -31,7 +32,13 @@
 #include <errno.h>
 #include "core.h"
 #include "settings.h"
+#include "settings_store_nt.h"
+#include "text.h"
 #include "ui.h"
+#include "metrics.h"
+#include "actions.h"
+#include "providers_nt.h"
+#include "output_nt.h"
 #include <io.h>
 #include <fcntl.h>
 #include "version.h"
@@ -76,6 +83,21 @@ static HANDLE ProcessListThread;
 static volatile LONG ShutdownRequested;
 static DWORD CollectorError;
 static ULONGLONG LastSampleElapsed;
+static ULONGLONG LastSampleStartedTick, LastSampleObservedTick, LastSamplePublishedTick;
+static ULONGLONG SampleSequence;
+static DWORD LastSampleInterval;
+static volatile LONG CollectorInterval;
+static DWORD ObservedProcessCount;
+static DWORD UnresolvedOwnerFilterCount;
+static BOOL SampleComplete = TRUE;
+static BOOL CpuMachine, ReadOnlyMode, CollectPerCore, SkipProcessRows;
+static wtop_provider_session CoreProvider;
+static wtop_provider_result *CoreObservation;
+static ULONGLONG CoreObservedTick;
+static double PerformanceFrequency;
+static unsigned DisplayTextFlags;
+int WtopIsReadOnly(void) { return ReadOnlyMode != FALSE; }
+
 
 void RequestShutdown(void)
 {
@@ -88,6 +110,37 @@ static BOOL ShouldStop(void)
     return InterlockedCompareExchange(&ShutdownRequested, 0, 0) != 0;
 }
 
+/* The qualified baseline uses one printable ASCII cell per Unicode scalar.
+   Raw strings remain in the model; only this projection substitutes. A richer
+   Unicode host profile needs independent cell-width and console evidence. */
+static size_t NativeAscii(const TCHAR *Text, char *Output, size_t Capacity)
+{
+    size_t Simple = 0;
+    while(Text[Simple] && Text[Simple] <= 126 && Text[Simple] >= 0) {
+        if(Simple + 1 >= Capacity) {
+            if(Capacity) Output[Simple] = 0;
+            DisplayTextFlags |= WTOP_TEXT_CLIPPED;
+            return Simple;
+        }
+        if(Text[Simple] < 32) { Output[Simple] = '?'; DisplayTextFlags |= WTOP_TEXT_CONTROL | WTOP_TEXT_LOSSY; }
+        else Output[Simple] = (char)Text[Simple];
+        ++Simple;
+    }
+    if(!Text[Simple]) { if(Capacity) Output[Simple] = 0; return Simple; }
+    unsigned Flags = 0;
+    char *Utf8 = ToUtf8WithStatus(Text, &Flags);
+    if(!Utf8) {
+        if(Capacity) Output[0] = 0;
+        DisplayTextFlags |= WTOP_TEXT_INVALID | WTOP_TEXT_LOSSY;
+        return 0;
+    }
+    wtop_text_result Rendered = wtop_text_ascii(Utf8, strlen(Utf8),
+        Capacity ? Capacity - 1 : 0, Output, Capacity);
+    DisplayTextFlags |= Flags | Rendered.flags;
+    free(Utf8);
+    return Rendered.cells;
+}
+
 static int ConPrintf(const TCHAR *Fmt, ...)
 {
     TCHAR Buffer[4096];
@@ -96,6 +149,16 @@ static int ConPrintf(const TCHAR *Fmt, ...)
     int CharsWritten = _vsntprintf_s(Buffer, _countof(Buffer), _TRUNCATE, Fmt, VaList);
     va_end(VaList);
     if(CharsWritten < 0) CharsWritten = (int)_tcslen(Buffer);
+    if(InteractiveMode) {
+        BOOL NeedsProjection = FALSE;
+        for(int i = 0; i < CharsWritten; ++i)
+            if(Buffer[i] < 32 || Buffer[i] > 126) { NeedsProjection = TRUE; break; }
+        if(NeedsProjection) {
+            char Cells[4096];
+            CharsWritten = (int)NativeAscii(Buffer, Cells, sizeof(Cells));
+            for(int i = 0; i <= CharsWritten; ++i) Buffer[i] = TCharFromAscii(Cells[i]);
+        }
+    }
     if(InteractiveMode && Width > 0) {
         CharsWritten = min(CharsWritten, max(0, Width - RenderColumn));
 #ifdef UNICODE
@@ -107,10 +170,18 @@ static int ConPrintf(const TCHAR *Fmt, ...)
     return CharsWritten;
 }
 
+static void DrawPaddedText(const TCHAR *Text, int Cells)
+{
+    char Display[4096];
+    NativeAscii(Text, Display, sizeof(Display));
+    ConPrintf(_T("%-*.*hs"), Cells, Cells, Display);
+}
+
 static void ConPutc(TCHAR c)
 {
     if(InteractiveMode && Width > 0 && RenderColumn >= Width) return;
     ++RenderColumn;
+    if(c < 32 || c > 126) { c = _T('?'); DisplayTextFlags |= WTOP_TEXT_LOSSY; }
     if(!WriteTText(ConsoleHandle, &c, 1)) RequestShutdown();
 }
 
@@ -121,173 +192,84 @@ static void ConPutc(TCHAR c)
 
 static wtop_settings Settings;
 static wtop_config_document ConfigDocument;
-static TCHAR ConfigPath[32768];
-static BOOL ConfigWritesDisabled;
+static wtop_settings_store ConfigStore;
+static unsigned long SettingsRevision = 1;
 static DWORD OriginalInputMode;
 
 static wtop_tab *ActiveTab(void) { return &Settings.tabs[Settings.active_tab]; }
 
-/* Configuration paths are independent of CWD unless explicitly supplied. The
-   roaming folder lookup is optional and never creates a directory at startup. */
-static BOOL ConfigExpectedExists;
-static TCHAR ConfigUserDirectory[32768];
-
-static BOOL ResolveExplicitPath(const char *Text, TCHAR *Path, DWORD Capacity)
+static void MarkSettingsChanged(void)
 {
-    TCHAR *Converted = FromUtf8(Text);
-    DWORD Length = Converted ? GetFullPathName(Converted, Capacity, Path, NULL) : 0;
-    free(Converted);
-    return Length && Length < Capacity;
+    ConfigDirty = TRUE;
+    /* Saves are currently synchronous on the UI thread. Keep a revision anyway
+       so a future asynchronous store cannot clear edits made after capture. */
+    if(SettingsRevision < ULONG_MAX) ++SettingsRevision;
 }
 
-static BOOL ResolveUserConfigPath(void)
+static BOOL ResolveConfigStore(const wtop_options *Options, wtop_store_result *Result)
 {
-    typedef HRESULT (WINAPI *folder_fn)(HWND, int, HANDLE, DWORD, LPTSTR);
-    TCHAR Library[MAX_PATH + 32], Folder[MAX_PATH];
-    UINT Length = GetSystemDirectory(Library, _countof(Library));
-    if(!Length || Length >= MAX_PATH) return FALSE;
-    _tcscat_s(Library, _countof(Library), _T("\\shell32.dll"));
-    HMODULE Module = LoadLibrary(Library);
-    if(!Module) return FALSE;
-#ifdef UNICODE
-    folder_fn GetFolder = (folder_fn)GetProcAddress(Module, "SHGetFolderPathW");
-#else
-    folder_fn GetFolder = (folder_fn)GetProcAddress(Module, "SHGetFolderPathA");
-#endif
-    HRESULT Status = GetFolder ? GetFolder(NULL, 0x001a /* CSIDL_APPDATA, no CREATE */, NULL, 0, Folder) : E_NOTIMPL;
-    FreeLibrary(Module);
-    if(FAILED(Status) || !Folder[0]) return FALSE;
-    _stprintf_s(ConfigUserDirectory, _countof(ConfigUserDirectory), _T("%s\\Wtop"), Folder);
-    _stprintf_s(ConfigPath, _countof(ConfigPath), _T("%s\\wtop.conf"), ConfigUserDirectory);
+    wtop_store_request Request;
+    memset(&Request, 0, sizeof(Request));
+    Request.explicit_path = Options->config_path;
+    Request.portable_root = Options->portable_root;
+    Request.portable = Options->portable;
+    Request.no_config = Options->no_config;
+    return wtop_store_resolve(&ConfigStore, &Request, Result);
+}
+
+static BOOL ReadConfigFile(const wtop_options *Options)
+{
+    wtop_store_result Result;
+    if(!ResolveConfigStore(Options, &Result) ||
+       !wtop_store_load(&ConfigStore, &Settings, &ConfigDocument, &Result)) {
+        fprintf(stderr, "wtop: configuration %s at line %lu: %s (Win32 %lu)\n",
+            wtop_store_outcome_name(Result.outcome), Result.error_line,
+            Result.message ? Result.message : "failed", Result.native_error);
+        return FALSE;
+    }
     return TRUE;
 }
 
-static BOOL ReadConfigFile(const char *ExplicitPath, BOOL SkipRead)
+static BOOL ExportConfigFile(const char *Path, wtop_store_result *Result)
 {
-    FILE *File = NULL;
-    TCHAR ReadPath[32768];
-    ConfigWritesDisabled = SkipRead;
-    ConfigPath[0] = ConfigUserDirectory[0] = 0;
-    ConfigExpectedExists = FALSE;
-    if(SkipRead) return TRUE;
-    if(ExplicitPath) {
-        if(!ResolveExplicitPath(ExplicitPath, ConfigPath, _countof(ConfigPath))) return FALSE;
-    } else {
-        DWORD Length = GetModuleFileName(NULL, ConfigPath, _countof(ConfigPath));
-        if(!Length || Length >= _countof(ConfigPath)) return FALSE;
-        TCHAR *Slash = _tcsrchr(ConfigPath, _T('\\'));
-        if(!Slash) return FALSE;
-        Slash[1] = 0;
-        if(_tcslen(ConfigPath) + 11 >= _countof(ConfigPath)) return FALSE;
-        _tcscat_s(ConfigPath, _countof(ConfigPath), _T("wtop.conf"));
+    if(ReadOnlyMode) {
+        memset(Result, 0, sizeof(*Result));
+        Result->outcome = WTOP_STORE_DENIED;
+        Result->native_error = ERROR_ACCESS_DENIED;
+        Result->message = "configuration writes disabled by --readonly";
+        return FALSE;
     }
-    _tcscpy_s(ReadPath, _countof(ReadPath), ConfigPath);
-    errno_t OpenError = _tfopen_s(&File, ReadPath, _T("rb"));
-    if(!OpenError) ConfigExpectedExists = TRUE;
-    if(OpenError && !ExplicitPath && (OpenError == ENOENT || OpenError == ENOTDIR)) {
-        TCHAR *Slash = _tcsrchr(ReadPath, _T('\\'));
-        Slash[1] = 0;
-        _tcscat_s(ReadPath, _countof(ReadPath), _T("ntop.conf"));
-        OpenError = _tfopen_s(&File, ReadPath, _T("rb"));
-        /* Import legacy configuration without changing the legacy file. */
-        if(OpenError && (OpenError == ENOENT || OpenError == ENOTDIR)) {
-            ConfigPath[0] = 0;
-            if(!ResolveUserConfigPath()) return TRUE; /* TUI still works; saving reports unavailable. */
-            OpenError = _tfopen_s(&File, ConfigPath, _T("rb"));
-            if(!OpenError) ConfigExpectedExists = TRUE;
-        }
+    wtop_settings_store *Export = calloc(1, sizeof(*Export));
+    if(!Export) {
+        memset(Result, 0, sizeof(*Result));
+        Result->outcome = WTOP_STORE_UNCHANGED_FAILURE;
+        Result->native_error = ERROR_NOT_ENOUGH_MEMORY;
+        Result->message = "cannot allocate settings store";
+        return FALSE;
     }
-    if(OpenError) return !ExplicitPath && (OpenError == ENOENT || OpenError == ENOTDIR);
-    unsigned long Line;
+    wtop_config_document Document = {0};
     const char *Error = NULL;
-    BOOL Ok = wtop_settings_read(File, &Settings, &ConfigDocument, &Line, &Error);
-    if(!Ok) fprintf(stderr, "wtop: invalid configuration at line %lu: %s\n", Line, Error ? Error : "read failed");
-    fclose(File);
-    return Ok;
-}
-
-/* Check the last loaded/saved bytes, not merely timestamp/length. This catches
-   edits since load; it is not a cross-process compare-and-swap transaction. */
-static BOOL ConfigTargetUnchanged(void)
-{
-    HANDLE File = CreateFile(ConfigPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if(File == INVALID_HANDLE_VALUE) {
-        DWORD Error = GetLastError();
-        return !ConfigExpectedExists && (Error == ERROR_FILE_NOT_FOUND || Error == ERROR_PATH_NOT_FOUND);
-    }
-    BOOL Ok = ConfigExpectedExists;
-    size_t Offset = 0;
-    BYTE Buffer[1024];
-    DWORD Count;
-    while(Ok) {
-        if(!ReadFile(File, Buffer, sizeof(Buffer), &Count, NULL)) { Ok = FALSE; break; }
-        if(!Count) { Ok = Offset == ConfigDocument.length; break; }
-        if(Offset > ConfigDocument.length || Count > ConfigDocument.length - Offset ||
-           memcmp(Buffer, ConfigDocument.original + Offset, Count)) { Ok = FALSE; break; }
-        Offset += Count;
-    }
-    CloseHandle(File);
-    return Ok;
-}
-
-/* Explicit writes use a unique sibling file, flush it, then atomically replace
-   on the current NT backend. No fallback truncates the destination in-place. */
-static BOOL WriteConfigFile(const TCHAR *Path, BOOL CheckForChanges, const char **Error)
-{
-    TCHAR Temporary[32768];
-    HANDLE Handle = INVALID_HANDLE_VALUE;
-    wtop_config_document WrittenDocument = {0};
-    DWORD Failure = ERROR_SUCCESS;
-    if(!wtop_settings_validate(&Settings, Error)) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
-    if(CheckForChanges && !ConfigTargetUnchanged()) { *Error = "configuration changed since load; reload before saving"; SetLastError(ERROR_SHARING_VIOLATION); return FALSE; }
-    *Error = "cannot create configuration temporary file";
-    if(_tcslen(Path) + 64 >= _countof(Temporary)) { *Error = "configuration path too long"; SetLastError(ERROR_FILENAME_EXCED_RANGE); return FALSE; }
-    for(unsigned Attempt = 0; Attempt < 16; ++Attempt) {
-        _stprintf_s(Temporary, _countof(Temporary), _T("%s.tmp-%lu-%llu-%u"), Path, GetCurrentProcessId(), GetTickCount64(), Attempt);
-        Handle = CreateFile(Temporary, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-        if(Handle != INVALID_HANDLE_VALUE) break;
-        if(GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS) return FALSE;
-    }
-    if(Handle == INVALID_HANDLE_VALUE) return FALSE;
-    int Descriptor = _open_osfhandle((INT_PTR)Handle, _O_RDWR | _O_BINARY);
-    if(Descriptor < 0) { CloseHandle(Handle); DeleteFile(Temporary); SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
-    FILE *File = _fdopen(Descriptor, "w+b");
-    if(!File) { _close(Descriptor); DeleteFile(Temporary); SetLastError(ERROR_NOT_ENOUGH_MEMORY); return FALSE; }
-    BOOL Ok = wtop_settings_write(File, &Settings, &ConfigDocument, Error);
-    if(!Ok) Failure = ERROR_WRITE_FAULT;
-    if(Ok && fflush(File)) { *Error = "cannot flush configuration stream"; Failure = ERROR_WRITE_FAULT; Ok = FALSE; }
-    if(Ok && !FlushFileBuffers((HANDLE)_get_osfhandle(Descriptor))) {
-        *Error = "cannot flush configuration temporary file"; Failure = GetLastError(); Ok = FALSE;
-    }
-    if(Ok && CheckForChanges) {
-        /* Capture our exact output while the temporary handle excludes sharing.
-           Do not reread the destination after replacement: that could adopt a
-           concurrent editor's bytes as our own baseline without applying them. */
-        unsigned long Line;
-        wtop_settings WrittenSettings = Settings;
-        if(fseek(File, 0, SEEK_SET) || !wtop_settings_read(File, &WrittenSettings, &WrittenDocument, &Line, Error)) {
-            *Error = "cannot verify serialized configuration"; Failure = ERROR_READ_FAULT; Ok = FALSE;
+    BOOL Ok = wtop_config_document_clone(&Document, &ConfigDocument, &Error);
+    if(!Ok) {
+        memset(Result, 0, sizeof(*Result));
+        Result->outcome = WTOP_STORE_UNCHANGED_FAILURE;
+        Result->native_error = ERROR_NOT_ENOUGH_MEMORY;
+        Result->message = Error;
+    } else {
+        Ok = wtop_store_export_target(Export, Path, Result);
+        if(Ok) {
+            wcscpy_s(Export->read_path, _countof(Export->read_path), ConfigStore.read_path);
+            Ok = wtop_store_save(Export, &Settings, &Document, SettingsRevision, Result);
         }
     }
-    if(fclose(File) && Ok) { *Error = "cannot close configuration temporary file"; Failure = ERROR_WRITE_FAULT; Ok = FALSE; }
-    if(Ok && CheckForChanges && !ConfigTargetUnchanged()) {
-        *Error = "configuration changed while saving; destination preserved"; Failure = ERROR_SHARING_VIOLATION; Ok = FALSE;
+    if(!Ok && (Export->recovery_temporary[0] || Export->recovery_backup[0])) {
+        char *Temporary = ToUtf8(Export->recovery_temporary), *Backup = ToUtf8(Export->recovery_backup);
+        fprintf(stderr, "wtop: recoverable temporary=%s backup=%s\n", Temporary ? Temporary : "", Backup ? Backup : "");
+        free(Temporary); free(Backup);
     }
-    DWORD Flags = MOVEFILE_WRITE_THROUGH;
-    /* A new implicit destination must not overwrite a file created after our
-       check. Explicit exports deliberately allow replacement. */
-    if(!CheckForChanges || ConfigExpectedExists) Flags |= MOVEFILE_REPLACE_EXISTING;
-    if(Ok && !MoveFileEx(Temporary, Path, Flags)) {
-        *Error = "cannot replace configuration destination"; Failure = GetLastError(); Ok = FALSE;
-    }
-    if(Ok && CheckForChanges) {
-        wtop_config_document_free(&ConfigDocument);
-        ConfigDocument = WrittenDocument;
-        memset(&WrittenDocument, 0, sizeof(WrittenDocument));
-        ConfigExpectedExists = TRUE;
-    }
-    wtop_config_document_free(&WrittenDocument);
-    if(!Ok) { DeleteFile(Temporary); SetLastError(Failure); }
+    wtop_config_document_free(&Document);
+    wtop_store_dispose(Export);
+    free(Export);
     return Ok;
 }
 
@@ -310,25 +292,44 @@ static void SetConCursorPos(SHORT X, SHORT Y)
     RenderColumn = X;
 }
 
-typedef enum metric_state {
-    METRIC_OK, METRIC_DENIED, METRIC_UNAVAILABLE, METRIC_WARMING, METRIC_DISCONTINUITY
-} metric_state;
+typedef wtop_metric_state metric_state;
+#define METRIC_OK WTOP_METRIC_VALID
+#define METRIC_DENIED WTOP_METRIC_DENIED
+#define METRIC_UNAVAILABLE WTOP_METRIC_UNSUPPORTED
+#define METRIC_WARMING WTOP_METRIC_WARMING_UP
+#define METRIC_DISCONTINUITY WTOP_METRIC_RESET
 
 static const char *MetricStateName(metric_state State)
 {
-    static const char *Names[] = { "ok", "denied", "unavailable", "warming", "discontinuity" };
-    return Names[(int)State];
+    return wtop_metric_state_name(State);
 }
 
 static metric_state LastMetricError(void)
 {
-    return GetLastError() == ERROR_ACCESS_DENIED ? METRIC_DENIED : METRIC_UNAVAILABLE;
+    return GetLastError() == ERROR_ACCESS_DENIED ? METRIC_DENIED : WTOP_METRIC_ERROR;
 }
+
+static wtop_counter CounterValue(ULONGLONG Value)
+{
+    wtop_counter Result;
+    Result.high = (unsigned long)(Value >> 32);
+    Result.low = (unsigned long)(Value & 0xffffffffUL);
+    return Result;
+}
+
+static ULONGLONG NativeCounter(wtop_counter Value)
+{
+    return ((ULONGLONG)Value.high << 32) | Value.low;
+}
+static metric_state FreshMetricState(metric_state State, ULONGLONG Observed, ULONGLONG Now);
 
 typedef struct process {
 	HANDLE Handle;
 	DWORD ID;
 	TCHAR UserName[UNLEN + 1];
+    WCHAR OwnerSid[WTOP_PROVIDER_SID_CHARS];
+    wtop_provider_state OwnerNameState;
+    ULONGLONG OwnerNameObservedTick;
 	DWORD BasePriority;
 	double PercentProcessorTime;
 	unsigned __int64 UsedMemory;
@@ -340,13 +341,14 @@ typedef struct process {
 	ULONGLONG DiskOperations;
 	double DiskUsage;
     ULONGLONG CreationTime;
-    ULONGLONG PreviousCpu;
+    wtop_cpu_observation PreviousCpuObservation;
+    double CpuElapsedMs, CpuAcquisitionMs;
+    ULONGLONG CpuObservedTick, ObservedTick;
     ULONGLONG PreviousRead;
     ULONGLONG PreviousWrite;
     ULONGLONG IoReadTotal;
     ULONGLONG IoWriteTotal;
     ULONGLONG SampleTick;
-    BOOL PreviousTimesValid;
     BOOL PreviousIoValid;
     metric_state OwnerState, CpuState, MemoryState, IoState, AgeState;
 	DWORD TreeDepth;
@@ -357,9 +359,32 @@ typedef struct process {
 } process;
 
 #define PROCLIST_BUF_INCREASE 64
+#define MAX_PROCESS_ROWS 65536UL
 
 static process *ProcessList;
 static DWORD ProcessListSize = PROCLIST_BUF_INCREASE;
+
+/* The collector owns a private sample until this single-slot publication.
+   The UI owns its adopted sample. No OS query, rendering, action, allocation or
+   destruction runs while the publication lock is held; superseded pending
+   samples are freed outside it. Memory is bounded by front/pending/in-flight. */
+typedef struct pending_sample {
+    process *rows;
+    wtop_provider_result *cores;
+    ULONGLONG core_observed;
+    DWORD count, observed_count, unresolved_owner_filter, running, capacity, interval;
+    BOOL complete;
+    metric_state cpu_state;
+    double cpu_busy;
+    ULONGLONG cpu_observed, started, observed, published, elapsed, sequence;
+} pending_sample;
+static pending_sample *PendingSample;
+static ULONGLONG CollectorSequence;
+
+static void FreePendingSample(pending_sample *Sample)
+{
+    if(Sample) { free(Sample->rows); free(Sample->cores); free(Sample); }
+}
 
 typedef struct process_identity { DWORD ID; ULONGLONG CreationTime; } process_identity;
 static process_identity *TaggedProcessList;
@@ -464,19 +489,18 @@ static process_sort_type ProcessSortType = SORT_BY_ID;
 static DWORD CPUCoreCount;
 static double CPUUsage;
 static BOOL CPUUsageKnown;
-
-static ULONGLONG SubtractTimes(const FILETIME *A, const FILETIME *B)
+static metric_state CPUUsageState = WTOP_METRIC_WARMING_UP;
+static DWORD ActiveCpuCapacity;
+static ULONGLONG CpuSystemObservedTick;
+/* Native API resolver stays in this adapter; core callbacks never carry handles. */
+typedef DWORD (WINAPI *active_cpu_fn)(WORD);
+static active_cpu_fn GetAllActiveProcessors;
+static DWORD CurrentCpuCapacity(void)
 {
-	LARGE_INTEGER lA, lB;
-
-	lA.LowPart = A->dwLowDateTime;
-	lA.HighPart = A->dwHighDateTime;
-
-	lB.LowPart = B->dwLowDateTime;
-	lB.HighPart = B->dwHighDateTime;
-
-	return lA.QuadPart - lB.QuadPart;
+    return GetAllActiveProcessors ? GetAllActiveProcessors(0xffff) : 0;
 }
+
+
 
 void AddChildProcess(process *ParentProcess, process *Process)
 {
@@ -693,7 +717,7 @@ void SetPresentationFilter(const TCHAR *Pattern)
     }
     strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), Utf8);
     free(Utf8);
-    ConfigDirty = TRUE;
+    MarkSettingsChanged();
     ProcessIndex = SelectedViewIndex = 0;
     ReadjustCursor();
 }
@@ -775,6 +799,35 @@ static ULONGLONG FileTimeValue(const FILETIME *Value)
     return ((ULONGLONG)Value->dwHighDateTime << 32) | Value->dwLowDateTime;
 }
 
+/* The acquisition interval is attached to this exact process handle. QPC is
+   sampled immediately around GetProcessTimes, never around the whole sweep. */
+static BOOL ObserveProcessCpu(process *Process, wtop_cpu_observation *Observation)
+{
+    FILETIME Created, Exited, Kernel, User;
+    LARGE_INTEGER Before, After;
+    memset(Observation, 0, sizeof(*Observation));
+    Observation->epoch = 1;
+    Observation->state = WTOP_METRIC_ERROR;
+    BOOL HaveBefore = QueryPerformanceCounter(&Before);
+    BOOL Ok = GetProcessTimes(Process->Handle, &Created, &Exited, &Kernel, &User);
+    DWORD Error = Ok ? ERROR_SUCCESS : GetLastError();
+    BOOL HaveAfter = QueryPerformanceCounter(&After);
+    Process->CpuObservedTick = GetTickCount64();
+    if(!Ok) {
+        Observation->state = Error == ERROR_ACCESS_DENIED ? METRIC_DENIED : WTOP_METRIC_ERROR;
+        return FALSE;
+    }
+    Observation->lifetime = CounterValue(FileTimeValue(&Created));
+    Observation->kernel = CounterValue(FileTimeValue(&Kernel));
+    Observation->user = CounterValue(FileTimeValue(&User));
+    if(HaveBefore && HaveAfter && Before.QuadPart >= 0 && After.QuadPart >= 0 && PerformanceFrequency > 0) {
+        Observation->before = CounterValue((ULONGLONG)Before.QuadPart);
+        Observation->after = CounterValue((ULONGLONG)After.QuadPart);
+        Observation->state = METRIC_OK;
+    }
+    return TRUE;
+}
+
 static void CloseSampleHandles(process *Sample, DWORD Count)
 {
     for(DWORD i = 0; i < Count; ++i) {
@@ -798,14 +851,67 @@ static BOOL MatchesStaticFilter(const process *Process)
     return TRUE;
 }
 
+#define OWNER_CACHE_ENTRIES 32
+static struct owner_cache_entry {
+    WCHAR sid[WTOP_PROVIDER_SID_CHARS];
+    WCHAR name[UNLEN + 1];
+    wtop_provider_state state;
+    ULONGLONG observed;
+} OwnerCache[OWNER_CACHE_ENTRIES];
+static unsigned OwnerCacheNext;
+static unsigned OwnerLookupAllowance;
+static ULONGLONG OwnerLookupDeadline;
+static wtop_provider_session OwnerProvider;
+
+static void ResolveObservedOwner(process *Process)
+{
+    Process->OwnerNameState = WTOP_PROVIDER_WARMING_UP;
+    if(!Process->OwnerSid[0]) return;
+    ULONGLONG Now = GetTickCount64();
+    struct owner_cache_entry *Entry = NULL;
+    for(unsigned i = 0; i < OWNER_CACHE_ENTRIES; ++i) {
+        if(!wcscmp(OwnerCache[i].sid, Process->OwnerSid)) { Entry = &OwnerCache[i]; break; }
+    }
+    BOOL Expired = !Entry || Now - Entry->observed > 60000;
+    if(Expired && OwnerLookupAllowance && Now < OwnerLookupDeadline && !ShouldStop() && !OwnerProvider.admission_closed) {
+        --OwnerLookupAllowance;
+        wtop_provider_request Request;
+        memset(&Request, 0, sizeof(Request));
+        Request.kind = WTOP_PROVIDER_ACCOUNT;
+        wcscpy_s(Request.sid, _countof(Request.sid), Process->OwnerSid);
+        wtop_provider_result *Result = calloc(1, sizeof(*Result));
+        if(Result) {
+            DWORD Budget = (DWORD)min(200ULL, OwnerLookupDeadline - Now);
+            wtop_provider_collect(&OwnerProvider, &Request, max(1UL, Budget), ShutdownEvent, Result);
+            if(!Entry) Entry = &OwnerCache[OwnerCacheNext++ % OWNER_CACHE_ENTRIES];
+            memset(Entry, 0, sizeof(*Entry));
+            wcscpy_s(Entry->sid, _countof(Entry->sid), Process->OwnerSid);
+            Entry->observed = GetTickCount64(); Entry->state = Result->state;
+            if(Result->state == WTOP_PROVIDER_VALID)
+                wcsncpy_s(Entry->name, _countof(Entry->name), Result->data.account.name, _TRUNCATE);
+            free(Result);
+        }
+    }
+    if(Entry) {
+        Process->OwnerNameState = Entry->state;
+        Process->OwnerNameObservedTick = Entry->observed;
+        if(Entry->state == WTOP_PROVIDER_VALID)
+            wcscpy_s(Process->UserName, _countof(Process->UserName), Entry->name);
+    }
+}
+
 /* Private sample handles and buffers never escape the collector. */
 static BOOL PollProcessList(DWORD UpdateTime)
 {
+    ULONGLONG ObservationStarted = GetTickCount64();
+    OwnerLookupAllowance = 2;
+    OwnerLookupDeadline = ObservationStarted + 400;
     FILETIME SnapshotStarted;
     GetSystemTimeAsFileTime(&SnapshotStarted);
     HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if(Snapshot == INVALID_HANDLE_VALUE) { CollectorError = GetLastError(); return FALSE; }
-    DWORD Capacity = PROCLIST_BUF_INCREASE, Count = 0;
+    DWORD Capacity = PROCLIST_BUF_INCREASE, Count = 0, ObservedCount = 0, UnresolvedOwners = 0;
+    BOOL Complete = TRUE;
     process *Sample = calloc(Capacity, sizeof(*Sample));
     if(!Sample) { CloseHandle(Snapshot); CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
     PROCESSENTRY32 Entry;
@@ -820,6 +926,8 @@ static BOOL PollProcessList(DWORD UpdateTime)
         memset(&Process, 0, sizeof(Process));
         Process.ID = Entry.th32ProcessID;
         if(!Process.ID) continue;
+        if(ObservedCount < MAXDWORD) ++ObservedCount;
+        if(SkipProcessRows) continue;
         Process.ThreadCount = Entry.cntThreads;
         Process.BasePriority = Entry.pcPriClassBase;
         Process.ParentPID = Entry.th32ParentProcessID;
@@ -827,6 +935,7 @@ static BOOL PollProcessList(DWORD UpdateTime)
         _tcscpy_s(Process.UserName, _countof(Process.UserName), _T("?"));
         Process.OwnerState = Process.CpuState = Process.MemoryState = Process.IoState = Process.AgeState = METRIC_UNAVAILABLE;
         if(!MatchesStaticFilter(&Process)) continue;
+        if(Count >= MAX_PROCESS_ROWS) { Complete = FALSE; continue; }
         Process.Handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Process.ID);
         metric_state OpenState = Process.Handle ? METRIC_OK : LastMetricError();
         if(Process.Handle) {
@@ -846,15 +955,19 @@ static BOOL PollProcessList(DWORD UpdateTime)
             if(OpenProcessToken(Process.Handle, TOKEN_QUERY, &Token)) {
                 DWORD Size = 0;
                 GetTokenInformation(Token, TokenUser, NULL, 0, &Size);
-                if(GetLastError() == ERROR_INSUFFICIENT_BUFFER && Size) {
+                if(GetLastError() == ERROR_INSUFFICIENT_BUFFER && Size && Size <= 65536UL) {
                     TOKEN_USER *User = malloc(Size);
                     if(User && GetTokenInformation(Token, TokenUser, User, Size, &Size)) {
-                        TCHAR Domain[256];
-                        DWORD NameSize = _countof(Process.UserName), DomainSize = _countof(Domain);
-                        SID_NAME_USE Use;
-                        if(LookupAccountSid(NULL, User->User.Sid, Process.UserName, &NameSize, Domain, &DomainSize, &Use))
-                            Process.OwnerState = METRIC_OK;
-                        else Process.OwnerState = LastMetricError();
+                        LPWSTR Sid = NULL;
+                        if(IsValidSid(User->User.Sid) && ConvertSidToStringSidW(User->User.Sid, &Sid)) {
+                            if(wcslen(Sid) < _countof(Process.OwnerSid)) {
+                                wcscpy_s(Process.OwnerSid, _countof(Process.OwnerSid), Sid);
+                                wcscpy_s(Process.UserName, _countof(Process.UserName), Sid);
+                                Process.OwnerState = METRIC_OK;
+                                ResolveObservedOwner(&Process);
+                            } else Process.OwnerState = WTOP_METRIC_CAPACITY;
+                            LocalFree(Sid);
+                        } else Process.OwnerState = LastMetricError();
                     } else Process.OwnerState = User ? LastMetricError() : METRIC_UNAVAILABLE;
                     free(User);
                 } else Process.OwnerState = LastMetricError();
@@ -864,9 +977,14 @@ static BOOL PollProcessList(DWORD UpdateTime)
         } else {
             Process.OwnerState = Process.CpuState = Process.MemoryState = Process.IoState = Process.AgeState = OpenState;
         }
-        if(FilterByUserName && (Process.OwnerState != METRIC_OK || _tcsicmp(Process.UserName, FilterUserName))) {
-            if(Process.Handle) CloseHandle(Process.Handle);
-            continue;
+        if(FilterByUserName) {
+            BOOL SidSelector = !_tcsnicmp(FilterUserName, _T("S-1-"), 4);
+            BOOL Known = Process.OwnerState == METRIC_OK && (SidSelector || Process.OwnerNameState == WTOP_PROVIDER_VALID);
+            if(!Known && UnresolvedOwners < MAXDWORD) ++UnresolvedOwners;
+            if(!Known || _tcsicmp(SidSelector ? Process.OwnerSid : Process.UserName, FilterUserName)) {
+                if(Process.Handle) CloseHandle(Process.Handle);
+                continue;
+            }
         }
         if(Count == Capacity) {
             DWORD NewCapacity = Capacity + PROCLIST_BUF_INCREASE;
@@ -888,18 +1006,14 @@ static BOOL PollProcessList(DWORD UpdateTime)
     if(ShouldStop()) { CloseSampleHandles(Sample, Count); free(Sample); return FALSE; }
 
     FILETIME PrevIdle, PrevKernel, PrevUser;
+    DWORD CapacityBefore = CurrentCpuCapacity();
     BOOL HaveSystemBefore = GetSystemTimes(&PrevIdle, &PrevKernel, &PrevUser);
     ULONGLONG Started = GetTickCount64();
     for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
         process *Process = &Sample[i];
         if(!Process->Handle) continue;
-        FILETIME Created, Exited, Kernel, User;
-        if(GetProcessTimes(Process->Handle, &Created, &Exited, &Kernel, &User)) {
-            Process->CreationTime = FileTimeValue(&Created);
-            Process->PreviousCpu = FileTimeValue(&Kernel) + FileTimeValue(&User);
-            Process->PreviousTimesValid = TRUE;
-            Process->CpuState = METRIC_WARMING;
-        } else Process->CpuState = Process->AgeState = LastMetricError();
+        ObserveProcessCpu(Process, &Process->PreviousCpuObservation);
+        Process->CpuState = Process->PreviousCpuObservation.state == METRIC_OK ? METRIC_WARMING : Process->PreviousCpuObservation.state;
         IO_COUNTERS Io;
         if(GetProcessIoCounters(Process->Handle, &Io)) {
             Process->PreviousRead = Io.ReadTransferCount;
@@ -914,32 +1028,40 @@ static BOOL PollProcessList(DWORD UpdateTime)
     }
     FILETIME Idle, Kernel, User;
     BOOL HaveSystemAfter = GetSystemTimes(&Idle, &Kernel, &User);
-    ULONGLONG SystemDelta = 0, IdleDelta = 0;
-    if(HaveSystemBefore && HaveSystemAfter && FileTimeValue(&Kernel) >= FileTimeValue(&PrevKernel) &&
-       FileTimeValue(&User) >= FileTimeValue(&PrevUser) && FileTimeValue(&Idle) >= FileTimeValue(&PrevIdle)) {
-        SystemDelta = FileTimeValue(&Kernel) - FileTimeValue(&PrevKernel) + FileTimeValue(&User) - FileTimeValue(&PrevUser);
-        IdleDelta = FileTimeValue(&Idle) - FileTimeValue(&PrevIdle);
-    }
+    ULONGLONG SystemObserved = GetTickCount64();
+    double HostBusy = 0;
+    metric_state HostState = WTOP_METRIC_ERROR;
+    if(HaveSystemBefore && HaveSystemAfter)
+        HostState = wtop_host_cpu(CounterValue(FileTimeValue(&PrevKernel)), CounterValue(FileTimeValue(&Kernel)),
+            CounterValue(FileTimeValue(&PrevUser)), CounterValue(FileTimeValue(&User)),
+            CounterValue(FileTimeValue(&PrevIdle)), CounterValue(FileTimeValue(&Idle)), &HostBusy);
+    DWORD MachineCapacity = CapacityBefore;
     DWORD Running = 0;
     for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
         process *Process = &Sample[i];
         if(!Process->Handle) continue;
-        FILETIME Created, Exited, ProcessKernel, ProcessUser, Now;
-        if(GetProcessTimes(Process->Handle, &Created, &Exited, &ProcessKernel, &ProcessUser)) {
-            ULONGLONG Total = FileTimeValue(&ProcessKernel) + FileTimeValue(&ProcessUser);
+        wtop_cpu_observation Current;
+        wtop_cpu_value Cpu;
+        if(ObserveProcessCpu(Process, &Current)) {
+            FILETIME Now;
             GetSystemTimeAsFileTime(&Now);
-            Process->CreationTime = FileTimeValue(&Created);
+            /* ExitTime is undefined for a running process. AGE is explicitly
+               age at observation, never a guessed termination duration. */
             if(FileTimeValue(&Now) >= Process->CreationTime) {
-                ULONGLONG EndTime = FileTimeValue(&Exited) ? FileTimeValue(&Exited) : FileTimeValue(&Now);
-                Process->UpTime = EndTime >= Process->CreationTime ? (EndTime - Process->CreationTime) / 10000 : 0;
+                Process->UpTime = (FileTimeValue(&Now) - Process->CreationTime) / 10000;
                 Process->AgeState = METRIC_OK;
             } else Process->AgeState = METRIC_DISCONTINUITY;
-            if(Process->PreviousTimesValid && SystemDelta && Total >= Process->PreviousCpu) {
-                Process->PercentProcessorTime = 100.0 * (double)(Total - Process->PreviousCpu) / (double)SystemDelta;
-                Process->CpuState = METRIC_OK;
+            Process->CpuState = wtop_process_cpu(&Process->PreviousCpuObservation, &Current,
+                PerformanceFrequency, MachineCapacity, &Cpu);
+            Process->CpuElapsedMs = Cpu.elapsed_ms;
+            Process->CpuAcquisitionMs = Cpu.acquisition_ms;
+            if(Process->CpuState == METRIC_OK && CpuMachine && !MachineCapacity)
+                Process->CpuState = WTOP_METRIC_UNSUPPORTED;
+            if(Process->CpuState == METRIC_OK) {
+                Process->PercentProcessorTime = CpuMachine ? Cpu.machine_percent : Cpu.core_percent;
                 if(Process->PercentProcessorTime >= 0.01) ++Running;
-            } else Process->CpuState = Process->PreviousTimesValid ? METRIC_DISCONTINUITY : METRIC_WARMING;
-        } else Process->CpuState = Process->AgeState = LastMetricError();
+            }
+        } else Process->CpuState = Process->AgeState = Current.state;
         PROCESS_MEMORY_COUNTERS Memory;
         if(GetProcessMemoryInfo(Process->Handle, &Memory, sizeof(Memory))) {
             Process->UsedMemory = Memory.WorkingSetSize;
@@ -956,41 +1078,91 @@ static BOOL PollProcessList(DWORD UpdateTime)
                 Process->IoState = METRIC_OK;
             } else Process->IoState = Process->PreviousIoValid ? METRIC_DISCONTINUITY : METRIC_WARMING;
         } else Process->IoState = LastMetricError();
+        Process->ObservedTick = GetTickCount64();
         CloseHandle(Process->Handle);
         Process->Handle = NULL;
     }
     CloseSampleHandles(Sample, Count);
     if(ShouldStop()) { free(Sample); return FALSE; }
-    ULONGLONG SampleElapsed = GetTickCount64() - Started;
+    DWORD CapacityAfter = CurrentCpuCapacity();
+    if(!CapacityBefore || CapacityBefore != CapacityAfter) {
+        MachineCapacity = 0;
+        if(CpuMachine) for(DWORD i = 0; i < Count; ++i)
+            if(Sample[i].CpuState == METRIC_OK) Sample[i].CpuState = WTOP_METRIC_RESET;
+    }
+    ULONGLONG ObservationFinished = GetTickCount64();
+    ULONGLONG SampleElapsed = ObservationFinished - Started;
+    pending_sample *Published = calloc(1, sizeof(*Published));
+    if(!Published) { free(Sample); CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE; }
+    Published->rows = Sample;
+    if(CollectPerCore) {
+        Published->cores = calloc(1, sizeof(*Published->cores));
+        if(Published->cores) {
+            wtop_provider_request Request;
+            memset(&Request, 0, sizeof(Request));
+            Request.kind = WTOP_PROVIDER_PER_CORE; Request.interval_ms = UpdateTime;
+            wtop_provider_collect(&CoreProvider, &Request, min(60000UL, UpdateTime + 2000UL), ShutdownEvent, Published->cores);
+            Published->core_observed = Published->cores->observed_ms;
+        }
+    }
+    Published->count = Count; Published->observed_count = ObservedCount;
+    Published->unresolved_owner_filter = UnresolvedOwners;
+    Published->running = Running; Published->capacity = MachineCapacity;
+    Published->complete = Complete; Published->interval = UpdateTime;
+    Published->cpu_state = HostState; Published->cpu_busy = HostBusy;
+    Published->cpu_observed = SystemObserved; Published->started = ObservationStarted;
+    Published->observed = ObservationFinished; Published->elapsed = SampleElapsed;
+    Published->sequence = ++CollectorSequence;
+    Published->published = GetTickCount64();
     EnterCriticalSection(&SyncLock);
+    pending_sample *Superseded = PendingSample;
+    PendingSample = Published;
+    LeaveCriticalSection(&SyncLock);
+    FreePendingSample(Superseded);
+    return !ShouldStop();
+}
+
+static BOOL AdoptPendingSample(void)
+{
+    EnterCriticalSection(&SyncLock);
+    pending_sample *Sample = PendingSample;
+    PendingSample = NULL;
+    LeaveCriticalSection(&SyncLock);
+    if(!Sample) return FALSE;
     DWORD SelectedId = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].ID : 0;
     ULONGLONG SelectedCreated = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
-    if(Count > ProcessListSize) {
-        process *Larger = realloc(ProcessList, (size_t)Count * sizeof(*ProcessList));
-        if(!Larger) {
-            LeaveCriticalSection(&SyncLock); free(Sample); CollectorError = ERROR_NOT_ENOUGH_MEMORY; return FALSE;
-        }
-        ProcessList = Larger; ProcessListSize = Count;
-    }
-    memcpy(ProcessList, Sample, (size_t)Count * sizeof(*ProcessList));
-    ProcessCount = Count;
-    RunningProcessCount = Running;
-    CPUUsageKnown = SystemDelta && IdleDelta <= SystemDelta;
-    if(CPUUsageKnown) CPUUsage = (double)(SystemDelta - IdleDelta) / (double)SystemDelta;
-    LastSampleElapsed = SampleElapsed;
+    free(ProcessList);
+    ProcessList = Sample->rows; Sample->rows = NULL;
+    free(CoreObservation); CoreObservation = Sample->cores; Sample->cores = NULL;
+    CoreObservedTick = Sample->core_observed;
+    ProcessCount = Sample->count;
+    ObservedProcessCount = Sample->observed_count;
+    UnresolvedOwnerFilterCount = Sample->unresolved_owner_filter;
+    SampleComplete = Sample->complete;
+    RunningProcessCount = Sample->running;
+    CPUUsageState = Sample->cpu_state;
+    CPUUsageKnown = CPUUsageState == METRIC_OK;
+    if(CPUUsageKnown) CPUUsage = Sample->cpu_busy;
+    ActiveCpuCapacity = Sample->capacity;
+    CpuSystemObservedTick = Sample->cpu_observed;
+    LastSampleElapsed = Sample->elapsed;
+    LastSampleStartedTick = Sample->started;
+    LastSampleObservedTick = Sample->observed;
+    LastSamplePublishedTick = Sample->published;
+    LastSampleInterval = Sample->interval;
+    SampleSequence = Sample->sequence;
+    free(Sample);
     SortProcessList();
     ReadjustCursor();
     if(!FollowProcess && SelectedId) {
         for(DWORD i = 0; i < ProcessCount; ++i) {
             if(ProcessList[i].ID == SelectedId && ProcessList[i].CreationTime == SelectedCreated) {
-                SelectProcess(i);
-                break;
+                SelectProcess(i); break;
             }
         }
     }
-    LeaveCriticalSection(&SyncLock);
-    free(Sample);
-    return !ShouldStop();
+    RenderInvalidated = TRUE;
+    return TRUE;
 }
 
 static void DisableCursor(void)
@@ -1001,12 +1173,7 @@ static void DisableCursor(void)
 	SetConsoleCursorInfo(ConsoleHandle, &CursorInfo);
 }
 
-static WORD GetConsoleColor(void)
-{
-	CONSOLE_SCREEN_BUFFER_INFO Csbi;
-	GetConsoleScreenBufferInfo(ConsoleHandle, &Csbi);
-	return Csbi.wAttributes;
-}
+
 
 /*
  * Returns TRUE on screen buffer resize.
@@ -1043,12 +1210,20 @@ static double UsedPageMemoryPerc;
 static ULONGLONG UpTime;
 
 static BOOL SystemMemoryKnown;
+static metric_state SystemMemoryState = WTOP_METRIC_WARMING_UP;
+static metric_state SystemCommitState = WTOP_METRIC_WARMING_UP;
+static ULONGLONG PhysicalTotalBytes, PhysicalAvailableBytes, CommitBytes, CommitLimitBytes;
+static ULONGLONG SystemMemoryObservedTick;
 
 static void PollInitialSystemInfo(void)
 {
     SYSTEM_INFO SystemInfo;
     GetNativeSystemInfo(&SystemInfo);
     CPUCoreCount = SystemInfo.dwNumberOfProcessors;
+    GetAllActiveProcessors = (active_cpu_fn)GetProcAddress(GetModuleHandle(_T("kernel32.dll")), "GetActiveProcessorCount");
+    LARGE_INTEGER Frequency;
+    if(QueryPerformanceFrequency(&Frequency) && Frequency.QuadPart > 0)
+        PerformanceFrequency = (double)Frequency.QuadPart;
     _tcscpy_s(CPUName, _countof(CPUName), _T("Unknown CPU"));
     HKEY Key;
     if(RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"), 0, KEY_QUERY_VALUE, &Key) == ERROR_SUCCESS) {
@@ -1068,14 +1243,33 @@ static void PollSystemInfo(void)
     memset(&MemoryInfo, 0, sizeof(MemoryInfo));
     MemoryInfo.dwLength = sizeof(MemoryInfo);
     SystemMemoryKnown = GlobalMemoryStatusEx(&MemoryInfo);
-    if(SystemMemoryKnown) {
-        TotalMemory = TO_MB(MemoryInfo.ullTotalPhys);
-        UsedMemory = TO_MB(MemoryInfo.ullTotalPhys - MemoryInfo.ullAvailPhys);
-        UsedMemoryPerc = MemoryInfo.ullTotalPhys ? (double)(MemoryInfo.ullTotalPhys - MemoryInfo.ullAvailPhys) / (double)MemoryInfo.ullTotalPhys : 0;
-        TotalPageMemory = TO_MB(MemoryInfo.ullTotalPageFile);
-        UsedPageMemory = TO_MB(MemoryInfo.ullTotalPageFile - MemoryInfo.ullAvailPageFile);
-        UsedPageMemoryPerc = MemoryInfo.ullTotalPageFile ? (double)(MemoryInfo.ullTotalPageFile - MemoryInfo.ullAvailPageFile) / (double)MemoryInfo.ullTotalPageFile : 0;
+    SystemMemoryState = SystemMemoryKnown ? METRIC_OK : LastMetricError();
+    if(SystemMemoryKnown && MemoryInfo.ullAvailPhys > MemoryInfo.ullTotalPhys) {
+        SystemMemoryKnown = FALSE; SystemMemoryState = WTOP_METRIC_RESET;
     }
+    if(SystemMemoryKnown) {
+        PhysicalTotalBytes = MemoryInfo.ullTotalPhys;
+        PhysicalAvailableBytes = MemoryInfo.ullAvailPhys;
+        TotalMemory = TO_MB(PhysicalTotalBytes);
+        UsedMemory = TO_MB(PhysicalTotalBytes - PhysicalAvailableBytes);
+        UsedMemoryPerc = PhysicalTotalBytes ? (double)(PhysicalTotalBytes - PhysicalAvailableBytes) / (double)PhysicalTotalBytes : 0;
+    }
+    PERFORMANCE_INFORMATION Performance;
+    memset(&Performance, 0, sizeof(Performance));
+    Performance.cb = sizeof(Performance);
+    if(GetPerformanceInfo(&Performance, sizeof(Performance))) {
+        wtop_counter Bytes, Limit;
+        wtop_counter PageSize = CounterValue((ULONGLONG)Performance.PageSize);
+        if(PageSize.high) SystemCommitState = WTOP_METRIC_CAPACITY;
+        else SystemCommitState = wtop_commit_bytes(CounterValue((ULONGLONG)Performance.CommitTotal),
+            CounterValue((ULONGLONG)Performance.CommitLimit), (unsigned long)Performance.PageSize,
+            &Bytes, &Limit, &UsedPageMemoryPerc);
+        if(SystemCommitState == METRIC_OK) {
+            CommitBytes = NativeCounter(Bytes); CommitLimitBytes = NativeCounter(Limit);
+            UsedPageMemory = TO_MB(CommitBytes); TotalPageMemory = TO_MB(CommitLimitBytes);
+        }
+    } else SystemCommitState = LastMetricError();
+    SystemMemoryObservedTick = GetTickCount64();
     UpTime = GetTickCount64();
 }
 
@@ -1084,9 +1278,7 @@ DWORD WINAPI PollProcessListThreadProc(LPVOID lpParam)
 	UNREFERENCED_PARAMETER(lpParam);
 
 	while(!ShouldStop()) {
-        EnterCriticalSection(&SyncLock);
-        DWORD Interval = (DWORD)Settings.interval_ms;
-        LeaveCriticalSection(&SyncLock);
+        DWORD Interval = (DWORD)InterlockedCompareExchange(&CollectorInterval, 0, 0);
         if(!PollProcessList(Interval)) {
             RequestShutdown();
             break;
@@ -1137,7 +1329,7 @@ static void DrawProcessListHeader(void)
         SetConCursorPos((SHORT)Span->start, (SHORT)ProcessHeaderRow);
         SetColor((WORD)((int)ProcessSortType == Span->id ? Settings.colors[WTOP_COLOR_BG_HIGHLIGHT] : Settings.colors[WTOP_COLOR_HEADER]));
         TCHAR *Name = FromUtf8(wtop_column_name(Span->id));
-        if(Name) { ConPrintf(_T("%-*.*s"), Span->width, Span->width, Name); free(Name); }
+        if(Name) { DrawPaddedText(Name, Span->width); free(Name); }
     }
 }
 
@@ -1181,6 +1373,11 @@ static void RestoreConsole(void)
 
 static void WriteProcessInfo(const process *Process, BOOL Highlighted)
 {
+    ULONGLONG Now = GetTickCount64();
+    metric_state Cpu = FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now);
+    metric_state Memory = FreshMetricState(Process->MemoryState, Process->ObservedTick, Now);
+    metric_state Io = FreshMetricState(Process->IoState, Process->ObservedTick, Now);
+    metric_state Age = FreshMetricState(Process->AgeState, Process->CpuObservedTick, Now);
     WORD Color = (WORD)Settings.colors[WTOP_COLOR_FG];
     if(IsProcessTagged(Process)) Color = (WORD)Settings.colors[WTOP_COLOR_TAG];
     if(Highlighted) Color = (WORD)Settings.colors[FollowProcess ? WTOP_COLOR_FOLLOW : WTOP_COLOR_BG_HIGHLIGHT];
@@ -1205,12 +1402,12 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
             else _tcscpy_s(Text, _countof(Text), _T("?"));
             break;
         case WTOP_COLUMN_CPU:
-            if(Process->CpuState == METRIC_OK && Process->PercentProcessorTime < 999.95) _stprintf_s(Text, _countof(Text), _T("%.1f"), Process->PercentProcessorTime);
-            else if(Process->CpuState == METRIC_OK) _tcscpy_s(Text, _countof(Text), _T(">999"));
+            if(Cpu == METRIC_OK && Process->PercentProcessorTime < 999.95) _stprintf_s(Text, _countof(Text), _T("%.1f"), Process->PercentProcessorTime);
+            else if(Cpu == METRIC_OK) _tcscpy_s(Text, _countof(Text), _T(">999"));
             else _tcscpy_s(Text, _countof(Text), _T("?"));
             break;
         case WTOP_COLUMN_MEMORY:
-            if(Process->MemoryState == METRIC_OK) {
+            if(Memory == METRIC_OK) {
                 wtop_ui_format_bytes((double)Process->UsedMemory, FALSE, Metric, sizeof(Metric));
                 _stprintf_s(Text, _countof(Text), _T("%hs"), Metric);
             }
@@ -1221,14 +1418,14 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
             else _tcscpy_s(Text, _countof(Text), _T(">999"));
             break;
         case WTOP_COLUMN_IO:
-            if(Process->IoState == METRIC_OK) {
+            if(Io == METRIC_OK) {
                 wtop_ui_format_bytes(Process->DiskUsage, TRUE, Metric, sizeof(Metric));
                 _stprintf_s(Text, _countof(Text), _T("%hs"), Metric);
             }
             else _tcscpy_s(Text, _countof(Text), _T("?"));
             break;
         case WTOP_COLUMN_AGE:
-            if(Process->AgeState == METRIC_OK) {
+            if(Age == METRIC_OK) {
                 wtop_ui_format_age((double)Process->UpTime, Metric, sizeof(Metric));
                 _stprintf_s(Text, _countof(Text), _T("%hs"), Metric);
             }
@@ -1242,7 +1439,7 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
             DWORD Depth = min(Process->TreeDepth, (DWORD)max(0, (Space - 1) / 3));
             for(DWORD d = 0; d < Depth; ++d) { ConPrintf(_T("|  ")); Space -= 3; }
         }
-        ConPrintf(_T("%-*.*s"), Space, Space, Text);
+        DrawPaddedText(Text, Space);
     }
 }
 
@@ -1264,39 +1461,31 @@ static void DoScroll(scroll_type Type, BOOL *Redraw)
     *Redraw = TRUE;
 }
 
-static const char HelpText[] =
-    "Wtop " WTOP_VERSION_STRING " - NTop-derived Windows terminal process monitor\n"
-    "Usage: wtop [--tui | --snapshot | --gui] [options]\n"
-    "  --tui                 Interactive TUI (default; requires console input/output)\n"
-    "  --snapshot, --dump, -d One read-only snapshot; exits after two observations\n"
-    "  --format text|json    Snapshot or informational output; alone selects snapshot\n"
-    "  --interval MS         Sample/redraw interval: 50..60000 ms (default 1000)\n"
-    "  --help, -h            Help without initializing console or collector\n"
-    "  --version, -v         Version and build profile\n"
-    "  --capabilities        Build capabilities; field availability is runtime-specific\n"
-    "  --gui                 Reserved; native GUI is not implemented\n"
-    "  --config PATH         Read configuration from this explicit UTF-8 path\n"
-    "  --no-config           Ignore config files and disable implicit TUI saves\n"
-    "  --write-config PATH   Explicitly export settings, then exit (no sampling)\n"
-    "  --keymap NAME         htop (default), vi/vim, or emacs\n"
-    "  --theme NAME          htop (default), ntop, or monochrome\n"
-    "  --mouse MODE          auto (default), on, or off; --no-mouse disables\n"
-    "  --[no-]status-bar     Show/hide last-row function bar (default shown)\n"
-    "  -C                    Monochrome TUI\n"
-    "  -p PID,PID            Filter process IDs (maximum 1024)\n"
-    "  -n PART,PART          Case-sensitive name substrings (maximum 10)\n"
-    "  -u USER               Exact account-name filter, case-insensitive\n"
-    "  -s COLUMN             ID USER PRI CPU% MEM THRD I/O AGE PROCESS\n"
-    "                        DISK and TIME remain aliases for I/O and AGE\n"
-    "TUI: F1 Help, F2 Setup, F3 Search, F4 Filter, F5 Tree, F6 Sort,\n"
-    "     F7/F8 Windows priority class, F9 confirmed termination, F10 Quit.\n"
-    "     Arrows/PgUp/PgDn/Home/End navigate; Tab/Shift+Tab switches views.\n"
-    "     htop k opens Kill; vi j/k navigate. B toggles the function bar.\n"
-    "     F2 s or :save saves explicitly; quitting never writes settings.\n"
-    "     Commands: :q :quit :tree :sort :search :kill :exec :save.\n"
-    "I/O is process read+write I/O, not physical-disk attribution. AGE is wall time.\n"
-    "Cmt is commit use/limit, not page-file residency. ?/JSON null means unavailable.\n"
-    "No service, persistent collector, updater or startup entry is installed.\n";
+#include "command_help.inc"
+
+static int PrintPaths(const wtop_options *Options)
+{
+    wtop_store_result Result;
+    if(!ResolveConfigStore(Options, &Result)) {
+        fprintf(stderr, "wtop: path resolution %s: %s (Win32 %lu)\n",
+            wtop_store_outcome_name(Result.outcome), Result.message, Result.native_error);
+        return 1;
+    }
+    char *Module = ToUtf8(ConfigStore.module_path), *Read = ToUtf8(ConfigStore.read_path), *Write = ToUtf8(ConfigStore.write_path);
+    if(!Module || !Read || !Write) { free(Module); free(Read); free(Write); return 1; }
+    if(Options->json) {
+        printf("{\"schema\":1,\"kind\":\"settings-paths\",\"owner\":\"%s\",\"source\":\"%s\",\"saving_disabled\":%s,\"canonical_aliases\":%s,\"module\":",
+            wtop_store_owner_name(ConfigStore.owner), wtop_store_source_name(ConfigStore.source),
+            ConfigStore.disabled || Options->readonly ? "true" : "false", ConfigStore.canonical_aliases ? "true" : "false");
+        wtop_json_string(stdout, Module); fputs(",\"read\":", stdout); wtop_json_string(stdout, Read);
+        fputs(",\"write\":", stdout); wtop_json_string(stdout, Write); puts("}");
+    } else printf("Owner: %s\nSource: %s\nModule: %s\nRead: %s\nSave: %s\nSaving disabled: %s\n",
+        wtop_store_owner_name(ConfigStore.owner), wtop_store_source_name(ConfigStore.source), Module,
+        *Read ? Read : "compiled defaults", *Write ? Write : "unavailable",
+        ConfigStore.disabled || Options->readonly ? "yes" : "no");
+    free(Module); free(Read); free(Write);
+    return fflush(stdout) || ferror(stdout) ? 1 : 0;
+}
 
 static int PrintInformation(const wtop_options *Options)
 {
@@ -1307,7 +1496,7 @@ static int PrintInformation(const wtop_options *Options)
         if(Options->json) printf("{\"schema\":1,\"name\":\"wtop\",\"version\":\"%s\",\"profile\":\"%s\"}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
         else printf("Wtop %s (%s)\nDerived from NTop; Copyright (c) 2019 Gian Sass and Wtop contributors.\nGPL-3.0-only. Historical OS support is not verified.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
     } else {
-        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"tui\":true,\"snapshot\":true,\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_share_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"snapshot_schema\":2,\"tui\":true,\"snapshot\":true,\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
         else printf("Wtop %s: build capabilities (%s; no runtime probe)\nTUI with htop/vi/Emacs keys, optional mouse, setup and explicit config save.\nText/JSON snapshot, process tree/search/sort and NTop commands.\nMetric access varies by process rights; unavailable fields carry status/null.\nGUI, installers, GPU telemetry and historical OS ports are not implemented.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
     }
     return fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
@@ -1338,20 +1527,20 @@ static void ApplyActiveTab(void)
 
 void ChangeProcessSortType(process_sort_type NewProcessSortType)
 {
-    EnterCriticalSection(&SyncLock);
     ActiveTab()->tree = NewProcessSortType == SORT_BY_TREE;
     if(NewProcessSortType != SORT_BY_TREE) ActiveTab()->sort_column = (int)NewProcessSortType;
-    ConfigDirty = TRUE;
+    MarkSettingsChanged();
     ApplyActiveTab();
-    LeaveCriticalSection(&SyncLock);
 }
 
 static vi_message_type CurrentViMessageType = VI_NOTICE;
 static TCHAR *ViMessage;
+static ULONGLONG ViMessageTick;
 
 void SetViMessage(vi_message_type MessageType, TCHAR *Fmt, ...)
 {
 	CurrentViMessageType = MessageType;
+    ViMessageTick = GetTickCount64();
 
 	va_list VaList;
 
@@ -1362,33 +1551,39 @@ void SetViMessage(vi_message_type MessageType, TCHAR *Fmt, ...)
 
 static BOOL ViMessageActive(void)
 {
-	return _tcslen(ViMessage) > 0;
+    if(!ViMessage) return FALSE;
+    if(CurrentViMessageType == VI_NOTICE && GetTickCount64() - ViMessageTick > 5000)
+        ViMessage[0] = 0;
+    return ViMessage[0] != 0;
 }
 
 static void WriteVi(void)
 {
     if(StatusRow < 0) return;
-	SetConCursorPos(0, (SHORT)StatusRow);
-
-	if(ViMessageActive()) {
-		switch(CurrentViMessageType) {
-		case VI_NOTICE:
-			// Default?
-			break;
-		case VI_ERROR:
-			SetColor((WORD)Settings.colors[WTOP_COLOR_ERROR]);
-			break;
-		}
-
-		int CharsWritten = ConPrintf(_T("%s"), ViMessage);
-
-		for (; CharsWritten < Width + 1; CharsWritten++) {
-			ConPutc(_T(' '));
-		}
-	} else {
-		SetColor(FOREGROUND_WHITE);
-		WriteBlankLine();
-	}
+    SetConCursorPos(0, (SHORT)StatusRow);
+    wtop_ui_status Status;
+    memset(&Status, 0, sizeof(Status));
+    char *Prompt = ViMessageActive() ? ToUtf8(ViMessage) : NULL;
+    Status.prompt = Prompt;
+    Status.view = ActiveTab()->name;
+    Status.filter = ActiveTab()->filter;
+    Status.sort = ActiveTab()->tree ? "tree" : wtop_column_name(ActiveTab()->sort_column);
+    Status.descending = ActiveTab()->descending;
+    Status.dirty = ConfigDirty;
+    Status.sample_available = SampleSequence != 0;
+    ULONGLONG Now = GetTickCount64();
+    ULONGLONG Age = Now >= LastSampleObservedTick ? Now - LastSampleObservedTick : 0;
+    Status.age_ms = Age > ULONG_MAX ? ULONG_MAX : (unsigned long)Age;
+    Status.stale = SampleSequence && LastSampleInterval && Age > LastSampleInterval * 3UL;
+    Status.partial = CollectorError != 0 || !SampleComplete || UnresolvedOwnerFilterCount != 0;
+    Status.provider_notice = DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID) ? "ASCII substitution" : ReadOnlyMode ? "read-only" : NULL;
+    Status.observed_rows = ObservedProcessCount;
+    Status.selected_rows = ViewCount;
+    char Text[4096]; unsigned Flags;
+    wtop_ui_status_format(&Status, Width, Text, sizeof(Text), &Flags);
+    SetColor((WORD)Settings.colors[(Prompt && CurrentViMessageType == VI_ERROR) || Status.stale ? WTOP_COLOR_ERROR : WTOP_COLOR_FG]);
+    ConPrintf(_T("%hs"), Text);
+    free(Prompt);
 }
 
 void ClearViMessage(void)
@@ -1396,54 +1591,150 @@ void ClearViMessage(void)
     if(ViMessage) ViMessage[0] = 0;
 }
 
-static int KillIdentity(DWORD Pid, ULONGLONG CreationTime)
-{
-    if(!CreationTime) { SetViMessage(VI_ERROR, _T("Cannot act on PID %lu: creation identity unavailable"), Pid); return 0; }
-    HANDLE Handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Pid);
-    if(!Handle) { SetViMessage(VI_ERROR, _T("Cannot open PID %lu: error %lu"), Pid, GetLastError()); return 0; }
-    FILETIME Created, Exited, Kernel, User;
-    int Result = 0;
-    if(!GetProcessTimes(Handle, &Created, &Exited, &Kernel, &User) || FileTimeValue(&Created) != CreationTime)
-        SetViMessage(VI_ERROR, _T("PID %lu changed or its identity cannot be revalidated"), Pid);
-    else if(Pid == GetCurrentProcessId()) { RequestShutdown(); Result = 1; }
-    else if(!TerminateProcess(Handle, 9)) SetViMessage(VI_ERROR, _T("Cannot terminate PID %lu: error %lu"), Pid, GetLastError());
-    else Result = 1;
-    CloseHandle(Handle);
-    return Result;
-}
+static wtop_action_result *LastActionResults;
+static DWORD LastActionCount;
+static void ShowActionResults(void);
 
-/* Windows priority classes are not POSIX nice values. Never enter REALTIME by
-   a repeated shortcut; each handle is bound to the observed process lifetime. */
-static void ChangePriority(const process_identity *Identity, int Direction)
+/* Handle ownership is synchronous and local. No presentation calls occur in
+   the executor; every target keeps its own outcome and captured Win32 error. */
+static void ExecuteNativeAction(void *Context, const wtop_action_request *Request,
+                                wtop_action_result *Result)
 {
     static const DWORD Classes[] = { IDLE_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS,
         NORMAL_PRIORITY_CLASS, ABOVE_NORMAL_PRIORITY_CLASS, HIGH_PRIORITY_CLASS };
-    if(!Identity->CreationTime) { SetViMessage(VI_ERROR, _T("Priority unavailable: unknown process identity")); return; }
-    HANDLE Handle = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Identity->ID);
-    if(!Handle) { SetViMessage(VI_ERROR, _T("Cannot change PID %lu priority: error %lu"), Identity->ID, GetLastError()); return; }
-    FILETIME Created, Exited, Kernel, User;
-    if(!GetProcessTimes(Handle, &Created, &Exited, &Kernel, &User) || FileTimeValue(&Created) != Identity->CreationTime) {
-        SetViMessage(VI_ERROR, _T("Priority refused: PID %lu identity changed"), Identity->ID);
-        CloseHandle(Handle); return;
+    BOOL *LocalShutdown = Context;
+    DWORD Pid = Request->target.pid;
+    if(ReadOnlyMode) { Result->state = WTOP_ACTION_DENIED; Result->native_error = ERROR_ACCESS_DENIED; return; }
+    if(!Request->target.creation.high && !Request->target.creation.low) {
+        Result->state = WTOP_ACTION_IDENTITY_UNAVAILABLE; return;
     }
-    DWORD Current = GetPriorityClass(Handle);
-    int Position = -1;
-    for(int i = 0; i < (int)_countof(Classes); ++i) if(Classes[i] == Current) Position = i;
-    int Next = Position + Direction;
-    if(Position < 0 || Next < 0 || Next >= (int)_countof(Classes))
-        SetViMessage(VI_ERROR, _T("PID %lu: no further safe priority class in this direction"), Identity->ID);
-    else if(!SetPriorityClass(Handle, Classes[Next]))
-        SetViMessage(VI_ERROR, _T("Cannot change PID %lu priority: error %lu"), Identity->ID, GetLastError());
-    else SetViMessage(VI_NOTICE, _T("PID %lu Windows priority class changed"), Identity->ID);
+    DWORD Access = PROCESS_QUERY_LIMITED_INFORMATION;
+    if(Request->kind == WTOP_ACTION_TERMINATE) Access |= PROCESS_TERMINATE;
+    else if(Request->kind == WTOP_ACTION_PRIORITY_UP || Request->kind == WTOP_ACTION_PRIORITY_DOWN)
+        Access |= PROCESS_SET_INFORMATION;
+    else { Result->state = WTOP_ACTION_UNSUPPORTED; return; }
+    /* Synchronization permits a nonblocking confirmation. Its absence must not
+       remove an action otherwise allowed by the target's access policy. */
+    HANDLE Handle = OpenProcess(Access | SYNCHRONIZE, FALSE, Pid);
+    BOOL CanWait = Handle != NULL;
+    if(!Handle) Handle = OpenProcess(Access, FALSE, Pid);
+    if(!Handle) {
+        Result->native_error = GetLastError();
+        Result->state = Result->native_error == ERROR_ACCESS_DENIED ? WTOP_ACTION_DENIED : WTOP_ACTION_FAILED;
+        return;
+    }
+    FILETIME Created, Exited, Kernel, User;
+    if(!GetProcessTimes(Handle, &Created, &Exited, &Kernel, &User)) {
+        Result->native_error = GetLastError();
+        Result->state = Result->native_error == ERROR_ACCESS_DENIED ? WTOP_ACTION_DENIED : WTOP_ACTION_IDENTITY_UNAVAILABLE;
+    } else if(FileTimeValue(&Created) != NativeCounter(Request->target.creation)) {
+        Result->state = WTOP_ACTION_IDENTITY_CHANGED;
+    } else if(CanWait && WaitForSingleObject(Handle, 0) == WAIT_OBJECT_0) {
+        Result->state = WTOP_ACTION_ALREADY_EXITED;
+    } else if(Request->kind == WTOP_ACTION_TERMINATE) {
+        if(Pid == GetCurrentProcessId()) {
+            *LocalShutdown = TRUE;
+            Result->local_shutdown = 1;
+            Result->state = WTOP_ACTION_REQUESTED;
+        } else if(TerminateProcess(Handle, 9)) {
+            Result->state = WTOP_ACTION_REQUESTED;
+            if(CanWait) {
+                DWORD Wait = WaitForSingleObject(Handle, 0);
+                if(Wait == WAIT_OBJECT_0) Result->state = WTOP_ACTION_CONFIRMED_EXITED;
+                else if(Wait == WAIT_FAILED) Result->native_error = GetLastError();
+            }
+        } else {
+            Result->native_error = GetLastError();
+            Result->state = Result->native_error == ERROR_ACCESS_DENIED ? WTOP_ACTION_DENIED : WTOP_ACTION_FAILED;
+        }
+    } else {
+        DWORD Current = GetPriorityClass(Handle);
+        Result->previous_priority = Current;
+        if(!Current) {
+            Result->native_error = GetLastError();
+            Result->state = Result->native_error == ERROR_ACCESS_DENIED ? WTOP_ACTION_DENIED : WTOP_ACTION_FAILED;
+        } else {
+            int Position = -1;
+            for(int i = 0; i < (int)_countof(Classes); ++i) if(Classes[i] == Current) Position = i;
+            int Next = Position + (Request->kind == WTOP_ACTION_PRIORITY_UP ? 1 : -1);
+            if(Position < 0 || Next < 0 || Next >= (int)_countof(Classes)) Result->state = WTOP_ACTION_SAFE_LIMIT;
+            else {
+                Result->requested_priority = Classes[Next];
+                if(SetPriorityClass(Handle, Classes[Next])) Result->state = WTOP_ACTION_APPLIED;
+                else {
+                    Result->native_error = GetLastError();
+                    Result->state = Result->native_error == ERROR_ACCESS_DENIED ? WTOP_ACTION_DENIED : WTOP_ACTION_FAILED;
+                }
+            }
+        }
+    }
     CloseHandle(Handle);
+}
+
+static int StopActionBatch(void *Context)
+{
+    return ShouldStop() || *(BOOL *)Context;
+}
+
+static BOOL AllocationFits(size_t Count, size_t ItemSize)
+{
+    return ItemSize && Count <= (size_t)-1 / ItemSize;
+}
+
+static BOOL RunNativeActions(const process_identity *Identities, DWORD Count, wtop_action_kind Kind)
+{
+    if(!Count || Count > INT_MAX || !AllocationFits(Count, sizeof(wtop_action_request)) ||
+       !AllocationFits(Count, sizeof(wtop_action_result))) {
+        SetViMessage(VI_ERROR, _T("Action batch exceeds local capacity")); return FALSE;
+    }
+    wtop_action_request *Requests = calloc(Count, sizeof(*Requests));
+    wtop_action_result *Results = calloc(Count, sizeof(*Results));
+    if(!Requests || !Results) {
+        free(Requests); free(Results);
+        SetViMessage(VI_ERROR, _T("No actions attempted: cannot allocate result storage")); return FALSE;
+    }
+    for(DWORD i = 0; i < Count; ++i) {
+        Requests[i].target.pid = Identities[i].ID;
+        Requests[i].target.creation = CounterValue(Identities[i].CreationTime);
+        Requests[i].kind = Kind;
+    }
+    BOOL LocalShutdown = FALSE;
+    wtop_actions_run(Requests, Count, Results, Count, ExecuteNativeAction, StopActionBatch, &LocalShutdown);
+    free(Requests);
+    free(LastActionResults);
+    LastActionResults = Results;
+    LastActionCount = Count;
+    DWORD Accepted = 0, Pending = 0;
+    for(DWORD i = 0; i < Count; ++i) {
+        Accepted += wtop_action_success(Results[i].state);
+        Pending += Results[i].state == WTOP_ACTION_REQUESTED;
+    }
+    SetViMessage(Accepted == Count ? VI_NOTICE : VI_ERROR,
+        _T("Actions: %lu accepted (%lu pending), %lu refused/failed; per-target results retained"),
+        Accepted, Pending, Count - Accepted);
+    ShowActionResults();
+    if(LocalShutdown) RequestShutdown();
+    return Accepted == Count;
+}
+
+int KillObservedProcesses(const DWORD *Pids, size_t Count)
+{
+    if(!Pids || !Count || Count > INT_MAX || Count > (size_t)-1 / sizeof(process_identity)) return 0;
+    process_identity *Identities = calloc(Count, sizeof(*Identities));
+    if(!Identities) { SetViMessage(VI_ERROR, _T("No actions attempted: out of memory")); return 0; }
+    for(size_t i = 0; i < Count; ++i) {
+        Identities[i].ID = Pids[i];
+        for(DWORD j = 0; j < ProcessCount; ++j)
+            if(ProcessList[j].ID == Pids[i]) { Identities[i].CreationTime = ProcessList[j].CreationTime; break; }
+    }
+    int Ok = RunNativeActions(Identities, (DWORD)Count, WTOP_ACTION_TERMINATE);
+    free(Identities);
+    return Ok;
 }
 
 int KillObservedProcess(DWORD Pid)
 {
-    for(DWORD i = 0; i < ProcessCount; ++i)
-        if(ProcessList[i].ID == Pid) return KillIdentity(Pid, ProcessList[i].CreationTime);
-    SetViMessage(VI_ERROR, _T("PID %lu is not in the observed process set"), Pid);
-    return 0;
+    return KillObservedProcesses(&Pid, 1);
 }
 
 static ULONGLONG CaretTicks;
@@ -1469,16 +1760,54 @@ static BOOL SelectionMatchesDisplay(void)
     return FALSE;
 }
 
-typedef enum overlay_type { OVERLAY_NONE, OVERLAY_HELP, OVERLAY_SETUP, OVERLAY_SORT, OVERLAY_KILL } overlay_type;
+typedef enum overlay_type { OVERLAY_NONE, OVERLAY_HELP, OVERLAY_SETUP, OVERLAY_SORT, OVERLAY_KILL, OVERLAY_RESULTS, OVERLAY_TAB_DELETE } overlay_type;
 static overlay_type Overlay;
 static int SetupPage, SetupIndex, OverlayTop, SortChoice;
 static int EmacsPrefix;
 static char EditingOriginalFilter[WTOP_FILTER_BYTES];
 static BOOL EditingFilter, EditingWasDirty;
+static unsigned long EditingTabId, PendingDeleteTabId;
+static int SetupCount(void);
+static void SetupAdjust(int Direction, BOOL Activate);
 static process_identity *PendingKills;
 static DWORD PendingKillCount;
 static DWORD LastMouseButtons;
 static int MouseWheelRemainder;
+
+static wtop_ui_context_options CurrentUiContext(void)
+{
+    wtop_ui_context_options Context;
+    wtop_ui_context Kind = WTOP_CONTEXT_PROCESS;
+    if(InInputMode) Kind = WTOP_CONTEXT_EDITOR;
+    else if(Overlay == OVERLAY_HELP) Kind = WTOP_CONTEXT_HELP;
+    else if(Overlay == OVERLAY_SETUP) Kind = WTOP_CONTEXT_SETUP;
+    else if(Overlay == OVERLAY_SORT) Kind = WTOP_CONTEXT_SORT;
+    else if(Overlay == OVERLAY_KILL || Overlay == OVERLAY_TAB_DELETE) Kind = WTOP_CONTEXT_CONFIRM;
+    else if(Overlay == OVERLAY_RESULTS) Kind = WTOP_CONTEXT_RESULTS;
+    wtop_ui_context_defaults(&Context, Kind);
+    Context.readonly = ReadOnlyMode;
+    Context.has_selection = TaggedProcessListCount || ViewCount;
+    Context.identity_known = TaggedProcessListCount || (ViewCount && ProcessList[SelectedProcessIndex].CreationTime);
+    Context.kill_supported = Context.priority_supported = 1;
+    Context.save_available = !ConfigStore.disabled && ConfigStore.write_path[0];
+    Context.setup_tabs = Overlay == OVERLAY_SETUP && SetupPage == 3;
+    Context.can_add_tab = Settings.tab_count < WTOP_MAX_TABS;
+    Context.can_delete_tab = Settings.tab_count > 1;
+    Context.can_move_left = SetupIndex > 0;
+    Context.can_move_right = SetupIndex + 1 < Settings.tab_count;
+    if(Overlay == OVERLAY_KILL) {
+        Context.has_selection = PendingKillCount != 0;
+        Context.identity_known = PendingKillCount != 0;
+        for(DWORD i = 0; i < PendingKillCount; ++i)
+            if(!PendingKills[i].CreationTime) Context.identity_known = 0;
+    } else if(Overlay == OVERLAY_TAB_DELETE) {
+        /* Editing an in-memory view is permitted in read-only mode; saving it
+           is still forbidden by the common store/action policy. */
+        Context.readonly = 0;
+        Context.has_selection = Context.identity_known = PendingDeleteTabId != 0;
+    }
+    return Context;
+}
 
 static void ConfigureMouse(void)
 {
@@ -1498,15 +1827,19 @@ static void ConfigureMouse(void)
 
 int SavePresentationSettings(void)
 {
-    if(ConfigWritesDisabled) { SetViMessage(VI_ERROR, _T("Saving disabled by --no-config; use --write-config PATH to export defaults")); return 0; }
-    if(!ConfigPath[0]) { SetViMessage(VI_ERROR, _T("Configuration folder unavailable; restart with --config PATH")); return 0; }
-    if(ConfigUserDirectory[0] && !CreateDirectory(ConfigUserDirectory, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
-        SetViMessage(VI_ERROR, _T("Cannot create user configuration directory (error %lu)"), GetLastError()); return 0;
+    if(ReadOnlyMode) { SetViMessage(VI_ERROR, _T("Configuration writes disabled by --readonly")); return 0; }
+    if(ConfigStore.disabled) { SetViMessage(VI_ERROR, _T("Saving disabled by --no-config; use --write-config PATH to export")); return 0; }
+    if(!ConfigStore.write_path[0]) { SetViMessage(VI_ERROR, _T("Configuration destination unavailable; select --config PATH or --portable")); return 0; }
+    unsigned long CapturedRevision = SettingsRevision;
+    wtop_store_result Result;
+    if(!wtop_store_save(&ConfigStore, &Settings, &ConfigDocument, CapturedRevision, &Result)) {
+        SetViMessage(VI_ERROR, _T("Settings %hs: %hs (error %lu); edits retained"),
+            wtop_store_outcome_name(Result.outcome), Result.message, Result.native_error);
+        return 0;
     }
-    const char *Error = NULL;
-    if(!WriteConfigFile(ConfigPath, TRUE, &Error)) { SetViMessage(VI_ERROR, _T("Settings not saved: %hs (error %lu)"), Error, GetLastError()); return 0; }
-    ConfigDirty = FALSE;
-    SetViMessage(VI_NOTICE, _T("Saved configuration: %s"), ConfigPath);
+    if(SettingsRevision == Result.saved_revision) ConfigDirty = FALSE;
+    SetViMessage(VI_NOTICE, _T("Saved configuration: %s%hs"), ConfigStore.write_path,
+        Result.migrated ? " (migration original retained)" : "");
     return 1;
 }
 
@@ -1516,8 +1849,15 @@ static void CloseOverlay(void)
     Overlay = OVERLAY_NONE; OverlayTop = 0; RenderInvalidated = TRUE;
 }
 
+static void ShowActionResults(void)
+{
+    CloseOverlay();
+    Overlay = OVERLAY_RESULTS;
+}
+
 static void BeginKill(void)
 {
+    if(ReadOnlyMode) { SetViMessage(VI_ERROR, _T("Process actions disabled by --readonly")); return; }
     CloseOverlay();
     if(!TaggedProcessListCount && !SelectionMatchesDisplay()) return;
     DWORD Count = TaggedProcessListCount ? TaggedProcessListCount : 1;
@@ -1534,7 +1874,7 @@ static void ChangeTab(int Direction)
     int Index = Settings.active_tab;
     for(int Step = 0; Step < Settings.tab_count; ++Step) {
         Index = (Index + Settings.tab_count + Direction) % Settings.tab_count;
-        if(Settings.tabs[Index].visible) { Settings.active_tab = Index; ConfigDirty = TRUE; ApplyActiveTab(); return; }
+        if(Settings.tabs[Index].visible) { Settings.active_tab = Index; MarkSettingsChanged(); ApplyActiveTab(); return; }
     }
 }
 
@@ -1561,15 +1901,113 @@ static void CancelEditor(void)
         ReadjustCursor();
     }
     EditingFilter = FALSE;
+    EditingTabId = 0;
     ViDisableInput();
     ClearViMessage();
+}
+
+static int FindTabById(unsigned long Id)
+{
+    for(int i = 0; i < Settings.tab_count; ++i) if(Settings.tabs[i].id == Id) return i;
+    return -1;
+}
+
+static BOOL AcceptEditor(void)
+{
+    if(EditingTabId) {
+        unsigned TextFlags = 0;
+        char *Name = ToUtf8WithStatus(CurrentInputStr + 1, &TextFlags);
+        const char *Error = NULL;
+        int Index = FindTabById(EditingTabId);
+        BOOL Ok = Name && !TextFlags && Index >= 0 && wtop_settings_tab_rename(&Settings, Index, Name, &Error);
+        free(Name);
+        if(!Ok) {
+            SetViMessage(VI_ERROR, _T("View not renamed: %hs"), Error ? Error : "invalid text or changed identity");
+            return FALSE;
+        }
+        MarkSettingsChanged(); EditingTabId = 0; ViDisableInput();
+    } else {
+        ViExecInput();
+        EditingFilter = FALSE;
+    }
+    RenderInvalidated = TRUE;
+    return TRUE;
+}
+
+static void EditSetupTab(wtop_ui_action Action)
+{
+    const char *Error = NULL;
+    BOOL Ok = FALSE;
+    int Index = SetupIndex;
+    if(Index < 0 || Index >= Settings.tab_count) return;
+    if(Action == WTOP_UI_TAB_RENAME) {
+        TCHAR *Name = FromUtf8(Settings.tabs[Index].name);
+        if(Name && ViSetInputText(_T('='), Name)) EditingTabId = Settings.tabs[Index].id;
+        else SetViMessage(VI_ERROR, _T("Cannot open the view-name editor"));
+        free(Name); return;
+    }
+    if(Action == WTOP_UI_TAB_DELETE) {
+        PendingDeleteTabId = Settings.tabs[Index].id;
+        Overlay = OVERLAY_TAB_DELETE; return;
+    }
+    if(Action == WTOP_UI_TAB_NEW || Action == WTOP_UI_TAB_DUPLICATE) {
+        char Name[WTOP_TAB_NAME_BYTES];
+        sprintf_s(Name, sizeof(Name), "%s %lu", Action == WTOP_UI_TAB_NEW ? "View" : "Copy", Settings.next_tab_id);
+        int Destination = Index + 1;
+        Ok = Action == WTOP_UI_TAB_NEW ?
+            wtop_settings_tab_insert(&Settings, Destination, Name, &Error) :
+            wtop_settings_tab_duplicate(&Settings, Index, Destination, Name, &Error);
+        if(Ok) { SetupIndex = Settings.active_tab = Destination; }
+    } else {
+        int Destination = Index + (Action == WTOP_UI_TAB_MOVE_RIGHT ? 1 : -1);
+        Ok = wtop_settings_tab_move(&Settings, Index, Destination, &Error);
+        if(Ok) SetupIndex = Destination;
+    }
+    if(Ok) { MarkSettingsChanged(); ApplyActiveTab(); }
+    else SetViMessage(VI_ERROR, _T("View unchanged: %hs"), Error ? Error : "operation unavailable");
+}
+
+static BOOL NavigateOverlay(wtop_ui_action Action)
+{
+    if(Overlay != OVERLAY_HELP && Overlay != OVERLAY_RESULTS &&
+       Overlay != OVERLAY_SETUP && Overlay != OVERLAY_SORT) return FALSE;
+    int *Position = Overlay == OVERLAY_SETUP ? &SetupIndex : Overlay == OVERLAY_SORT ? &SortChoice : &OverlayTop;
+    int Maximum = Overlay == OVERLAY_SETUP ? SetupCount() - 1 :
+        Overlay == OVERLAY_SORT ? WTOP_MAX_COLUMNS - 1 :
+        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 : 18;
+    Maximum = max(0, Maximum);
+    switch(Action) {
+    case WTOP_UI_UP: --*Position; break;
+    case WTOP_UI_DOWN: ++*Position; break;
+    case WTOP_UI_PAGE_UP: *Position -= max(1, Height - 5); break;
+    case WTOP_UI_PAGE_DOWN: *Position += max(1, Height - 5); break;
+    case WTOP_UI_TOP: *Position = 0; break;
+    case WTOP_UI_BOTTOM: *Position = Maximum; break;
+    default: return FALSE;
+    }
+    *Position = max(0, min(Maximum, *Position));
+    return TRUE;
 }
 
 static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
 {
     if(Action == WTOP_UI_NONE) return;
-    CancelEditor();
+    wtop_ui_context_options Context = CurrentUiContext();
+    wtop_ui_binding Binding;
+    wtop_ui_resolve_action(&Context, Action, &Binding);
+    if(!Binding.enabled) {
+        SetViMessage(VI_NOTICE, _T("%hs: %hs"), Binding.label, wtop_ui_reason_name(Binding.reason));
+        *Redraw = TRUE; return;
+    }
     *Redraw = TRUE;
+    BOOL WasEditing = InInputMode;
+    if(InInputMode && (Action == WTOP_UI_ACCEPT || Action == WTOP_UI_SAVE)) {
+        if(!AcceptEditor() || Action == WTOP_UI_ACCEPT) return;
+    } else if(InInputMode && Action == WTOP_UI_CLEAR) {
+        KEY_EVENT_RECORD Key = {0}; Key.bKeyDown = TRUE; Key.wVirtualKeyCode = 'U'; Key.dwControlKeyState = LEFT_CTRL_PRESSED;
+        ViHandleInputKey(&Key); return;
+    } else if(InInputMode) CancelEditor();
+    if(NavigateOverlay(Action)) { RenderInvalidated = TRUE; return; }
     switch(Action) {
     case WTOP_UI_UP: DoScroll(SCROLL_UP, Redraw); break;
     case WTOP_UI_DOWN: DoScroll(SCROLL_DOWN, Redraw); break;
@@ -1582,15 +2020,18 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
     case WTOP_UI_SEARCH: StartEditor(_T('/')); break;
     case WTOP_UI_FILTER: StartEditor(_T('\\')); break;
     case WTOP_UI_COMMAND: StartEditor(_T(':')); break;
-    case WTOP_UI_TREE: ActiveTab()->tree = !ActiveTab()->tree; ConfigDirty = TRUE; ApplyActiveTab(); break;
+    case WTOP_UI_TREE: ActiveTab()->tree = !ActiveTab()->tree; MarkSettingsChanged(); ApplyActiveTab(); break;
     case WTOP_UI_SORT: CloseOverlay(); Overlay = OVERLAY_SORT; SortChoice = ActiveTab()->sort_column; break;
     case WTOP_UI_PRIORITY_UP:
     case WTOP_UI_PRIORITY_DOWN:
+        if(ReadOnlyMode) { SetViMessage(VI_ERROR, _T("Process actions disabled by --readonly")); break; }
         if(TaggedProcessListCount) {
-            for(DWORD i = 0; i < TaggedProcessListCount; ++i) ChangePriority(&TaggedProcessList[i], Action == WTOP_UI_PRIORITY_UP ? 1 : -1);
+            RunNativeActions(TaggedProcessList, TaggedProcessListCount,
+                Action == WTOP_UI_PRIORITY_UP ? WTOP_ACTION_PRIORITY_UP : WTOP_ACTION_PRIORITY_DOWN);
         } else if(SelectionMatchesDisplay()) {
             process_identity Identity = { DisplayedProcessID, DisplayedCreationTime };
-            ChangePriority(&Identity, Action == WTOP_UI_PRIORITY_UP ? 1 : -1);
+            RunNativeActions(&Identity, 1,
+                Action == WTOP_UI_PRIORITY_UP ? WTOP_ACTION_PRIORITY_UP : WTOP_ACTION_PRIORITY_DOWN);
         }
         break;
     case WTOP_UI_KILL: BeginKill(); break;
@@ -1599,7 +2040,7 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
         if(SelectionMatchesDisplay()) { ToggleTaggedProcess(&ProcessList[SelectedProcessIndex]); DoScroll(SCROLL_DOWN, Redraw); }
         break;
     case WTOP_UI_UNTAG: TaggedProcessListCount = 0; break;
-    case WTOP_UI_REVERSE: ActiveTab()->descending = !ActiveTab()->descending; ConfigDirty = TRUE; ApplyActiveTab(); break;
+    case WTOP_UI_REVERSE: ActiveTab()->descending = !ActiveTab()->descending; MarkSettingsChanged(); ApplyActiveTab(); break;
     case WTOP_UI_FOLLOW:
         if(SelectionMatchesDisplay()) {
             FollowProcess = !FollowProcess; FollowProcessID = DisplayedProcessID; FollowCreationTime = DisplayedCreationTime;
@@ -1609,8 +2050,11 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
     case WTOP_UI_SEARCH_PREVIOUS: SearchPrevious(); break;
     case WTOP_UI_NEXT_TAB: ChangeTab(1); break;
     case WTOP_UI_PREVIOUS_TAB: ChangeTab(-1); break;
-    case WTOP_UI_BAR: Settings.show_function_bar = !Settings.show_function_bar; ConfigDirty = TRUE; break;
-    case WTOP_UI_CANCEL: CloseOverlay(); ViDisableInput(); ClearViMessage(); EmacsPrefix = FALSE; break;
+    case WTOP_UI_BAR: Settings.show_function_bar = !Settings.show_function_bar; MarkSettingsChanged(); break;
+    case WTOP_UI_CANCEL:
+        if(Overlay == OVERLAY_TAB_DELETE) { CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = 3; PendingDeleteTabId = 0; }
+        else if(!WasEditing) CloseOverlay();
+        ClearViMessage(); EmacsPrefix = FALSE; break;
     case WTOP_UI_SORT_CPU: ChangeProcessSortType(SORT_BY_PROCESSOR_TIME); break;
     case WTOP_UI_SORT_MEMORY: ChangeProcessSortType(SORT_BY_USED_MEMORY); break;
     case WTOP_UI_SORT_PID: ChangeProcessSortType(SORT_BY_ID); break;
@@ -1618,6 +2062,38 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
     case WTOP_UI_SORT_RIGHT: ChangeProcessSortType((process_sort_type)((ActiveTab()->sort_column + 1) % WTOP_MAX_COLUMNS)); break;
     case WTOP_UI_EMACS_PREFIX: EmacsPrefix = TRUE; SetViMessage(VI_NOTICE, _T("C-x: C-c quits, C-s saves; C-g cancels")); break;
     case WTOP_UI_SAVE: SavePresentationSettings(); break;
+    case WTOP_UI_SETUP_PREVIOUS_PAGE:
+    case WTOP_UI_SETUP_NEXT_PAGE:
+        SetupPage = (SetupPage + (Action == WTOP_UI_SETUP_NEXT_PAGE ? 1 : 4)) % 5;
+        SetupIndex = OverlayTop = 0; break;
+    case WTOP_UI_ADJUST_DOWN: SetupAdjust(-1, FALSE); break;
+    case WTOP_UI_ADJUST_UP: SetupAdjust(1, FALSE); break;
+    case WTOP_UI_ACCEPT:
+        if(Overlay == OVERLAY_SETUP) SetupAdjust(1, TRUE);
+        else if(Overlay == OVERLAY_SORT) { ChangeProcessSortType((process_sort_type)SortChoice); CloseOverlay(); }
+        break;
+    case WTOP_UI_CONFIRM:
+        if(Overlay == OVERLAY_KILL) {
+            RunNativeActions(PendingKills, PendingKillCount, WTOP_ACTION_TERMINATE);
+            TaggedProcessListCount = 0;
+        } else if(Overlay == OVERLAY_TAB_DELETE) {
+            const char *Error = NULL;
+            int Index = -1;
+            for(int i = 0; i < Settings.tab_count; ++i)
+                if(Settings.tabs[i].id == PendingDeleteTabId) Index = i;
+            if(Index >= 0 && wtop_settings_tab_delete(&Settings, Index, &Error)) {
+                MarkSettingsChanged(); ApplyActiveTab(); SetupIndex = min(Index, Settings.tab_count - 1);
+            } else SetViMessage(VI_ERROR, _T("View not deleted: %hs"), Error ? Error : "view identity changed");
+            CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = 3; PendingDeleteTabId = 0;
+        }
+        break;
+    case WTOP_UI_TAB_NEW:
+    case WTOP_UI_TAB_DUPLICATE:
+    case WTOP_UI_TAB_RENAME:
+    case WTOP_UI_TAB_DELETE:
+    case WTOP_UI_TAB_MOVE_LEFT:
+    case WTOP_UI_TAB_MOVE_RIGHT:
+        EditSetupTab(Action); break;
     default: break;
     }
     if(*Redraw) RenderInvalidated = TRUE;
@@ -1644,7 +2120,7 @@ static void ToggleOrderedItem(int *Items, int *Count, int Selected, int Maximum,
         memmove(Items + Selected, Items + Selected + 1, (size_t)(*Count - Selected - 1) * sizeof(*Items));
         --*Count;
     } else Items[(*Count)++] = All[Selected];
-    ConfigDirty = TRUE;
+    MarkSettingsChanged();
 }
 
 static int SetupCount(void)
@@ -1684,75 +2160,37 @@ static void SetupAdjust(int Direction, BOOL Activate)
             }
         }
     } else if(SetupPage == 3) {
-        if(Activate) {
-            int Visible = 0;
-            for(int i = 0; i < Settings.tab_count; ++i) Visible += Settings.tabs[i].visible;
-            if(Settings.tabs[SetupIndex].visible && Visible == 1) { SetViMessage(VI_ERROR, _T("At least one tab must remain visible")); return; }
-            Settings.tabs[SetupIndex].visible = !Settings.tabs[SetupIndex].visible;
-            if(!Settings.tabs[Settings.active_tab].visible) ChangeTab(1);
-        } else {
+        const char *Error = NULL;
+        BOOL Ok;
+        if(Activate) Ok = wtop_settings_tab_set_visible(&Settings, SetupIndex, !Settings.tabs[SetupIndex].visible, &Error);
+        else {
             int Next = SetupIndex + Direction;
-            if(Next >= 0 && Next < Settings.tab_count) {
-                wtop_tab Tab = Settings.tabs[SetupIndex];
-                Settings.tabs[SetupIndex] = Settings.tabs[Next]; Settings.tabs[Next] = Tab;
-                if(Settings.active_tab == SetupIndex) Settings.active_tab = Next;
-                else if(Settings.active_tab == Next) Settings.active_tab = SetupIndex;
-                SetupIndex = Next;
-            }
+            Ok = wtop_settings_tab_move(&Settings, SetupIndex, Next, &Error);
+            if(Ok) SetupIndex = Next;
         }
+        if(!Ok) { SetViMessage(VI_ERROR, _T("View unchanged: %hs"), Error); return; }
+        ApplyActiveTab();
     } else Settings.colors[SetupIndex] = (Settings.colors[SetupIndex] + 256 + Direction) % 256;
-    ConfigDirty = TRUE;
+    MarkSettingsChanged();
     RenderInvalidated = TRUE;
 }
 
 static void HandleOverlayKey(int Key, unsigned Modifiers, BOOL *Redraw)
 {
-    *Redraw = TRUE;
-    if(Key == 27 || (Settings.keymap == WTOP_KEYMAP_EMACS && (Modifiers & WTOP_MOD_CTRL) && (Key == 'g' || Key == 'G' || Key == 7))) { CloseOverlay(); return; }
-    wtop_ui_action Navigation = wtop_ui_key_action(Settings.keymap, Key, Modifiers);
-    if(Navigation == WTOP_UI_UP) Key = WTOP_KEY_UP;
-    if(Navigation == WTOP_UI_DOWN) Key = WTOP_KEY_DOWN;
-    if(Navigation == WTOP_UI_PAGE_UP) Key = WTOP_KEY_PAGE_UP;
-    if(Navigation == WTOP_UI_PAGE_DOWN) Key = WTOP_KEY_PAGE_DOWN;
-    if(Navigation == WTOP_UI_TOP) Key = WTOP_KEY_HOME;
-    if(Navigation == WTOP_UI_BOTTOM) Key = WTOP_KEY_END;
-    if(Overlay == OVERLAY_HELP) {
-        if(Key == WTOP_KEY_UP) OverlayTop = max(0, OverlayTop - 1);
-        if(Key == WTOP_KEY_DOWN) OverlayTop = min(18, OverlayTop + 1);
-        if(Key == WTOP_KEY_PAGE_UP) OverlayTop = max(0, OverlayTop - max(1, Height - 5));
-        if(Key == WTOP_KEY_PAGE_DOWN) OverlayTop = min(18, OverlayTop + max(1, Height - 5));
-        return;
+    wtop_ui_context_options Context = CurrentUiContext();
+    DispatchAction(wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers), Redraw);
+}
+
+static void DispatchFunction(int Index, BOOL *Redraw)
+{
+    wtop_ui_context_options Context = CurrentUiContext();
+    wtop_ui_binding Binding;
+    wtop_ui_resolve_function(&Context, Index, &Binding);
+    if(Binding.enabled) DispatchAction(Binding.action, Redraw);
+    else if(Binding.action != WTOP_UI_NONE) {
+        SetViMessage(VI_NOTICE, _T("%hs: %hs"), Binding.label, wtop_ui_reason_name(Binding.reason));
+        *Redraw = TRUE;
     }
-    if(Overlay == OVERLAY_KILL) {
-        if(Key == 'n' || Key == 'N') { CloseOverlay(); return; }
-        if(Key == 'y' || Key == 'Y') {
-            DWORD Success = 0;
-            for(DWORD i = 0; i < PendingKillCount; ++i) Success += KillIdentity(PendingKills[i].ID, PendingKills[i].CreationTime);
-            SetViMessage(Success == PendingKillCount ? VI_NOTICE : VI_ERROR,
-                _T("Termination: %lu succeeded, %lu refused/failed"), Success, PendingKillCount - Success);
-            TaggedProcessListCount = 0;
-            CloseOverlay();
-        }
-        return;
-    }
-    if(Overlay == OVERLAY_SORT) {
-        if(Key == WTOP_KEY_UP) SortChoice = max(0, SortChoice - 1);
-        if(Key == WTOP_KEY_DOWN) SortChoice = min(WTOP_MAX_COLUMNS - 1, SortChoice + 1);
-        if(Key == '\r' || Key == ' ') { ChangeProcessSortType((process_sort_type)SortChoice); CloseOverlay(); }
-        return;
-    }
-    if(Key == WTOP_KEY_LEFT) { SetupPage = (SetupPage + 4) % 5; SetupIndex = OverlayTop = 0; }
-    else if(Key == WTOP_KEY_RIGHT) { SetupPage = (SetupPage + 1) % 5; SetupIndex = OverlayTop = 0; }
-    else if(Key == WTOP_KEY_UP || (Settings.keymap == WTOP_KEYMAP_VI && Key == 'k')) SetupIndex = max(0, SetupIndex - 1);
-    else if(Key == WTOP_KEY_DOWN || (Settings.keymap == WTOP_KEYMAP_VI && Key == 'j')) SetupIndex = min(SetupCount() - 1, SetupIndex + 1);
-    else if(Key == WTOP_KEY_PAGE_UP) SetupIndex = max(0, SetupIndex - max(1, Height - 5));
-    else if(Key == WTOP_KEY_PAGE_DOWN) SetupIndex = min(SetupCount() - 1, SetupIndex + max(1, Height - 5));
-    else if(Key == WTOP_KEY_HOME) SetupIndex = 0;
-    else if(Key == WTOP_KEY_END) SetupIndex = SetupCount() - 1;
-    else if(Key == 's' || Key == 'S') SavePresentationSettings();
-    else if(Key == '+' || Key == '=') SetupAdjust(1, FALSE);
-    else if(Key == '-') SetupAdjust(-1, FALSE);
-    else if(Key == ' ' || Key == '\r') SetupAdjust(1, TRUE);
 }
 
 static int NativeKey(const KEY_EVENT_RECORD *Key)
@@ -1797,7 +2235,7 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
         *Redraw = TRUE; return;
     }
     if(!Click || X < 0 || X >= Width || Y < 0 || Y >= Height) return;
-    if(Y == FunctionBarRow) { DispatchAction(wtop_ui_function_action(wtop_ui_bar_hit(Width, X)), Redraw); return; }
+    if(Y == FunctionBarRow) { DispatchFunction(wtop_ui_bar_hit(Width, X), Redraw); return; }
     if(Overlay == OVERLAY_SETUP && Y >= 3) {
         int Index = OverlayTop + Y - 3;
         if(Index < SetupCount() && Y < Height - 2) { SetupIndex = Index; SetupAdjust(1, TRUE); *Redraw = TRUE; }
@@ -1810,7 +2248,7 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
     if(Y == TabsRow) {
         for(int i = 0; i < Settings.tab_count; ++i)
             if(RenderedTabWidth[i] && X >= RenderedTabStart[i] && X - RenderedTabStart[i] < RenderedTabWidth[i]) {
-                Settings.active_tab = i; ConfigDirty = TRUE; ApplyActiveTab(); *Redraw = TRUE; return;
+                Settings.active_tab = i; MarkSettingsChanged(); ApplyActiveTab(); *Redraw = TRUE; return;
             }
     }
     if(Y == ProcessHeaderRow) {
@@ -1852,16 +2290,18 @@ static void ProcessInput(BOOL *Redraw)
         if(Event->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) Modifiers |= WTOP_MOD_ALT;
         int Key = NativeKey(Event);
         if(Key >= WTOP_KEY_F1 && Key <= WTOP_KEY_F10) {
-            DispatchAction(wtop_ui_function_action(Key - WTOP_KEY_F1), Redraw); continue;
+            DispatchFunction(Key - WTOP_KEY_F1, Redraw); continue;
         }
         if(InInputMode) {
+            if(Key == '\r') { AcceptEditor(); *Redraw = TRUE; continue; }
             BOOL Cancel = Key == 27 || ((Modifiers & WTOP_MOD_CTRL) && (Key == 7 || Key == 'g' || Key == 'G'));
+            ClearViMessage();
             if(ViHandleInputKey(Event)) {
                 if(EditingFilter && Cancel) {
                     strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), EditingOriginalFilter);
                     ConfigDirty = EditingWasDirty; ReadjustCursor();
                 } else if(InInputMode && CurrentInputStr[0] == _T('\\')) SetPresentationFilter(CurrentInputStr + 1);
-                if(!InInputMode) EditingFilter = FALSE;
+                if(!InInputMode) { EditingFilter = FALSE; EditingTabId = 0; }
                 *Redraw = TRUE; RenderInvalidated = TRUE;
             }
             continue;
@@ -1874,7 +2314,8 @@ static void ProcessInput(BOOL *Redraw)
             else { ClearViMessage(); *Redraw = TRUE; }
             continue;
         }
-        wtop_ui_action Action = wtop_ui_key_action(Settings.keymap, Key, Modifiers);
+        wtop_ui_context_options Context = CurrentUiContext();
+        wtop_ui_action Action = wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers);
         unsigned Repeats = (Action == WTOP_UI_UP || Action == WTOP_UI_DOWN || Action == WTOP_UI_PAGE_UP || Action == WTOP_UI_PAGE_DOWN) ? min(Event->wRepeatCount, 32) : 1;
         for(unsigned Repeat = 0; Repeat < Repeats; ++Repeat) DispatchAction(Action, Redraw);
     }
@@ -1882,6 +2323,10 @@ static void ProcessInput(BOOL *Redraw)
 
 static BOOL ApplyOptions(const wtop_options *Options)
 {
+    if(Options->mode == WTOP_INSPECT) {
+        PidFilterList[0] = (DWORD)Options->inspect_pid;
+        PidFilterCount = 1; FilterByPID = TRUE;
+    }
     if(Options->user_filter) {
         TCHAR *Value = FromUtf8(Options->user_filter);
         if(!Value || _tcslen(Value) >= _countof(FilterUserName)) { free(Value); return FALSE; }
@@ -1923,76 +2368,268 @@ static BOOL ApplyOptions(const wtop_options *Options)
     return TRUE;
 }
 
-static BOOL JsonTString(const TCHAR *Text)
+static unsigned SnapshotTextFlags;
+static BOOL JsonTString(FILE *Output, const TCHAR *Text)
 {
-    char *Utf8 = ToUtf8(Text);
+    unsigned Flags = 0;
+    char *Utf8 = ToUtf8WithStatus(Text, &Flags);
+    SnapshotTextFlags |= Flags;
     if(!Utf8) return FALSE;
-    BOOL Ok = wtop_json_string(stdout, Utf8);
+    BOOL Ok = wtop_json_string(Output, Utf8);
     free(Utf8);
     return Ok;
 }
 
-static void JsonMetricDouble(const char *Name, metric_state State, double Value)
+/* A freshness budget is an observation policy, not a native-call timeout.
+   It never implies that a blocked synchronous provider can be cancelled. */
+static DWORD SampleFreshnessBudget(void)
 {
-    printf(",\"%s\":{\"status\":\"%s\",\"value\":", Name, MetricStateName(State));
-    if(State == METRIC_OK) printf("%.6f", Value); else fputs("null", stdout);
-    fputc('}', stdout);
+    return LastSampleInterval ? LastSampleInterval * 3UL : 0;
 }
 
-static void JsonMetricInteger(const char *Name, metric_state State, ULONGLONG Value)
+static metric_state FreshMetricState(metric_state State, ULONGLONG Observed, ULONGLONG Now)
 {
-    printf(",\"%s\":{\"status\":\"%s\",\"value\":", Name, MetricStateName(State));
-    if(State == METRIC_OK) printf("\"%llu\"", (unsigned long long)Value); else fputs("null", stdout);
-    fputc('}', stdout);
+    double Age = 0;
+    if(State != METRIC_OK) return State;
+    return wtop_sample_freshness(CounterValue(Now), CounterValue(Observed), SampleFreshnessBudget(), &Age);
 }
 
-static int WriteSnapshot(BOOL Json)
+static void JsonMetricDouble(FILE *Output, const char *Name, metric_state State, double Value, const char *Unit)
 {
-    if(Json) {
-        printf("{\"schema\":1,\"version\":\"%s\",\"profile\":\"%s\",\"sample_elapsed_ms\":%llu,"
-               "\"cpu_normalization\":\"share-of-GetSystemTimes-aggregate; processor-group limits apply\","
-               "\"io_scope\":\"process read+write I/O; not physical-disk attribution\",\"processes\":[",
-               WTOP_VERSION_STRING, WTOP_BUILD_PROFILE, (unsigned long long)LastSampleElapsed);
-        for(DWORD i = 0; i < ProcessCount; ++i) {
-            const process *Process = &ProcessList[i];
-            if(i) fputc(',', stdout);
-            printf("{\"pid\":%lu,\"parent_pid\":%lu,\"threads\":%lu,\"base_priority\":%lu,\"name\":",
-                   Process->ID, Process->ParentPID, Process->ThreadCount, Process->BasePriority);
-            if(!JsonTString(Process->ExeName)) return 1;
-            fputs(",\"creation_filetime\":", stdout);
-            if(Process->CreationTime) printf("\"%llu\"", (unsigned long long)Process->CreationTime); else fputs("null", stdout);
-            printf(",\"owner\":{\"status\":\"%s\",\"value\":", MetricStateName(Process->OwnerState));
-            if(Process->OwnerState == METRIC_OK) { if(!JsonTString(Process->UserName)) return 1; }
-            else fputs("null", stdout);
-            fputc('}', stdout);
-            JsonMetricDouble("cpu_share_percent", Process->CpuState, Process->PercentProcessorTime);
-            JsonMetricInteger("working_set_bytes", Process->MemoryState, Process->UsedMemory);
-            JsonMetricDouble("io_read_write_bytes_per_second", Process->IoState, Process->DiskUsage);
-            JsonMetricInteger("age_ms", Process->AgeState, Process->UpTime);
-            fputc('}', stdout);
+    fprintf(Output, ",\"%s\":{\"status\":\"%s\",\"unit\":\"%s\",\"value\":", Name, MetricStateName(State), Unit);
+    if(State == METRIC_OK) fprintf(Output, "%.6f", Value); else fputs("null", Output);
+    fputc('}', Output);
+}
+
+static void JsonMetricInteger(FILE *Output, const char *Name, metric_state State, ULONGLONG Value, const char *Unit)
+{
+    fprintf(Output, ",\"%s\":{\"status\":\"%s\",\"unit\":\"%s\",\"value\":", Name, MetricStateName(State), Unit);
+    if(State == METRIC_OK) fprintf(Output, "\"%llu\"", (unsigned long long)Value); else fputs("null", Output);
+    fputc('}', Output);
+}
+
+static wtop_provider_session InspectionProvider;
+static wtop_provider_result *CommandObservation, *ServicesObservation;
+
+static int CollectInspection(const wtop_options *Options)
+{
+    if(Options->mode == WTOP_INSPECT && !ProcessCount) return 3;
+    int ExitCode = Options->mode == WTOP_QUERY && UnresolvedOwnerFilterCount ? 3 : 0;
+    wtop_provider_request Request;
+    memset(&Request, 0, sizeof(Request));
+    if(Options->mode == WTOP_INSPECT) {
+        Request.pid = (DWORD)Options->inspect_pid;
+        Request.creation.dwLowDateTime = (DWORD)ProcessList[0].CreationTime;
+        Request.creation.dwHighDateTime = (DWORD)(ProcessList[0].CreationTime >> 32);
+    }
+    if(Options->command_line) {
+        CommandObservation = calloc(1, sizeof(*CommandObservation));
+        if(!CommandObservation) return 1;
+        Request.kind = WTOP_PROVIDER_COMMAND_LINE;
+        wtop_provider_collect(&InspectionProvider, &Request, 2500, ShutdownEvent, CommandObservation);
+        if(CommandObservation->state != WTOP_PROVIDER_VALID) ExitCode = 3;
+    }
+    if(Options->services || (Options->mode == WTOP_QUERY && Options->query_target == WTOP_QUERY_SERVICES)) {
+        ServicesObservation = calloc(1, sizeof(*ServicesObservation));
+        if(!ServicesObservation) return 1;
+        Request.kind = WTOP_PROVIDER_SERVICES;
+        wtop_provider_collect(&InspectionProvider, &Request, 2500, ShutdownEvent, ServicesObservation);
+        if(ServicesObservation->state != WTOP_PROVIDER_VALID) ExitCode = 3;
+    }
+    if(Options->per_core && (!CoreObservation || CoreObservation->state != WTOP_PROVIDER_VALID)) ExitCode = 3;
+    return ExitCode;
+}
+
+static BOOL WriteProvider(FILE *Output, const char *Name, const wtop_provider_result *Result, BOOL *First)
+{
+    if(!Result) return TRUE;
+    if(!*First) fputc(',', Output);
+    *First = FALSE;
+    fprintf(Output, "\"%s\":{\"status\":\"%s\",\"error_domain\":%d,\"native_error\":%lu,"
+        "\"started_ms\":\"%llu\",\"observed_ms\":\"%llu\",\"elapsed_ms\":%.6f,\"acquisition_ms\":%.6f,"
+        "\"retirement_confirmed\":%s,\"pid\":%lu,\"creation_filetime\":",
+        Name, wtop_provider_state_name(Result->state), (int)Result->error_domain, Result->native_error,
+        (unsigned long long)Result->started_ms, (unsigned long long)Result->observed_ms, Result->elapsed_ms, Result->acquisition_ms,
+        Result->retirement_confirmed ? "true" : "false", Result->pid);
+    if(FileTimeValue(&Result->creation)) fprintf(Output, "\"%llu\"", (unsigned long long)FileTimeValue(&Result->creation));
+    else fputs("null", Output);
+    fprintf(Output, ",\"count\":%lu,\"total_count\":%lu", Result->count, Result->total_count);
+    if(Result->kind == WTOP_PROVIDER_PER_CORE)
+        fprintf(Output, ",\"scope\":\"%s\"", Result->legacy_processor_scope ? "legacy-processor" : "processor-information");
+    fputs(",\"value\":", Output);
+    if(Result->kind == WTOP_PROVIDER_COMMAND_LINE) {
+        if(Result->state == WTOP_PROVIDER_VALID) {
+            if(!JsonTString(Output, Result->data.command_line)) return FALSE;
+        } else fputs("null", Output);
+    } else if(Result->state == WTOP_PROVIDER_VALID || Result->state == WTOP_PROVIDER_CAPACITY) {
+        fputc('[', Output);
+        DWORD Limit = Result->kind == WTOP_PROVIDER_SERVICES ? WTOP_PROVIDER_MAX_SERVICES : WTOP_PROVIDER_MAX_CORES;
+        for(DWORD i = 0; i < Result->count && i < Limit; ++i) {
+            if(i) fputc(',', Output);
+            if(Result->kind == WTOP_PROVIDER_SERVICES) {
+                const wtop_provider_service *Service = &Result->data.services[i];
+                fputs("{\"name\":", Output); if(!JsonTString(Output, Service->name)) return FALSE;
+                fputs(",\"display_name\":", Output); if(!JsonTString(Output, Service->display_name)) return FALSE;
+                fprintf(Output, ",\"pid\":%lu,\"service_state\":%lu,\"identity_status\":\"%s\",\"creation_filetime\":",
+                    Service->pid, Service->service_state, wtop_provider_state_name(Service->identity_state));
+                if(Service->identity_state == WTOP_PROVIDER_VALID)
+                    fprintf(Output, "\"%llu\"", (unsigned long long)FileTimeValue(&Service->creation));
+                else fputs("null", Output);
+            } else {
+                const wtop_provider_core *Core = &Result->data.cores[i];
+                fputs("{\"instance\":", Output); if(!JsonTString(Output, Core->instance)) return FALSE;
+                fputs(",\"group\":", Output); if(Core->group == MAXDWORD) fputs("null", Output); else fprintf(Output, "%lu", Core->group);
+                fputs(",\"index\":", Output); if(Core->index == MAXDWORD) fputs("null", Output); else fprintf(Output, "%lu", Core->index);
+                fprintf(Output, ",\"status\":\"%s\",\"busy_percent\":", wtop_provider_state_name(Core->state));
+                if(Core->state == WTOP_PROVIDER_VALID) fprintf(Output, "%.6f", Core->busy_percent); else fputs("null", Output);
+            }
+            fputc('}', Output);
         }
-        puts("]}");
-    } else {
-        printf("Wtop %s - one snapshot (%llu ms measured)\n", WTOP_VERSION_STRING, (unsigned long long)LastSampleElapsed);
-        puts("CPU% is aggregate CPU share; I/O is read+write process I/O; AGE is elapsed wall time.");
-        puts("PID\tOWNER\tCPU%\tWORKING_SET_BYTES\tIO_BYTES/S\tAGE_MS\tNAME");
-        for(DWORD i = 0; i < ProcessCount; ++i) {
+        fputc(']', Output);
+    } else fputs("null", Output);
+    fputc('}', Output);
+    return !ferror(Output);
+}
+
+static int WriteSnapshot(FILE *Output, const wtop_options *Options)
+{
+    BOOL Json = Options->json;
+    DWORD OutputCount = Options->mode == WTOP_QUERY && Options->query_target != WTOP_QUERY_PROCESSES ? 0 : ProcessCount;
+    SnapshotTextFlags = 0;
+    ULONGLONG Now = GetTickCount64();
+    double Age = 0;
+    metric_state Freshness = wtop_sample_freshness(CounterValue(Now), CounterValue(LastSampleObservedTick), SampleFreshnessBudget(), &Age);
+    const char *Normalization = CpuMachine ? "active-machine-capacity" : "one-core";
+    const char *Command = Options->mode == WTOP_INSPECT ? "inspect" : Options->mode == WTOP_QUERY ? "query" : Options->mode == WTOP_LOG ? "log" : "snapshot";
+    if(Json) {
+        fprintf(Output, "{\"schema\":2,\"version\":\"%s\",\"profile\":\"%s\",\"command\":\"%s\",\"inspect_pid\":%lu,\"sample_elapsed_ms\":%llu,"
+               "\"cpu_normalization\":\"%s\",\"cpu_active_capacity\":",
+               WTOP_VERSION_STRING, WTOP_BUILD_PROFILE, Command, Options->inspect_pid, (unsigned long long)LastSampleElapsed, Normalization);
+        if(ActiveCpuCapacity) fprintf(Output, "%lu", ActiveCpuCapacity); else fputs("null", Output);
+        fprintf(Output, ",\"sample\":{\"sequence\":\"%llu\",\"clock\":\"GetTickCount64-ms\","
+               "\"started_ms\":\"%llu\",\"observed_ms\":\"%llu\",\"published_ms\":\"%llu\","
+               "\"read_ms\":\"%llu\",\"age_ms\":%.0f,\"status\":\"%s\",\"stale_after_ms\":%lu,"
+               "\"requested_interval_ms\":%lu,\"complete\":%s,\"observed_process_count\":%lu,\"selected_process_count\":%lu,\"unresolved_owner_filter_count\":%lu},"
+               "\"io_scope\":\"process read+write I/O; not physical-disk attribution\","
+               "\"system\":{\"cpu_scope\":\"GetSystemTimes; caller primary processor group on systems with more than 64 logical processors\","
+               "\"cpu_observed_ms\":\"%llu\",\"memory_observed_ms\":\"%llu\"",
+               (unsigned long long)SampleSequence, (unsigned long long)LastSampleStartedTick,
+               (unsigned long long)LastSampleObservedTick, (unsigned long long)LastSamplePublishedTick,
+               (unsigned long long)Now, Age, MetricStateName(Freshness), SampleFreshnessBudget(), LastSampleInterval, SampleComplete ? "true" : "false", ObservedProcessCount, ProcessCount, UnresolvedOwnerFilterCount,
+               (unsigned long long)CpuSystemObservedTick, (unsigned long long)SystemMemoryObservedTick);
+        JsonMetricDouble(Output, "cpu_busy_percent", FreshMetricState(CPUUsageState, CpuSystemObservedTick, Now), CPUUsage * 100, "percent");
+        JsonMetricInteger(Output, "active_logical_processors", ActiveCpuCapacity ? METRIC_OK : WTOP_METRIC_UNSUPPORTED, ActiveCpuCapacity, "count");
+        JsonMetricInteger(Output, "physical_total_bytes", FreshMetricState(SystemMemoryState, SystemMemoryObservedTick, Now), PhysicalTotalBytes, "bytes");
+        JsonMetricInteger(Output, "physical_available_bytes", FreshMetricState(SystemMemoryState, SystemMemoryObservedTick, Now), PhysicalAvailableBytes, "bytes");
+        JsonMetricInteger(Output, "commit_bytes", FreshMetricState(SystemCommitState, SystemMemoryObservedTick, Now), CommitBytes, "bytes");
+        JsonMetricInteger(Output, "commit_limit_bytes", FreshMetricState(SystemCommitState, SystemMemoryObservedTick, Now), CommitLimitBytes, "bytes");
+        JsonMetricInteger(Output, "uptime_ms", METRIC_OK, UpTime, "milliseconds");
+        fputs("},\"processes\":[", Output);
+        for(DWORD i = 0; i < OutputCount; ++i) {
             const process *Process = &ProcessList[i];
-            char *Name = ToUtf8(Process->ExeName), *Owner = ToUtf8(Process->UserName);
-            if(!Name || !Owner) { free(Name); free(Owner); return 1; }
-            printf("%lu\t%s\t", Process->ID, Process->OwnerState == METRIC_OK ? Owner : MetricStateName(Process->OwnerState));
-            if(Process->CpuState == METRIC_OK) printf("%.2f", Process->PercentProcessorTime); else fputs(MetricStateName(Process->CpuState), stdout);
-            fputc('\t', stdout);
-            if(Process->MemoryState == METRIC_OK) printf("%llu", (unsigned long long)Process->UsedMemory); else fputs(MetricStateName(Process->MemoryState), stdout);
-            fputc('\t', stdout);
-            if(Process->IoState == METRIC_OK) printf("%.2f", Process->DiskUsage); else fputs(MetricStateName(Process->IoState), stdout);
-            fputc('\t', stdout);
-            if(Process->AgeState == METRIC_OK) printf("%llu", (unsigned long long)Process->UpTime); else fputs(MetricStateName(Process->AgeState), stdout);
-            printf("\t%s\n", Name);
-            free(Name); free(Owner);
+            if(i) fputc(',', Output);
+            fprintf(Output, "{\"pid\":%lu,\"parent_pid\":%lu,\"threads\":%lu,\"base_priority\":%lu,\"name\":",
+                   Process->ID, Process->ParentPID, Process->ThreadCount, Process->BasePriority);
+            if(!JsonTString(Output, Process->ExeName)) return 1;
+            fputs(",\"creation_filetime\":", Output);
+            if(Process->CreationTime) fprintf(Output, "\"%llu\"", (unsigned long long)Process->CreationTime); else fputs("null", Output);
+            fprintf(Output, ",\"observed_ms\":\"%llu\",\"cpu_observed_ms\":\"%llu\",\"cpu_elapsed_ms\":%.6f,"
+                   "\"cpu_acquisition_ms\":%.6f,\"owner\":{\"status\":\"%s\",\"value\":",
+                   (unsigned long long)Process->ObservedTick, (unsigned long long)Process->CpuObservedTick,
+                   Process->CpuElapsedMs, Process->CpuAcquisitionMs, MetricStateName(Process->OwnerState));
+            if(Process->OwnerState == METRIC_OK) { if(!JsonTString(Output, Process->UserName)) return 1; }
+            else fputs("null", Output);
+            fputs(",\"sid\":", Output);
+            if(Process->OwnerSid[0]) JsonTString(Output, Process->OwnerSid); else fputs("null", Output);
+            fprintf(Output, ",\"account_name_status\":\"%s\",\"account_name_observed_ms\":\"%llu\"}",
+                wtop_provider_state_name(Process->OwnerNameState), (unsigned long long)Process->OwnerNameObservedTick);
+            JsonMetricDouble(Output, "cpu_percent", FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now), Process->PercentProcessorTime, "percent");
+            JsonMetricInteger(Output, "working_set_bytes", FreshMetricState(Process->MemoryState, Process->ObservedTick, Now), Process->UsedMemory, "bytes");
+            JsonMetricDouble(Output, "io_read_write_bytes_per_second", FreshMetricState(Process->IoState, Process->ObservedTick, Now), Process->DiskUsage, "bytes/second");
+            JsonMetricInteger(Output, "age_ms", FreshMetricState(Process->AgeState, Process->CpuObservedTick, Now), Process->UpTime, "milliseconds");
+            fputc('}', Output);
+        }
+        fputs("],\"providers\":{", Output);
+        BOOL First = TRUE;
+        if(!WriteProvider(Output, "command_line", CommandObservation, &First) ||
+           !WriteProvider(Output, "services", ServicesObservation, &First) ||
+           !WriteProvider(Output, "per_core", CoreObservation, &First)) return 1;
+        fprintf(Output, "},\"text_encoding_loss\":%s}\n", SnapshotTextFlags ? "true" : "false");
+    } else {
+        fprintf(Output, "Wtop %s - one snapshot (%llu ms measured; CPU normalization %s)\n", WTOP_VERSION_STRING, (unsigned long long)LastSampleElapsed, Normalization);
+        fputs("I/O is read+write process I/O; AGE is wall time at observation; uint64 values are exact." "\n", Output);
+        fprintf(Output, "SYSTEM\tPHYSICAL_TOTAL_BYTES\t%s\t", MetricStateName(SystemMemoryState));
+        if(SystemMemoryState == METRIC_OK) fprintf(Output, "%llu", (unsigned long long)PhysicalTotalBytes);
+        fprintf(Output, "\nSYSTEM\tCOMMIT_BYTES\t%s\t", MetricStateName(SystemCommitState));
+        if(SystemCommitState == METRIC_OK) fprintf(Output, "%llu\tLIMIT_BYTES\t%llu", (unsigned long long)CommitBytes, (unsigned long long)CommitLimitBytes);
+        fputs("\nPID\tOWNER\tCPU%\tWORKING_SET_BYTES\tIO_BYTES/S\tAGE_MS\tNAME" "\n", Output);
+        for(DWORD i = 0; i < OutputCount; ++i) {
+            const process *Process = &ProcessList[i];
+            metric_state Cpu = FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now);
+            metric_state Memory = FreshMetricState(Process->MemoryState, Process->ObservedTick, Now);
+            metric_state Io = FreshMetricState(Process->IoState, Process->ObservedTick, Now);
+            metric_state ProcessAge = FreshMetricState(Process->AgeState, Process->CpuObservedTick, Now);
+            char Name[1024], Owner[1024];
+            NativeAscii(Process->ExeName, Name, sizeof(Name));
+            NativeAscii(Process->UserName, Owner, sizeof(Owner));
+            fprintf(Output, "%lu\t%s\t", Process->ID, Process->OwnerState == METRIC_OK ? Owner : MetricStateName(Process->OwnerState));
+            if(Cpu == METRIC_OK) fprintf(Output, "%.2f", Process->PercentProcessorTime); else fputs(MetricStateName(Cpu), Output);
+            fputc('\t', Output);
+            if(Memory == METRIC_OK) fprintf(Output, "%llu", (unsigned long long)Process->UsedMemory); else fputs(MetricStateName(Memory), Output);
+            fputc('\t', Output);
+            if(Io == METRIC_OK) fprintf(Output, "%.2f", Process->DiskUsage); else fputs(MetricStateName(Io), Output);
+            fputc('\t', Output);
+            if(ProcessAge == METRIC_OK) fprintf(Output, "%llu", (unsigned long long)Process->UpTime); else fputs(MetricStateName(ProcessAge), Output);
+            fprintf(Output, "\t%s\n", Name);
+        }
+        if(CommandObservation || ServicesObservation || CoreObservation) {
+            /* The same typed provider representation is also available after the
+               human process table; strings are JSON-escaped, never terminal controls. */
+            fputs("PROVIDERS\t{", Output); BOOL First = TRUE;
+            if(!WriteProvider(Output, "command_line", CommandObservation, &First) ||
+               !WriteProvider(Output, "services", ServicesObservation, &First) ||
+               !WriteProvider(Output, "per_core", CoreObservation, &First)) return 1;
+            fputs("}\n", Output);
         }
     }
-    return fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
+    return fflush(Output) == 0 && !ferror(Output) ? 0 : 1;
+}
+
+static int RunLog(const wtop_options *Options)
+{
+    TCHAR *Path = FromUtf8(Options->output_path);
+    wtop_log_sink Sink;
+    if(!Path) return 2;
+    if(!wtop_log_open(&Sink, Path, Options->max_bytes)) {
+        fprintf(stderr, "wtop: cannot create log destination/staging file (Win32 %lu); existing destinations are preserved\n", Sink.native_error);
+        free(Path); return 1;
+    }
+    free(Path);
+    ULONGLONG Started = GetTickCount64();
+    unsigned long Count = 0;
+    int Result = 0;
+    while(!ShouldStop()) {
+        if(Count) {
+            if(Options->duration_ms && GetTickCount64() - Started >= Options->duration_ms) break;
+            if(!PollProcessList((DWORD)Settings.interval_ms)) { Result = ShouldStop() ? 130 : 1; break; }
+            AdoptPendingSample(); PollSystemInfo();
+        }
+        FILE *Record = wtop_log_begin(&Sink);
+        if(!Record || WriteSnapshot(Record, Options)) { Result = 1; break; }
+        wtop_log_result Committed = wtop_log_commit(&Sink);
+        if(Committed != WTOP_LOG_OK) {
+            Result = Committed == WTOP_LOG_CAPACITY ? 3 : 1;
+            fprintf(stderr, "wtop: log stopped after %lu complete records (%llu bytes): %s\n", Count,
+                (unsigned long long)Sink.committed_bytes, Committed == WTOP_LOG_CAPACITY ? "byte limit reached" : "output failure");
+            break;
+        }
+        ++Count;
+        if(Options->sample_limit && Count >= Options->sample_limit) break;
+        if(Options->duration_ms && GetTickCount64() - Started >= Options->duration_ms) break;
+    }
+    if(ShouldStop()) Result = 130;
+    if(!wtop_log_close(&Sink)) Result = 1;
+    return Result;
 }
 
 static void ClearRow(int Row)
@@ -2009,21 +2646,25 @@ static void DrawFunctionBar(void)
 {
     if(FunctionBarRow < 0) return;
     ClearRow(FunctionBarRow);
+    wtop_ui_context_options Context = CurrentUiContext();
     for(int i = 0; i < 10; ++i) {
+        wtop_ui_binding Binding;
+        wtop_ui_resolve_function(&Context, i, &Binding);
+        if(Binding.action == WTOP_UI_NONE) continue;
         int Start, Length;
         wtop_ui_bar_span(Width, i, &Start, &Length);
         if(!Length) continue;
         SetConCursorPos((SHORT)Start, (SHORT)FunctionBarRow);
-        SetColor((WORD)Settings.colors[WTOP_COLOR_FUNCTION_KEY]);
+        SetColor((WORD)(Binding.enabled ? Settings.colors[WTOP_COLOR_FUNCTION_KEY] : FOREGROUND_INTENSITY));
         TCHAR Key[8];
         _stprintf_s(Key, _countof(Key), _T("F%d"), i + 1);
         int KeyLength = min(Length, (int)_tcslen(Key));
         ConPrintf(_T("%.*s"), KeyLength, Key);
-        SetColor((WORD)Settings.colors[WTOP_COLOR_MENU_BAR]);
+        SetColor((WORD)(Binding.enabled ? Settings.colors[WTOP_COLOR_MENU_BAR] : FOREGROUND_INTENSITY));
         int Remaining = Length - KeyLength;
         if(Remaining) {
-            TCHAR *Label = FromUtf8(wtop_ui_function_label(i, Length < 7));
-            if(Label) { ConPrintf(_T("%-*.*s"), Remaining, Remaining, Label); free(Label); }
+            TCHAR *Label = FromUtf8(Length < 7 ? Binding.compact_label : Binding.label);
+            if(Label) { DrawPaddedText(Label, Remaining); free(Label); }
         }
     }
 }
@@ -2075,15 +2716,57 @@ static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
     } else _stprintf_s(Text, Capacity, _T("%-24hs 0x%02X (+/- changes Windows color attribute)"), wtop_color_name(Index), Settings.colors[Index]);
 }
 
+static void DrawEditorStatus(void)
+{
+    if(ViMessageActive() && CurrentViMessageType == VI_ERROR && StatusRow > 0) {
+        ClearRow(StatusRow - 1);
+        SetColor((WORD)Settings.colors[WTOP_COLOR_ERROR]);
+        ConPrintf(_T("%s"), ViMessage);
+        SetConCursorPos(0, (SHORT)StatusRow);
+    }
+    unsigned long Cursor = ViInputCursor();
+    unsigned long CursorCells = 0;
+    for(unsigned long i = 0; i < Cursor && CurrentInputStr[i]; ++i) {
+#ifdef UNICODE
+        if(CurrentInputStr[i] >= 0xd800 && CurrentInputStr[i] <= 0xdbff && i + 1 < Cursor &&
+           CurrentInputStr[i + 1] >= 0xdc00 && CurrentInputStr[i + 1] <= 0xdfff) ++i;
+#endif
+        ++CursorCells;
+    }
+    char Text[DEFAULT_STR_SIZE];
+    size_t Cells = NativeAscii(CurrentInputStr, Text, sizeof(Text));
+    if(CursorCells > Cells) CursorCells = (unsigned long)Cells;
+    unsigned long Start = CursorCells >= (unsigned long)Width ? CursorCells - (unsigned long)Width + 1 : 0;
+    SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
+    ConPrintf(_T("%hs"), Text + Start);
+    COORD Caret = { (SHORT)(ConsoleOriginX + CursorCells - Start), (SHORT)(ConsoleOriginY + StatusRow) };
+    DWORD Painted;
+    FillConsoleOutputAttribute(ConsoleHandle, (WORD)Settings.colors[WTOP_COLOR_BG_HIGHLIGHT], 1, Caret, &Painted);
+}
+
 static void DrawOverlay(void)
 {
     for(int Row = 0; Row < Height; ++Row) ClearRow(Row);
     SetConCursorPos(0, 0);
     SetColor((WORD)Settings.colors[WTOP_COLOR_HEADER]);
-    const TCHAR *Title = Overlay == OVERLAY_HELP ? _T("Help") : Overlay == OVERLAY_SETUP ? _T("Setup") : Overlay == OVERLAY_SORT ? _T("Sort") : _T("Terminate");
+    const TCHAR *Title = Overlay == OVERLAY_HELP ? _T("Help") : Overlay == OVERLAY_SETUP ? _T("Setup") : Overlay == OVERLAY_SORT ? _T("Sort") : Overlay == OVERLAY_RESULTS ? _T("Actions") : Overlay == OVERLAY_TAB_DELETE ? _T("Delete view") : _T("Terminate");
     ConPrintf(_T("%s - Wtop [%hs]%s"), Title, wtop_keymap_name(Settings.keymap), ConfigDirty ? _T(" * unsaved") : _T(""));
     SetConCursorPos(0, 1); SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
-    if(Overlay == OVERLAY_KILL) {
+    if(Overlay == OVERLAY_RESULTS) {
+        ConPrintf(_T("Up/Down/PgUp/PgDn inspect; Enter/Esc returns. Requested means not yet confirmed."));
+        for(DWORD i = (DWORD)OverlayTop; i < LastActionCount && i - (DWORD)OverlayTop < (DWORD)max(0, Height - 5); ++i) {
+            const wtop_action_result *Result = &LastActionResults[i];
+            SetConCursorPos(0, (SHORT)(3 + i - (DWORD)OverlayTop));
+            ConPrintf(_T("PID %lu %hs error=%lu priority=%lu->%lu"), Result->request.target.pid,
+                wtop_action_state_name(Result->state), Result->native_error,
+                Result->previous_priority, Result->requested_priority);
+        }
+    } else if(Overlay == OVERLAY_TAB_DELETE) {
+        int Index = FindTabById(PendingDeleteTabId);
+        TCHAR *Name = Index >= 0 ? FromUtf8(Settings.tabs[Index].name) : NULL;
+        ConPrintf(_T("Delete view %lu '%s'? y confirms; n/Esc cancels."), PendingDeleteTabId, Name ? Name : _T("unavailable"));
+        free(Name);
+    } else if(Overlay == OVERLAY_KILL) {
         ConPrintf(_T("Terminate %lu captured process(es)? y confirms; n/Esc cancels."), PendingKillCount);
         for(DWORD i = 0; i < PendingKillCount && i < (DWORD)max(0, Height - 5); ++i) {
             SetConCursorPos(0, (SHORT)(i + 3));
@@ -2114,11 +2797,11 @@ static void DrawOverlay(void)
             TCHAR Text[512]; SetupLine(i, Text, _countof(Text));
             SetConCursorPos(0, (SHORT)(i - OverlayTop + 3));
             SetColor((WORD)Settings.colors[i == SetupIndex ? WTOP_COLOR_BG_HIGHLIGHT : WTOP_COLOR_FG]);
-            ConPrintf(_T("%-*.*s"), Width, Width, Text);
+            DrawPaddedText(Text, Width);
         }
     }
-    StatusRow = ViMessageActive() ? Height - (Settings.show_function_bar ? 2 : 1) : -1;
-    if(StatusRow >= 0) { ClearRow(StatusRow); WriteVi(); }
+    StatusRow = Height - (Settings.show_function_bar ? 2 : 1);
+    if(StatusRow >= 0) { ClearRow(StatusRow); if(InInputMode) DrawEditorStatus(); else WriteVi(); }
     DrawFunctionBar();
     RenderedRowCount = 0;
     RenderInvalidated = FALSE;
@@ -2141,7 +2824,7 @@ static void DrawHeaderRow(int Row, int Kind)
         if(SystemMemoryKnown) ConPrintf(_T("  %llu/%llu MiB"), UsedMemory, TotalMemory);
         break;
     case WTOP_ROW_COMMIT: {
-        DrawPercentageBar(_T("Cmt"), SystemMemoryKnown ? UsedPageMemoryPerc : -1, (WORD)Settings.colors[WTOP_COLOR_COMMIT]);
+        DrawPercentageBar(_T("Cmt"), SystemCommitState == METRIC_OK ? UsedPageMemoryPerc : -1, (WORD)Settings.colors[WTOP_COLOR_COMMIT]);
         TCHAR Age[32]; FormatTimeString(Age, _countof(Age), UpTime); ConPrintf(_T("  Up: %s"), Age);
         break;
     }
@@ -2151,8 +2834,44 @@ static void DrawHeaderRow(int Row, int Kind)
     }
 }
 
+static int DrawCoreRows(int Row)
+{
+    if(!CollectPerCore || Row >= Height - 5) return Row;
+    if(!CoreObservation || (CoreObservation->state != WTOP_PROVIDER_VALID && CoreObservation->state != WTOP_PROVIDER_CAPACITY)) {
+        ClearRow(Row++);
+        ConPrintf(_T("Per-core: %hs"), CoreObservation ? wtop_provider_state_name(CoreObservation->state) : "unavailable");
+        return Row;
+    }
+    BOOL Fresh = CoreObservedTick && GetTickCount64() - CoreObservedTick <= max(3000UL, SampleFreshnessBudget());
+    int Columns = max(1, Width / 20);
+    DWORD Shown = 0;
+    for(; Shown < CoreObservation->count && Row < Height - 5; ++Row) {
+        ClearRow(Row);
+        for(int Column = 0; Column < Columns && Shown < CoreObservation->count; ++Column, ++Shown) {
+            const wtop_provider_core *Core = &CoreObservation->data.cores[Shown];
+            SetConCursorPos((SHORT)(Column * 20), (SHORT)Row);
+            SetColor((WORD)Settings.colors[WTOP_COLOR_CPU]);
+            TCHAR Label[32];
+            if(Core->group != MAXDWORD) _stprintf_s(Label, _countof(Label), _T("%lu:%lu"), Core->group, Core->index);
+            else _stprintf_s(Label, _countof(Label), _T("%lu"), Shown);
+            if(Fresh && Core->state == WTOP_PROVIDER_VALID) {
+                TCHAR Bar[9]; int Filled = (int)max(0.0, min(8.0, Core->busy_percent * 0.08));
+                for(int i = 0; i < 8; ++i) Bar[i] = i < Filled ? _T('|') : _T(' ');
+                Bar[8] = 0;
+                ConPrintf(_T("%4.4s[%s]%5.1f"), Label, Bar, Core->busy_percent);
+            } else ConPrintf(_T("%4.4s[   ?    ] %hs"), Label, Fresh ? "?" : "old");
+        }
+    }
+    if(Shown < CoreObservation->count && Row > 0) {
+        ClearRow(Row - 1);
+        ConPrintf(_T("Per-core: %lu total; more in query system --per-core"), CoreObservation->count);
+    }
+    return Row;
+}
+
 static void DrawFrame(void)
 {
+    DisplayTextFlags = 0;
     FunctionBarRow = Settings.show_function_bar ? Height - 1 : -1;
     if(Width < 40 || Height < 10) {
         ClearRow(0); ConPrintf(_T("Resize to at least 40x10; F10 quits."));
@@ -2166,6 +2885,7 @@ static void DrawFrame(void)
     int Row = 0;
     int HeaderLimit = min(Settings.header_count, Height - 5);
     for(int i = 0; i < HeaderLimit; ++i) DrawHeaderRow(Row++, Settings.header_rows[i]);
+    Row = DrawCoreRows(Row);
     TabsRow = -1;
     memset(RenderedTabWidth, 0, sizeof(RenderedTabWidth));
     if(Settings.show_tabs) {
@@ -2183,7 +2903,7 @@ static void DrawFrame(void)
     ProcessHeaderRow = Row++;
     ClearRow(ProcessHeaderRow); DrawProcessListHeader();
     ProcessWindowPosY = Row;
-    StatusRow = (InInputMode || ViMessageActive() || EmacsPrefix) ? Height - (Settings.show_function_bar ? 2 : 1) : -1;
+    StatusRow = Height - (Settings.show_function_bar ? 2 : 1);
     int EndRow = StatusRow >= 0 ? StatusRow : Settings.show_function_bar ? Height - 1 : Height;
     VisibleProcessCount = (DWORD)max(0, EndRow - ProcessWindowPosY);
     ProcessWindowHeight = VisibleProcessCount;
@@ -2207,24 +2927,7 @@ static void DrawFrame(void)
     }
     if(StatusRow >= 0) {
         ClearRow(StatusRow);
-        if(InInputMode) {
-            unsigned long Cursor = ViInputCursor();
-            unsigned long Start = Cursor >= (unsigned long)Width ? Cursor - (unsigned long)Width + 1 : 0;
-#ifdef UNICODE
-            if(Start && CurrentInputStr[Start] >= 0xdc00 && CurrentInputStr[Start] <= 0xdfff) ++Start;
-#endif
-            SetColor((WORD)Settings.colors[WTOP_COLOR_FG]); ConPrintf(_T("%s"), CurrentInputStr + Start);
-            /* Color the already-rendered cursor cell(s); do not rewrite half
-               of a UTF-16 surrogate pair as a separate console character. */
-            COORD Caret = { (SHORT)(ConsoleOriginX + Cursor - Start), (SHORT)(ConsoleOriginY + StatusRow) };
-            DWORD Cells = 1, Painted;
-#ifdef UNICODE
-            if(CurrentInputStr[Cursor] >= 0xd800 && CurrentInputStr[Cursor] <= 0xdbff &&
-               CurrentInputStr[Cursor + 1] >= 0xdc00 && CurrentInputStr[Cursor + 1] <= 0xdfff &&
-               Cursor - Start + 1 < (unsigned long)Width) Cells = 2;
-#endif
-            FillConsoleOutputAttribute(ConsoleHandle, (WORD)Settings.colors[WTOP_COLOR_BG_HIGHLIGHT], Cells, Caret, &Painted);
-        }
+        if(InInputMode) DrawEditorStatus();
         else WriteVi();
     }
     DrawFunctionBar();
@@ -2234,6 +2937,7 @@ static void DrawFrame(void)
 int _tmain(int argc, TCHAR *argv[])
 {
     int Result = 0;
+    if(wtop_provider_worker_dispatch(argc, argv, &Result)) return Result;
     BOOL Initialized = FALSE, HandlerRegistered = FALSE, ScreenCreated = FALSE;
     BOOL InputModeChanged = FALSE;
     wtop_settings_defaults(&Settings);
@@ -2249,13 +2953,18 @@ int _tmain(int argc, TCHAR *argv[])
         fprintf(stderr, "wtop: %s; use --help\n", Error);
         Result = 2; goto Finish;
     }
+    if(Options.action == WTOP_PATHS) { Result = PrintPaths(&Options); goto Finish; }
     if(Options.action != WTOP_RUN && Options.action != WTOP_WRITE_CONFIG) { Result = PrintInformation(&Options); goto Finish; }
     if(Options.mode == WTOP_GUI) {
         fputs("wtop: --gui is reserved; native GUI is not implemented. Use --tui or --snapshot.\n", stderr);
         Result = 2; goto Finish;
     }
+    CpuMachine = Options.cpu_machine;
+    CollectPerCore = Options.per_core;
+    SkipProcessRows = Options.mode == WTOP_QUERY && Options.query_target != WTOP_QUERY_PROCESSES;
+    ReadOnlyMode = Options.readonly;
     if(!ApplyOptions(&Options)) { fputs("wtop: invalid or excessive filter value\n", stderr); Result = 2; goto Finish; }
-    if(!ReadConfigFile(Options.config_path, Options.no_config)) {
+    if(!ReadConfigFile(&Options)) {
         fputs("wtop: cannot read configuration or configuration is invalid\n", stderr);
         Result = 2; goto Finish;
     }
@@ -2265,12 +2974,11 @@ int _tmain(int argc, TCHAR *argv[])
     ProcessSortType = ActiveTab()->tree ? SORT_BY_TREE : (process_sort_type)ActiveTab()->sort_column;
     SortOrder = ActiveTab()->descending ? DESCENDING : ASCENDING;
     if(Options.action == WTOP_WRITE_CONFIG) {
-        TCHAR Destination[32768];
-        if(!ResolveExplicitPath(Options.write_config_path, Destination, _countof(Destination))) {
-            fputs("wtop: cannot resolve configuration destination\n", stderr); Result = 1; goto Finish;
-        }
-        if(!WriteConfigFile(Destination, FALSE, &Error)) {
-            fprintf(stderr, "wtop: %s (Win32 error %lu)\n", Error, GetLastError()); Result = 1; goto Finish;
+        wtop_store_result Saved;
+        if(!ExportConfigFile(Options.write_config_path, &Saved)) {
+            fprintf(stderr, "wtop: settings %s: %s (Win32 %lu)\n",
+                wtop_store_outcome_name(Saved.outcome), Saved.message, Saved.native_error);
+            Result = 1; goto Finish;
         }
         printf("Saved configuration: %s\n", Options.write_config_path);
         Result = fflush(stdout) || ferror(stdout) ? 1 : 0;
@@ -2297,13 +3005,26 @@ int _tmain(int argc, TCHAR *argv[])
     TaggedProcessList = calloc(TaggedProcessListSize, sizeof(*TaggedProcessList));
     ViMessage = calloc(DEFAULT_STR_SIZE, sizeof(*ViMessage));
     if(!ProcessList || !TaggedProcessList || !ViMessage || !ViInit()) { Result = 1; goto Cleanup; }
+    wtop_provider_session_init(&OwnerProvider);
+    wtop_provider_session_init(&CoreProvider);
+    wtop_provider_session_init(&InspectionProvider);
     PollInitialSystemInfo();
     PollSystemInfo();
     if(!PollProcessList(InteractiveMode ? 50 : (DWORD)Settings.interval_ms)) {
         Result = CollectorError ? 1 : 130;
         goto Cleanup;
     }
-    if(!InteractiveMode) { Result = WriteSnapshot(Options.json); goto Cleanup; }
+    AdoptPendingSample();
+    if(!InteractiveMode) {
+        PollSystemInfo();
+        if(Options.mode == WTOP_LOG) Result = RunLog(&Options);
+        else {
+            int Inspection = CollectInspection(&Options);
+            Result = WriteSnapshot(stdout, &Options);
+            if(!Result) Result = Inspection;
+        }
+        goto Cleanup;
+    }
     if(InteractiveMode) {
         OldConsoleHandle = ConsoleHandle;
         ConsoleHandle = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
@@ -2316,15 +3037,17 @@ int _tmain(int argc, TCHAR *argv[])
         ConfigureMouse();
         PollConsoleInfo();
     }
+    InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
     ProcessListThread = CreateThread(NULL, 0, PollProcessListThreadProc, NULL, 0, NULL);
     if(!ProcessListThread) { Result = 1; goto Cleanup; }
     ULONGLONG LastDraw = 0;
     BOOL Redraw = TRUE;
     while(!ShouldStop()) {
-        EnterCriticalSection(&SyncLock);
+        if(AdoptPendingSample()) Redraw = TRUE;
         if(PollConsoleInfo()) Redraw = TRUE;
         ProcessInput(&Redraw);
-        if(ShouldStop()) { LeaveCriticalSection(&SyncLock); break; }
+        InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
+        if(ShouldStop()) break;
         ULONGLONG Now = GetTickCount64();
         if(Redraw || RedrawAtCursor || Now - LastDraw >= Settings.interval_ms) {
             PollSystemInfo();
@@ -2332,7 +3055,6 @@ int _tmain(int argc, TCHAR *argv[])
             LastDraw = Now;
             Redraw = RedrawAtCursor = FALSE;
         }
-        LeaveCriticalSection(&SyncLock);
         WaitForSingleObject(ShutdownEvent, INPUT_LOOP_DELAY);
     }
 Cleanup:
@@ -2356,13 +3078,24 @@ Cleanup:
         CloseHandle(ProcessListThread);
         ProcessListThread = NULL;
     }
+    if(!wtop_provider_session_close(&OwnerProvider, 1000)) {
+        fputs("wtop: owner-provider retirement not confirmed; exiting with owned job cleanup\n", stderr);
+        Result = EXIT_FORCED_SHUTDOWN;
+    }
+    if(!wtop_provider_session_close(&CoreProvider, 1000)) Result = EXIT_FORCED_SHUTDOWN;
+    free(CoreObservation); CoreObservation = NULL;
+    if(!wtop_provider_session_close(&InspectionProvider, 1000)) Result = EXIT_FORCED_SHUTDOWN;
+    free(CommandObservation); CommandObservation = NULL;
+    free(ServicesObservation); ServicesObservation = NULL;
     ViDestroy();
     free(ViMessage); ViMessage = NULL;
+    FreePendingSample(PendingSample); PendingSample = NULL;
     free(ProcessList); ProcessList = NULL;
     free(TaggedProcessList); TaggedProcessList = NULL;
     free(ViewIndices); ViewIndices = NULL;
     free(RenderedRows); RenderedRows = NULL;
     free(PendingKills); PendingKills = NULL;
+    free(LastActionResults); LastActionResults = NULL; LastActionCount = 0;
     if(Initialized) DeleteCriticalSection(&SyncLock);
     if(CleanupDoneEvent) SetEvent(CleanupDoneEvent);
     if(HandlerRegistered) SetConsoleCtrlHandler(CtrlHandler, FALSE);
@@ -2370,6 +3103,7 @@ Cleanup:
        callback may still be returning after unregistration. Exit closes them. */
     if(CollectorError) { fprintf(stderr, "wtop: collector failed (Win32 error %lu)\n", CollectorError); Result = 1; }
 Finish:
+    wtop_store_dispose(&ConfigStore);
     wtop_config_document_free(&ConfigDocument);
     for(int i = 0; i < argc; ++i) free(Utf8Argv[i]);
     free(Utf8Argv);

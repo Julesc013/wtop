@@ -1,7 +1,10 @@
 /* Portable input and layout policy. SPDX-License-Identifier: GPL-3.0-only */
 #include "ui.h"
+#include "text.h"
 #include <stdio.h>
 #include <string.h>
+
+static void action_labels(wtop_ui_binding *binding);
 
 wtop_ui_action wtop_ui_function_action(int index)
 {
@@ -15,13 +18,10 @@ wtop_ui_action wtop_ui_function_action(int index)
 
 const char *wtop_ui_function_label(int index, int compact)
 {
-    static const char *long_labels[10] = {
-        "Help", "Setup", "Search", "Filter", "Tree", "Sort",
-        "Prio+", "Prio-", "Kill", "Quit"
-    };
-    static const char *short_labels[10] = { "?", "S", "/", "\\", "T", "O", "+", "-", "K", "Q" };
-    if(index < 0 || index >= 10) return "";
-    return compact ? short_labels[index] : long_labels[index];
+    wtop_ui_binding binding;
+    binding.action = wtop_ui_function_action(index);
+    action_labels(&binding);
+    return compact ? binding.compact_label : binding.label;
 }
 
 void wtop_ui_bar_span(int width, int index, int *start, int *length)
@@ -181,4 +181,374 @@ int wtop_ui_format_age(double milliseconds, char *output, size_t capacity)
         sprintf(text, "%.1fy", milliseconds / 31557600000.0);
     } else return copy_metric(output, capacity, ">9999y");
     return copy_metric(output, capacity, text);
+}
+
+
+void wtop_ui_context_defaults(wtop_ui_context_options *options,
+                              wtop_ui_context context)
+{
+    if (!options) return;
+    memset(options, 0, sizeof(*options));
+    options->context = context;
+}
+
+const char *wtop_ui_reason_name(wtop_ui_reason reason)
+{
+    static const char *names[] = {
+        "available", "not available in this context", "read-only mode",
+        "no selected process", "process identity is unavailable",
+        "operation is unsupported", "no configuration save destination",
+        "view capacity reached", "at least one view must remain",
+        "already at the ordering boundary"
+    };
+    if (reason < WTOP_UI_AVAILABLE || reason > WTOP_UI_ORDER_BOUNDARY)
+        return "invalid availability state";
+    return names[reason];
+}
+
+static void action_labels(wtop_ui_binding *binding)
+{
+    const char *label = "", *compact = "";
+    switch (binding->action) {
+    case WTOP_UI_UP: label = "Up"; compact = "^"; break;
+    case WTOP_UI_DOWN: label = "Down"; compact = "v"; break;
+    case WTOP_UI_PAGE_UP: label = "Page up"; compact = "Pg-"; break;
+    case WTOP_UI_PAGE_DOWN: label = "Page down"; compact = "Pg+"; break;
+    case WTOP_UI_TOP: label = "Top"; compact = "Top"; break;
+    case WTOP_UI_BOTTOM: label = "Bottom"; compact = "End"; break;
+    case WTOP_UI_HELP: label = "Help"; compact = "?"; break;
+    case WTOP_UI_SETUP: label = "Setup"; compact = "S"; break;
+    case WTOP_UI_SEARCH: label = "Search"; compact = "/"; break;
+    case WTOP_UI_FILTER: label = "Filter"; compact = "\\"; break;
+    case WTOP_UI_TREE: label = "Tree"; compact = "T"; break;
+    case WTOP_UI_SORT: label = "Sort"; compact = "O"; break;
+    case WTOP_UI_PRIORITY_UP: label = "Prio+"; compact = "+"; break;
+    case WTOP_UI_PRIORITY_DOWN: label = "Prio-"; compact = "-"; break;
+    case WTOP_UI_KILL: label = "Kill"; compact = "K"; break;
+    case WTOP_UI_QUIT: label = "Quit"; compact = "Q"; break;
+    case WTOP_UI_TAG: label = "Tag"; compact = "+"; break;
+    case WTOP_UI_UNTAG: label = "Untag"; compact = "U"; break;
+    case WTOP_UI_REVERSE: label = "Reverse"; compact = "I"; break;
+    case WTOP_UI_FOLLOW: label = "Follow"; compact = "F"; break;
+    case WTOP_UI_SEARCH_NEXT: label = "Next match"; compact = "n"; break;
+    case WTOP_UI_SEARCH_PREVIOUS: label = "Previous match"; compact = "N"; break;
+    case WTOP_UI_NEXT_TAB: label = "Next view"; compact = ">"; break;
+    case WTOP_UI_PREVIOUS_TAB: label = "Previous view"; compact = "<"; break;
+    case WTOP_UI_BAR: label = "Controls"; compact = "B"; break;
+    case WTOP_UI_COMMAND: label = "Command"; compact = ":"; break;
+    case WTOP_UI_CANCEL: label = "Back"; compact = "Esc"; break;
+    case WTOP_UI_SORT_CPU: label = "Sort CPU"; compact = "P"; break;
+    case WTOP_UI_SORT_MEMORY: label = "Sort memory"; compact = "M"; break;
+    case WTOP_UI_SORT_PID: label = "Sort PID"; compact = "N"; break;
+    case WTOP_UI_SORT_LEFT: label = "Previous sort"; compact = "<"; break;
+    case WTOP_UI_SORT_RIGHT: label = "Next sort"; compact = ">"; break;
+    case WTOP_UI_EMACS_PREFIX: label = "Prefix"; compact = "C-x"; break;
+    case WTOP_UI_SAVE: label = "Save"; compact = "S"; break;
+    case WTOP_UI_ACCEPT: label = "Apply"; compact = "OK"; break;
+    case WTOP_UI_CONFIRM: label = "Confirm"; compact = "y"; break;
+    case WTOP_UI_CLEAR: label = "Clear"; compact = "X"; break;
+    case WTOP_UI_SETUP_PREVIOUS_PAGE: label = "Prev page"; compact = "<"; break;
+    case WTOP_UI_SETUP_NEXT_PAGE: label = "Next page"; compact = ">"; break;
+    case WTOP_UI_ADJUST_DOWN: label = "Less"; compact = "-"; break;
+    case WTOP_UI_ADJUST_UP: label = "More"; compact = "+"; break;
+    case WTOP_UI_TAB_NEW: label = "New"; compact = "N"; break;
+    case WTOP_UI_TAB_DUPLICATE: label = "Copy"; compact = "C"; break;
+    case WTOP_UI_TAB_RENAME: label = "Rename"; compact = "R"; break;
+    case WTOP_UI_TAB_DELETE: label = "Delete"; compact = "D"; break;
+    case WTOP_UI_TAB_MOVE_LEFT: label = "Move-"; compact = "<"; break;
+    case WTOP_UI_TAB_MOVE_RIGHT: label = "Move+"; compact = ">"; break;
+    default: binding->action = WTOP_UI_NONE; break;
+    }
+    binding->label = label;
+    binding->compact_label = compact;
+}
+
+static int process_only_action(wtop_ui_action action)
+{
+    switch (action) {
+    case WTOP_UI_SEARCH: case WTOP_UI_FILTER: case WTOP_UI_TREE:
+    case WTOP_UI_SORT: case WTOP_UI_PRIORITY_UP: case WTOP_UI_PRIORITY_DOWN:
+    case WTOP_UI_KILL: case WTOP_UI_TAG: case WTOP_UI_UNTAG:
+    case WTOP_UI_REVERSE: case WTOP_UI_FOLLOW: case WTOP_UI_SEARCH_NEXT:
+    case WTOP_UI_SEARCH_PREVIOUS: case WTOP_UI_NEXT_TAB:
+    case WTOP_UI_PREVIOUS_TAB: case WTOP_UI_COMMAND: case WTOP_UI_SORT_CPU:
+    case WTOP_UI_SORT_MEMORY: case WTOP_UI_SORT_PID: case WTOP_UI_SORT_LEFT:
+    case WTOP_UI_SORT_RIGHT:
+        return 1;
+    default: return 0;
+    }
+}
+
+void wtop_ui_resolve_action(const wtop_ui_context_options *options,
+                            wtop_ui_action action, wtop_ui_binding *binding)
+{
+    wtop_ui_reason reason = WTOP_UI_AVAILABLE;
+    wtop_ui_context context;
+    int target_action;
+    if (!binding) return;
+    memset(binding, 0, sizeof(*binding));
+    binding->action = action;
+    action_labels(binding);
+    binding->reason = WTOP_UI_WRONG_CONTEXT;
+    if (!options || binding->action == WTOP_UI_NONE) return;
+    context = options->context;
+    if (context < WTOP_CONTEXT_PROCESS || context > WTOP_CONTEXT_RESULTS) return;
+    if (context == WTOP_CONTEXT_CONFIRM && action != WTOP_UI_CONFIRM &&
+        action != WTOP_UI_HELP && action != WTOP_UI_CANCEL && action != WTOP_UI_QUIT)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if (context == WTOP_CONTEXT_EDITOR && action != WTOP_UI_ACCEPT &&
+        action != WTOP_UI_CLEAR && action != WTOP_UI_HELP &&
+        action != WTOP_UI_CANCEL && action != WTOP_UI_QUIT &&
+        action != WTOP_UI_SAVE && action != WTOP_UI_EMACS_PREFIX)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if (process_only_action(action) && context != WTOP_CONTEXT_PROCESS)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if (action == WTOP_UI_CONFIRM && context != WTOP_CONTEXT_CONFIRM)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if (action == WTOP_UI_CLEAR && context != WTOP_CONTEXT_EDITOR)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if (action == WTOP_UI_ACCEPT && context != WTOP_CONTEXT_EDITOR &&
+             context != WTOP_CONTEXT_SORT && context != WTOP_CONTEXT_SETUP)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if ((action == WTOP_UI_SETUP_PREVIOUS_PAGE ||
+              action == WTOP_UI_SETUP_NEXT_PAGE || action == WTOP_UI_ADJUST_UP ||
+              action == WTOP_UI_ADJUST_DOWN) && context != WTOP_CONTEXT_SETUP)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    else if (action >= WTOP_UI_TAB_NEW && action <= WTOP_UI_TAB_MOVE_RIGHT) {
+        if (context != WTOP_CONTEXT_SETUP || !options->setup_tabs)
+            reason = WTOP_UI_WRONG_CONTEXT;
+        else if ((action == WTOP_UI_TAB_NEW || action == WTOP_UI_TAB_DUPLICATE) &&
+                 !options->can_add_tab) reason = WTOP_UI_CAPACITY;
+        else if (action == WTOP_UI_TAB_DELETE && !options->can_delete_tab)
+            reason = WTOP_UI_LAST_VIEW;
+        else if ((action == WTOP_UI_TAB_MOVE_LEFT && !options->can_move_left) ||
+                 (action == WTOP_UI_TAB_MOVE_RIGHT && !options->can_move_right))
+            reason = WTOP_UI_ORDER_BOUNDARY;
+    }
+    target_action = action == WTOP_UI_KILL || action == WTOP_UI_CONFIRM ||
+                    action == WTOP_UI_PRIORITY_UP || action == WTOP_UI_PRIORITY_DOWN;
+    if (reason == WTOP_UI_AVAILABLE && target_action) {
+        if (options->readonly) reason = WTOP_UI_READONLY;
+        else if (!options->has_selection) reason = WTOP_UI_NO_SELECTION;
+        else if (!options->identity_known) reason = WTOP_UI_NO_IDENTITY;
+        else if ((action == WTOP_UI_KILL || action == WTOP_UI_CONFIRM) &&
+                 !options->kill_supported) reason = WTOP_UI_UNSUPPORTED;
+        else if ((action == WTOP_UI_PRIORITY_UP || action == WTOP_UI_PRIORITY_DOWN) &&
+                 !options->priority_supported) reason = WTOP_UI_UNSUPPORTED;
+    }
+    if (reason == WTOP_UI_AVAILABLE &&
+        (action == WTOP_UI_TAG || action == WTOP_UI_FOLLOW)) {
+        if (!options->has_selection) reason = WTOP_UI_NO_SELECTION;
+        else if (!options->identity_known) reason = WTOP_UI_NO_IDENTITY;
+    }
+    if (reason == WTOP_UI_AVAILABLE && action == WTOP_UI_SAVE) {
+        if(options->readonly) reason = WTOP_UI_READONLY;
+        else if(!options->save_available) reason = WTOP_UI_NO_SAVE_DESTINATION;
+    }
+    binding->reason = reason;
+    binding->enabled = reason == WTOP_UI_AVAILABLE;
+}
+
+void wtop_ui_resolve_function(const wtop_ui_context_options *options,
+                              int index, wtop_ui_binding *binding)
+{
+    wtop_ui_action action = WTOP_UI_NONE;
+    if (!binding) return;
+    if (options && index >= 0 && index < 10) {
+        if (index == 0) action = WTOP_UI_HELP;
+        else if (index == 9) action = WTOP_UI_QUIT;
+        else switch (options->context) {
+        case WTOP_CONTEXT_PROCESS:
+            action = wtop_ui_function_action(index); break;
+        case WTOP_CONTEXT_HELP: case WTOP_CONTEXT_RESULTS:
+            if (index == 1) action = WTOP_UI_SETUP;
+            else if (index == 2) action = WTOP_UI_PAGE_UP;
+            else if (index == 3) action = WTOP_UI_PAGE_DOWN;
+            else if (index == 8) action = WTOP_UI_CANCEL;
+            break;
+        case WTOP_CONTEXT_SETUP:
+            if (index == 1) action = WTOP_UI_SETUP_NEXT_PAGE;
+            else if (index >= 2 && index <= 5) {
+                static const wtop_ui_action edits[] = {
+                    WTOP_UI_TAB_NEW, WTOP_UI_TAB_DUPLICATE,
+                    WTOP_UI_TAB_RENAME, WTOP_UI_TAB_DELETE
+                };
+                action = edits[index - 2];
+            } else if (index == 6) action = options->setup_tabs ?
+                WTOP_UI_TAB_MOVE_LEFT : WTOP_UI_ADJUST_DOWN;
+            else if (index == 7) action = options->setup_tabs ?
+                WTOP_UI_TAB_MOVE_RIGHT : WTOP_UI_ADJUST_UP;
+            else if (index == 8) action = WTOP_UI_SAVE;
+            break;
+        case WTOP_CONTEXT_EDITOR:
+            if (index == 1) action = WTOP_UI_CANCEL;
+            else if (index == 3) action = WTOP_UI_CLEAR;
+            else if (index == 8) action = WTOP_UI_ACCEPT;
+            break;
+        case WTOP_CONTEXT_SORT:
+            if (index == 1) action = WTOP_UI_CANCEL;
+            else if (index == 6) action = WTOP_UI_UP;
+            else if (index == 7) action = WTOP_UI_DOWN;
+            else if (index == 8) action = WTOP_UI_ACCEPT;
+            break;
+        case WTOP_CONTEXT_CONFIRM:
+            if (index == 1) action = WTOP_UI_CANCEL;
+            /* F9 deliberately has no action: repeating the initiating F9 must
+               never confirm a captured destructive request. Only explicit y
+               (or a separately labelled affirmative button) can confirm. */
+            break;
+        default: break;
+        }
+    }
+    wtop_ui_resolve_action(options, action, binding);
+}
+
+static int navigation_action(wtop_ui_action action)
+{
+    return action == WTOP_UI_UP || action == WTOP_UI_DOWN ||
+        action == WTOP_UI_PAGE_UP || action == WTOP_UI_PAGE_DOWN ||
+        action == WTOP_UI_TOP || action == WTOP_UI_BOTTOM;
+}
+
+wtop_ui_action wtop_ui_context_key_action(const wtop_ui_context_options *options,
+                                          int keymap, int key,
+                                          unsigned modifiers)
+{
+    wtop_ui_action action = WTOP_UI_NONE;
+    wtop_ui_binding binding;
+    int command_modifier = (modifiers & (WTOP_MOD_CTRL | WTOP_MOD_ALT)) != 0;
+    if (!options) return WTOP_UI_NONE;
+    if (key >= WTOP_KEY_F1 && key <= WTOP_KEY_F10) {
+        wtop_ui_resolve_function(options, key - WTOP_KEY_F1, &binding);
+        return binding.enabled ? binding.action : WTOP_UI_NONE;
+    }
+    if (key == 27 || (keymap == WTOP_KEYMAP_EMACS &&
+        (modifiers & WTOP_MOD_CTRL) && (key == 'g' || key == 'G' || key == 7)))
+        action = WTOP_UI_CANCEL;
+    else if ((modifiers & WTOP_MOD_CTRL) && (key == 'c' || key == 'C' || key == 3))
+        action = WTOP_UI_QUIT;
+    else if (options->context == WTOP_CONTEXT_CONFIRM) {
+        if (!command_modifier && (key == 'y' || key == 'Y')) action = WTOP_UI_CONFIRM;
+        else if (!command_modifier && (key == 'n' || key == 'N')) action = WTOP_UI_CANCEL;
+    } else if (options->context == WTOP_CONTEXT_EDITOR) {
+        if (!command_modifier && (key == '\r' || key == '\n')) action = WTOP_UI_ACCEPT;
+        /* Printable keys, including q, remain editor text. */
+    } else if (options->context == WTOP_CONTEXT_RESULTS && !command_modifier &&
+               (key == '\r' || key == '\n')) action = WTOP_UI_CANCEL;
+    else if (!command_modifier && key == 'q') action = WTOP_UI_QUIT;
+    else if (options->context == WTOP_CONTEXT_PROCESS)
+        action = wtop_ui_key_action(keymap, key, modifiers);
+    else if (options->context == WTOP_CONTEXT_SETUP) {
+        if (!command_modifier && key == WTOP_KEY_LEFT) action = WTOP_UI_SETUP_PREVIOUS_PAGE;
+        else if (!command_modifier && key == WTOP_KEY_RIGHT) action = WTOP_UI_SETUP_NEXT_PAGE;
+        else if (!command_modifier && (key == 's' || key == 'S')) action = WTOP_UI_SAVE;
+        else if (!command_modifier && (key == '+' || key == '=')) action = options->setup_tabs ? WTOP_UI_TAB_MOVE_RIGHT : WTOP_UI_ADJUST_UP;
+        else if (!command_modifier && key == '-') action = options->setup_tabs ? WTOP_UI_TAB_MOVE_LEFT : WTOP_UI_ADJUST_DOWN;
+        else if (!command_modifier && (key == ' ' || key == '\r')) action = WTOP_UI_ACCEPT;
+        else {
+            action = wtop_ui_key_action(keymap, key, modifiers);
+            if (!navigation_action(action)) action = WTOP_UI_NONE;
+        }
+    } else {
+        if (options->context == WTOP_CONTEXT_SORT && !command_modifier &&
+            (key == '\r' || key == ' ')) action = WTOP_UI_ACCEPT;
+        else {
+            action = wtop_ui_key_action(keymap, key, modifiers);
+            if (!navigation_action(action) && action != WTOP_UI_HELP)
+                action = WTOP_UI_NONE;
+        }
+    }
+    wtop_ui_resolve_action(options, action, &binding);
+    return binding.enabled ? binding.action : WTOP_UI_NONE;
+}
+
+static size_t bounded_status_length(const char *text, unsigned *flags)
+{
+    size_t length = 0;
+    if (!text) return 0;
+    while (length < 256 && text[length]) ++length;
+    if (length == 256) *flags |= WTOP_TEXT_CLIPPED;
+    return length;
+}
+
+/* Whole components are admitted in priority order. Skipping one does not stop
+   later short components (notably the dirty marker) from fitting. Numeric units
+   are never clipped to make a component fit. */
+static void status_component(char *output, size_t *used, size_t limit,
+                              const char *text, unsigned *flags)
+{
+    char clean[257];
+    size_t length, separator = *used ? 1 : 0;
+    wtop_text_result rendered;
+    length = bounded_status_length(text, flags);
+    if (!length) return;
+    rendered = wtop_text_ascii(text, length, 256, clean, sizeof(clean));
+    *flags |= rendered.flags;
+    if (separator > limit - *used || rendered.cells > limit - *used - separator) {
+        *flags |= WTOP_TEXT_CLIPPED;
+        return;
+    }
+    if (separator) output[(*used)++] = ' ';
+    memcpy(output + *used, clean, rendered.output_bytes);
+    *used += rendered.output_bytes;
+    output[*used] = 0;
+}
+
+static void status_named_component(char *output, size_t *used, size_t limit,
+                                    const char *name, const char *value,
+                                    const char *suffix, unsigned *flags)
+{
+    char clean[257], component[288];
+    wtop_text_result rendered;
+    size_t length = bounded_status_length(value, flags);
+    if (!length) return;
+    rendered = wtop_text_ascii(value, length, 256, clean, sizeof(clean));
+    *flags |= rendered.flags;
+    /* name/suffix are private short literals; value is bounded above. */
+    sprintf(component, "%s%s%s", name, clean, suffix);
+    status_component(output, used, limit, component, flags);
+}
+
+size_t wtop_ui_status_format(const wtop_ui_status *status, int width,
+                              char *output, size_t capacity, unsigned *flags)
+{
+    size_t limit, used = 0, length;
+    unsigned result_flags = 0;
+    char age[32], component[80];
+    wtop_text_result rendered;
+    if (flags) *flags = 0;
+    if (!output || !capacity) return 0;
+    output[0] = 0;
+    if (!status || width <= 0) return 0;
+    limit = (size_t)width;
+    if (limit >= capacity) limit = capacity - 1;
+    length = bounded_status_length(status->prompt, &result_flags);
+    if (length) {
+        rendered = wtop_text_ascii(status->prompt, length, limit, output, capacity);
+        result_flags |= rendered.flags;
+        used = rendered.output_bytes;
+        if ((result_flags & WTOP_TEXT_CLIPPED) && used) output[used - 1] = '~';
+    } else {
+        if (!status->sample_available) status_component(output, &used, limit, "WARMING", &result_flags);
+        else if (status->stale) status_component(output, &used, limit, "STALE", &result_flags);
+        if (status->partial) status_component(output, &used, limit, "PARTIAL", &result_flags);
+        /* Even an extremely narrow frame retains a visible availability signal. */
+        if (!used && limit && (!status->sample_available || status->stale || status->partial)) {
+            output[used++] = status->sample_available ? '!' : '?'; output[used] = 0;
+        }
+        status_component(output, &used, limit, status->provider_notice, &result_flags);
+        if (status->sample_available && wtop_ui_format_age((double)status->age_ms, age, sizeof(age))) {
+            sprintf(component, "age %s", age);
+            status_component(output, &used, limit, component, &result_flags);
+        }
+        status_named_component(output, &used, limit, "view ", status->view, "", &result_flags);
+        status_named_component(output, &used, limit, "filter ", status->filter, "", &result_flags);
+        status_named_component(output, &used, limit, "sort ", status->sort,
+                                 status->descending ? " v" : " ^", &result_flags);
+        if (status->dirty) status_component(output, &used, limit, "*unsaved*", &result_flags);
+        sprintf(component, "rows %lu/%lu", status->selected_rows, status->observed_rows);
+        status_component(output, &used, limit, component, &result_flags);
+    }
+    if (flags) *flags = result_flags;
+    return used;
 }

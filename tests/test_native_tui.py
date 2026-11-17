@@ -12,6 +12,7 @@ from ctypes import wintypes as W
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -235,13 +236,13 @@ class Console:
             f"console accepted {count.value}/{len(records)} records in input mode {self.mode():#x}")
 
     @staticmethod
-    def key_records(vk, char="\0", modifiers=0):
+    def key_records(vk, char="\0", modifiers=0, repeat=1):
         events = []
         for down in (True, False):
             event = InputRecord()
             event.kind = 1
             event.event.key.down = down
-            event.event.key.repeat = 1
+            event.event.key.repeat = repeat
             event.event.key.vk = vk
             event.event.key.char.UnicodeChar = char
             event.event.key.modifiers = modifiers
@@ -253,9 +254,28 @@ class Console:
 
     def type(self, text):
         events = []
-        for char in text:
-            events.extend(self.key_records(ord(char.upper()) if char.isascii() and char.isalpha() else ord(char), char))
+        # INPUT_RECORD contains one UTF-16 code unit. A supplementary scalar is
+        # two packets; isolated surrogates are intentional validation fixtures.
+        encoded = text.encode("utf-16-le", "surrogatepass")
+        for index in range(0, len(encoded), 2):
+            unit = int.from_bytes(encoded[index:index + 2], "little")
+            char = chr(unit)
+            virtual = ord(char.upper()) if char.isascii() and char.isalpha() else (unit if unit < 128 else 0xE7)
+            events.extend(self.key_records(virtual, char))
         self.records(events)
+
+    def resize(self, width, height):
+        handle = self.open("CONOUT$")
+        try:
+            small = Rect(0, 0, 1, 1)
+            self.check(self.k.SetConsoleWindowInfo(handle, True, C.byref(small)))
+            self.check(self.k.SetConsoleScreenBufferSize(handle, Coord(width, height)))
+            target = Rect(0, 0, width - 1, height - 1)
+            self.check(self.k.SetConsoleWindowInfo(handle, True, C.byref(target)))
+        finally:
+            self.k.CloseHandle(handle)
+        return self.wait(lambda f: f["width"] == width and f["height"] == height,
+                         f"console resized to {width}x{height}")
 
     def click(self, x, y):
         frame = self.frame()
@@ -346,6 +366,237 @@ def visible_pids(frame, pids, selected_only=False):
     return found
 
 
+def function_slot(frame, number):
+    start = frame["width"] * (number - 1) // 10
+    end = frame["width"] * number // 10
+    return start, end, frame["rows"][-1][start:end], frame["attributes"][-1][start:end]
+
+
+def assert_function(frame, number, label, enabled=True):
+    _start, _end, shown, colors = function_slot(frame, number)
+    prefix = "F" + str(number)
+    assert shown.startswith(prefix), (number, shown)
+    assert shown[len(prefix):].strip().startswith(label), (number, shown, label)
+    if enabled:
+        assert any(color != 8 for color in colors), (number, shown, colors)
+    else:
+        assert all(color == 8 for color in colors), (number, shown, colors)
+
+
+def click_function(console, number, label, enabled=True):
+    frame = console.frame()
+    assert_function(frame, number, label, enabled)
+    start, end, _shown, _colors = function_slot(frame, number)
+    console.click(start + (end - start) // 2, frame["height"] - 1)
+
+
+def setup_rows(frame):
+    values = []
+    for row in frame["rows"][3:-2]:
+        match = re.match(r"\s*\[[x ]\] (.*?)(?: \(active\))?\s*$", row)
+        if match:
+            values.append(match.group(1).rstrip())
+    return values
+
+
+def config_values(path):
+    values = {}
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        match = re.match(r"([^\s#]+)\s+(.+)$", line)
+        if match:
+            values[match.group(1)] = match.group(2)
+    return values
+
+
+def config_tabs(path):
+    values = config_values(path)
+    assert values["ConfigVersion"] == "2"
+    return [{"id": int(values[f"Tab{i}.Id"]), "name": json.loads(values[f"Tab{i}.Name"]),
+             "visible": int(values[f"Tab{i}.Visible"]), "index": i}
+            for i in range(int(values["TabCount"]))]
+
+
+def bounded_ascii_frame(frame):
+    assert len(frame["rows"]) == len(frame["attributes"]) == frame["height"]
+    for row, attributes in zip(frame["rows"], frame["attributes"]):
+        assert len(row) == len(attributes) == frame["width"]
+        assert all(32 <= ord(char) <= 126 for char in row), repr(row)
+
+
+def new_config(exe, path):
+    result = subprocess.run([exe, "--no-config", "--write-config", str(path)],
+                            capture_output=True, timeout=5)
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+
+
+def setup_contract(console, exe, directory, pids, observations):
+    config = directory / "setup-and-unicode.conf"
+    new_config(exe, config)
+    initial = config_tabs(config)
+    before_ids = {tab["name"]: tab["id"] for tab in initial}
+    next_id = int(config_values(config)["NextTabId"])
+    with config.open("a", encoding="utf-8") as stream:
+        stream.write("\n# Setup fixture extension must follow I/O's stable identity\nTab1.FutureScoped io-owned\n")
+    console.start(exe, config, pids, "--status-bar")
+    console.key(0x71)
+    frame = console.wait(lambda f: overlay_contains(f, "Setup") and f["rows"][1].startswith("General"), "Setup General page")
+    assert_function(frame, 2, "Next")
+    console.key(0x71)  # Contextual F2 advances a page; it does not reopen General.
+    console.wait(lambda f: f["rows"][1].startswith("Meters"), "keyboard next Setup page")
+    click_function(console, 2, "Next")
+    console.wait(lambda f: f["rows"][1].startswith("Columns"), "mouse same next-page binding")
+    console.key(0x71)
+    frame = console.wait(lambda f: f["rows"][1].startswith("Tabs"), "Setup Tabs page")
+    for number, label in ((3, "New"), (4, "Copy"), (5, "Rename"), (6, "Delete"), (8, "Move+"), (9, "Save")):
+        assert_function(frame, number, label)
+    assert_function(frame, 7, "Move-", False)  # Already at the first view.
+    console.key(0x72)
+    expected_new = f"View {next_id}"
+    console.wait(lambda f: setup_rows(f) == ["Main", expected_new, "I/O"], "F3 inserts a view")
+    click_function(console, 4, "Copy")
+    expected_copy = f"Copy {next_id + 1}"
+    console.wait(lambda f: setup_rows(f) == ["Main", expected_new, expected_copy, "I/O"], "mouse F4 duplicates selected view")
+    console.key(0x74)
+    console.wait(lambda f: editor_contains(f, "=" + expected_copy), "F5 opens view-name editor")
+    click_function(console, 4, "Clear")
+    console.wait(lambda f: editor_contains(f, "=") and not editor_contains(f, "=" + expected_copy), "editor F4 clears text")
+    name = "Audit \u4e2d\u6587 e\u0301 \U0001f600"
+    shown_name = "Audit ?? e? ?"
+    console.type(name)
+    frame = console.wait(lambda f: editor_contains(f, "=" + shown_name), "CJK, combining and surrogate-pair input uses explicit ASCII cells")
+    bounded_ascii_frame(frame)
+    click_function(console, 9, "Apply")
+    frame = console.wait(lambda f: shown_name in setup_rows(f) and "Apply" not in function_slot(f, 9)[2], "renamed view remains in Setup")
+    assert text_contains(frame, "ASCII substitution"), "lossy display was not disclosed"
+    console.key(0x76)
+    console.wait(lambda f: setup_rows(f) == ["Main", shown_name, expected_new, "I/O"], "F7 reorders selected stable view")
+    click_function(console, 8, "Move+")
+    console.wait(lambda f: setup_rows(f) == ["Main", expected_new, shown_name, "I/O"], "mouse F8 reverses reorder")
+    console.key(0x78)
+    console.wait(lambda f: text_contains(f, "Saved configuration:"), "Setup F9 explicit save")
+    saved = config_tabs(config)
+    assert [tab["id"] for tab in saved] == [before_ids["Main"], next_id, next_id + 1, before_ids["I/O"]]
+    assert saved[2]["name"] == name, "ASCII projection overwrote raw Unicode configuration"
+    assert config_values(config)["Tab3.FutureScoped"] == "io-owned", "unknown extension did not follow its view identity"
+
+    # Invalid native input must stay editable and must not change the view name.
+    console.key(0x74)
+    console.wait(lambda f: editor_contains(f, "=" + shown_name), "rename editor after persisted Unicode")
+    console.key(ord("U"), "\x15", 8)
+    console.type("Bad\ud800")
+    frame = console.wait(lambda f: editor_contains(f, "=Bad?"), "isolated surrogate has a safe fallback")
+    bounded_ascii_frame(frame)
+    console.key(0x78)
+    console.wait(lambda f: editor_contains(f, "=Bad?") and shown_name in setup_rows(f)
+                 and text_contains(f, "View not renamed"), "invalid name remains uncommitted, editable and visibly explained")
+    console.key(27, "\x1b")
+    console.wait(lambda f: shown_name in setup_rows(f) and not editor_contains(f, "="), "invalid rename cancellation")
+    console.key(0x74)
+    console.wait(lambda f: editor_contains(f, "=" + shown_name), "control-display editor")
+    console.key(ord("U"), "\x15", 8)
+    console.type("Control\u0085text")
+    frame = console.wait(lambda f: editor_contains(f, "=Control?text"), "C1 control is not emitted into the console")
+    bounded_ascii_frame(frame)
+    console.key(27, "\x1b")
+    console.wait(lambda f: shown_name in setup_rows(f) and not editor_contains(f, "="), "control fixture cancelled")
+
+    original_size = (console.width, console.height)
+    for width, height in ((60, 12), (20, 6), original_size):
+        console.resize(width, height)
+        title = "Resize to at least" if width < 40 or height < 10 else "Setup"
+        frame = console.wait(lambda f: f["width"] == width and f["height"] == height
+                             and f["rows"][0].startswith(title), "bounded redraw or explicit minimum-size fallback")
+        bounded_ascii_frame(frame)
+    console.key(0x75)
+    frame = console.wait(lambda f: overlay_contains(f, "Delete view"), "F6 captures view deletion")
+    assert str(next_id + 1) in frame["rows"][1]
+    assert not function_slot(frame, 9)[2].strip(), "delete confirmation accidentally exposes a repeated F9 action"
+    console.key(27, "\x1b")
+    console.wait(lambda f: f["rows"][1].startswith("Tabs") and shown_name in setup_rows(f), "delete cancellation preserves the view")
+    click_function(console, 6, "Delete")
+    console.wait(lambda f: overlay_contains(f, "Delete view"), "mouse same delete binding")
+    console.type("y")
+    console.wait(lambda f: setup_rows(f) == ["Main", expected_new, "I/O"], "explicit y deletes captured view")
+    click_function(console, 9, "Save")
+    console.wait(lambda f: text_contains(f, "Saved configuration:"), "mouse same save binding")
+    final = config_tabs(config)
+    assert [tab["id"] for tab in final] == [before_ids["Main"], next_id, before_ids["I/O"]]
+    assert int(config_values(config)["NextTabId"]) == next_id + 2
+    assert config_values(config)["Tab2.FutureScoped"] == "io-owned"
+    console.stop()
+    observations["checks"].append("contextual Setup CRUD/reorder/save with stable IDs, keyboard/mouse labels, Unicode raw preservation and bounded ASCII display")
+
+
+def readonly_contract(console, exe, directory, pids, fixtures, observations):
+    config = directory / "readonly.conf"
+    new_config(exe, config)
+    original = config.read_bytes()
+    sentinel = directory / "must-not-launch.txt"
+    console.start(exe, config, pids, "--readonly", "--keymap", "vi", "--status-bar")
+    frame = console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids), "read-only process view")
+    for number, label in ((7, "Prio+"), (8, "Prio-"), (9, "Kill")):
+        assert_function(frame, number, label, False)
+    console.key(0x78)
+    console.wait(lambda f: is_main(f) and text_contains(f, "read-only"), "read-only keyboard action refusal")
+    click_function(console, 9, "Kill", False)
+    console.wait(lambda f: is_main(f) and text_contains(f, "Kill: read-only"), "same read-only mouse refusal")
+    launch = subprocess.list2cmdline([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('launched')", str(sentinel)])
+    console.type(":exec " + launch)
+    console.key(13, "\r")
+    console.wait(lambda f: text_contains(f, "forbids launching commands"), "read-only :exec rejected before launch")
+    assert not sentinel.exists(), "read-only :exec launched its owned sentinel command"
+    console.type(":kill " + " ".join(map(str, pids)))
+    console.key(13, "\r")
+    frame = console.wait(lambda f: overlay_contains(f, "Actions") and all(text_contains(f, f"PID {pid} denied") for pid in pids), "each read-only :kill result remains visible")
+    assert all(child.poll() is None for child in fixtures)
+    console.key(13, "\r")
+    console.wait(lambda f: is_main(f) and has_bar(f), "advertised Enter closes retained action results")
+    console.type(":save")
+    console.key(13, "\r")
+    console.wait(lambda f: text_contains(f, "writes disabled by --readonly"), "read-only :save refusal")
+    assert config.read_bytes() == original
+    console.key(0x71)
+    frame = console.wait(lambda f: overlay_contains(f, "Setup"), "read-only Setup")
+    assert_function(frame, 9, "Save", False)
+    click_function(console, 9, "Save", False)
+    console.wait(lambda f: overlay_contains(f, "Setup") and text_contains(f, "Save: read-only"), "read-only save button is disabled with its reason")
+    console.stop()
+    assert config.read_bytes() == original
+    observations["checks"].append("readonly :exec/:kill/:save and function buttons retain per-target denial and leave all owned fixtures/settings unchanged")
+
+
+def churn_contract(console, exe, directory, pids, fixtures, observations):
+    config = directory / "churn.conf"
+    new_config(exe, config)
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(240)"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    fixtures.append(victim)
+    targets = pids + [victim.pid]
+    console.start(exe, config, targets, "--status-bar", "-s", "ID")
+    frame = console.wait(lambda f: visible_pids(f, targets) == set(targets), "all churn fixtures observed")
+    row = next(y for y, text in enumerate(frame["rows"]) if text.lstrip().split(None, 1)[0:1] == [str(victim.pid)])
+    console.click(0, row)
+    console.wait(lambda f: visible_pids(f, targets, True) == {victim.pid}, "lifetime-bound victim selection")
+    console.key(0x78)
+    console.wait(lambda f: overlay_contains(f, "Terminate") and text_contains(f, f"PID {victim.pid}  creation"), "captured victim identity")
+    victim.terminate()
+    victim.wait(timeout=5)
+    replacement = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(240)"],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    fixtures.append(replacement)
+    console.wait(lambda f: overlay_contains(f, "Terminate") and text_contains(f, f"rows {len(pids)}/"), "published process churn while confirmation remains open")
+    console.type("y")
+    frame = console.wait(lambda f: overlay_contains(f, "Actions") and text_contains(f, f"PID {victim.pid} "), "retained result belongs to the captured exited identity")
+    results = re.findall(r"\bPID ([0-9]+) ([a-z_]+)", "\n".join(frame["rows"]))
+    assert len(results) == 1 and results[0][0] == str(victim.pid), results
+    assert results[0][1] in ("already_exited", "identity_changed", "failed", "denied"), results
+    assert all(child.poll() is None for child in fixtures if child is not victim), "churn redirected termination to another live process"
+    console.key(13, "\r")
+    console.wait(lambda f: is_main(f) and has_bar(f), "result close after captured target exit")
+    console.stop()
+    observations["checks"].append("process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case")
+
+
 def worker(exe, output):
     console = None
     fixtures = []
@@ -359,7 +610,7 @@ def worker(exe, output):
             assert created.returncode == 0, created.stderr.decode("utf-8", "replace")
             with config.open("a", encoding="utf-8") as stream:
                 stream.write("\n# retained native fixture comment\nFutureOption keep-me\n")
-            fixtures = [subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"],
+            fixtures = [subprocess.Popen([sys.executable, "-c", "import time; time.sleep(240)"],
                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL) for _ in range(3)]
             pids = [p.pid for p in fixtures]
@@ -381,13 +632,23 @@ def worker(exe, output):
             console.wait(lambda f: has_bar(f) and is_main(f), "help close")
             observations["checks"].append("mouse function action and keyboard overlays")
 
-            console.key(0x78)  # F9
-            console.wait(lambda f: overlay_contains(f, "Terminate"), "termination confirmation")
+            console.wait(lambda f: visible_pids(f, pids) == set(pids), "identity-bearing targets before confirmation")
+            console.records(console.key_records(0x78, repeat=32))  # Held initiating F9.
+            frame = console.wait(lambda f: overlay_contains(f, "Terminate"), "termination confirmation")
             assert all(p.poll() is None for p in fixtures), "opening confirmation mutated a process"
+            assert not function_slot(frame, 9)[2].strip(), "F9 was actionable inside confirmation"
+            repeated = []
+            for _ in range(10):
+                repeated.extend(console.key_records(0x78, repeat=32))
+            repeated.extend(console.key_records(13, "\r"))
+            repeated.extend(console.key_records(0x70))  # Positive acknowledgement after every queued repeat.
+            console.records(repeated)
+            console.wait(lambda f: overlay_contains(f, "Help"), "held F9 and Enter cannot confirm; later help is processed")
+            assert all(p.poll() is None for p in fixtures), "repeated F9 or Enter confirmed termination"
             console.key(27, "\x1b")
             console.wait(lambda f: has_bar(f) and is_main(f), "termination cancellation")
             assert all(p.poll() is None for p in fixtures)
-            observations["checks"].append("F9 confirmation and cancellation are non-mutating")
+            observations["checks"].append("held/repeated F9 and Enter never confirm; contextual help/cancel remain non-mutating")
 
             console.type(":unfinished-fixture-command")
             frame = console.wait(lambda f: editor_contains(f, ":unfinished-fixture-command"),
@@ -421,7 +682,12 @@ def worker(exe, output):
             observations["checks"].append("mouse actions cancel commands and preserve filter ownership across tabs")
 
             console.type("B")
-            console.wait(lambda f: is_main(f) and not has_bar(f), "hidden function bar")
+            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][-1]
+                         and "view " in f["rows"][-1], "hidden function bar retains a live status row")
+            console.type("B")
+            console.wait(lambda f: is_main(f) and has_bar(f), "keyboard recovery of hidden function bar")
+            console.type("B")
+            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][-1], "live status retained after bar is hidden again")
             console.key(0x71)  # F2
             console.wait(lambda f: overlay_contains(f, "Setup"), "setup before explicit save")
             before = config.read_bytes()
@@ -496,6 +762,9 @@ def worker(exe, output):
             console.stop(send_key=False)
             assert all(p.poll() is None for p in fixtures), "input after quit mutated an owned process"
             observations["checks"].append("queued actions after quit are discarded before mutation")
+            setup_contract(console, exe, Path(temp), pids, observations)
+            readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
+            churn_contract(console, exe, Path(temp), pids, fixtures, observations)
         observations["result"] = "passed"
     except BaseException:
         observations["result"] = "failed"
@@ -557,12 +826,12 @@ def main():
         )
         job.assign(process)
         try:
-            _, errors = process.communicate(b"start\n", timeout=80)
+            _, errors = process.communicate(b"start\n", timeout=160)
         except subprocess.TimeoutExpired:
             job.close()  # Kill the worker AND its monitor/fixture descendants.
             _, errors = process.communicate(timeout=5)
             print(errors.decode("utf-8", "replace"), file=sys.stderr)
-            raise AssertionError("native TUI worker exceeded 80 seconds; owned process tree terminated")
+            raise AssertionError("native TUI worker exceeded 160 seconds; owned process tree terminated")
     finally:
         try:
             job.close()

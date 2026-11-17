@@ -76,7 +76,7 @@ class NativeCliTests(unittest.TestCase):
 
     def test_snapshot_observes_real_parent_and_metric_states(self):
         data = self.snapshot("-p", str(os.getpid()))
-        self.assertEqual(data["schema"], 1)
+        self.assertEqual(data["schema"], 2)
         self.assertEqual(data["profile"], self.expected_profile)
         self.assertGreaterEqual(data["sample_elapsed_ms"], 1)
         self.assertEqual([p["pid"] for p in data["processes"]], [os.getpid()])
@@ -84,10 +84,10 @@ class NativeCliTests(unittest.TestCase):
         self.assertTrue(row["name"])
         self.assertGreater(row["threads"], 0)
         self.assertTrue(row["creation_filetime"].isdigit())
-        for name in ("cpu_share_percent", "working_set_bytes", "io_read_write_bytes_per_second", "age_ms", "owner"):
+        for name in ("cpu_percent", "working_set_bytes", "io_read_write_bytes_per_second", "age_ms", "owner"):
             field = row[name]
-            self.assertIn(field["status"], ("ok", "denied", "unavailable", "warming", "discontinuity"))
-            if field["status"] == "ok":
+            self.assertIn(field["status"], ("valid", "denied", "unsupported", "warming_up", "reset", "error", "capacity", "stale"))
+            if field["status"] == "valid":
                 self.assertIsNotNone(field["value"])
                 if name != "owner":
                     value = field["value"]
@@ -100,12 +100,56 @@ class NativeCliTests(unittest.TestCase):
             else:
                 self.assertIsNone(field["value"])
 
+    def test_snapshot_system_summary_and_observation_times(self):
+        data = self.snapshot("-p", str(os.getpid()))
+        self.assertEqual(data["cpu_normalization"], "one-core")
+        sample = data["sample"]
+        self.assertIs(sample["complete"], True)
+        self.assertEqual(sample["clock"], "GetTickCount64-ms")
+        self.assertEqual(sample["stale_after_ms"], 3 * sample["requested_interval_ms"])
+        times = [int(sample[name]) for name in ("started_ms", "observed_ms", "published_ms", "read_ms")]
+        self.assertEqual(times, sorted(times))
+        self.assertEqual(sample["age_ms"], times[-1] - times[1])
+        self.assertGreater(int(sample["sequence"]), 0)
+        system = data["system"]
+        self.assertIn("primary processor group", system["cpu_scope"])
+        for name in ("physical_total_bytes", "physical_available_bytes", "commit_bytes", "commit_limit_bytes"):
+            field = system[name]
+            self.assertEqual(field["unit"], "bytes")
+            if field["status"] == "valid":
+                self.assertIsInstance(field["value"], str)
+                self.assertTrue(field["value"].isdigit())
+            else:
+                self.assertIsNone(field["value"])
+        if system["physical_total_bytes"]["status"] == system["physical_available_bytes"]["status"] == "valid":
+            self.assertGreaterEqual(int(system["physical_total_bytes"]["value"]), int(system["physical_available_bytes"]["value"]))
+        if system["commit_limit_bytes"]["status"] == "valid":
+            self.assertGreater(int(system["commit_limit_bytes"]["value"]), 0)
+        row = data["processes"][0]
+        self.assertLessEqual(int(row["cpu_observed_ms"]), int(sample["observed_ms"]))
+        self.assertLessEqual(int(row["observed_ms"]), int(sample["observed_ms"]))
+        if row["cpu_percent"]["status"] == "valid":
+            self.assertGreater(row["cpu_elapsed_ms"], 0)
+            self.assertGreaterEqual(row["cpu_acquisition_ms"], 0)
+        machine = self.snapshot("-p", str(os.getpid()), "--cpu-normalization", "machine")
+        self.assertEqual(machine["cpu_normalization"], "active-machine-capacity")
+        if machine["processes"][0]["cpu_percent"]["status"] == "valid":
+            self.assertGreater(machine["cpu_active_capacity"], 0)
+
+    def test_readonly_blocks_explicit_settings_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="wtop-readonly-") as temp:
+            target = Path(temp) / "must-not-exist.conf"
+            result = self.run_cli("--readonly", "--no-config", "--write-config", str(target), code=2)
+            self.assertFalse(target.exists())
+            self.assertIn("readonly", result.stderr)
+
     def test_empty_collection_is_valid_json(self):
         self.assertEqual(self.snapshot("-n", "__wtop_nonexistent_process_6fa211__")["processes"], [])
 
     def test_legacy_dump_and_column_aliases(self):
         result = self.run_cli("-d", "-s", "TIME", "-p", str(os.getpid()), "--interval", "50", "--no-config")
         self.assertIn("WORKING_SET_BYTES", result.stdout)
+        self.assertIn("SYSTEM\tCOMMIT_BYTES", result.stdout)
         self.assertIn(str(os.getpid()), result.stdout)
         self.assertEqual(len(self.snapshot("-s", "DISK", "-p", str(os.getpid()))["processes"]), 1)
 
@@ -119,6 +163,7 @@ class NativeCliTests(unittest.TestCase):
             ("--interval", "1ms"), ("--tui", "--format", "json"),
             ("-p", "1,"), ("-p", "-1"), ("-p", "4294967296"),
             ("-n", ","), ("-s", "nonsense"), ("--config",),
+            ("--cpu-normalization", "nonsense"),
         ):
             with self.subTest(args=args):
                 result = self.run_cli(*args, code=2)
@@ -150,7 +195,7 @@ class NativeCliTests(unittest.TestCase):
             # did not wait for the requested 60-second collection interval.
             first = config.read_text(encoding="utf-8-sig")
             for expected in (
-                "ConfigVersion 1", "Keymap emacs", "Theme htop", "Mouse off",
+                "ConfigVersion 2", "Keymap emacs", "Theme htop", "Mouse off",
                 "FunctionBar 0", "ShowTabs 1", "Tab0.Name \"Main\"",
                 "Tab1.Name \"I/O\"", "RedrawInterval 60000",
             ):

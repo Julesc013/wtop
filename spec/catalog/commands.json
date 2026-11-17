@@ -27,7 +27,7 @@
       "mode": "snapshot",
       "arguments": "none",
       "status": "candidate",
-      "behavior": "One synchronous snapshot; first rate values are unavailable unless independently measurable.",
+      "behavior": "Two measured observations form one foreground snapshot. Native calls are not universally deadline-bounded; availability, observation time and partial selection stay explicit.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -88,7 +88,8 @@
       "id": "WT-CMD-VERSION",
       "tokens": [
         "--version",
-        "-v"
+        "-v",
+        "-V"
       ],
       "mode": "information",
       "arguments": "none",
@@ -130,7 +131,9 @@
     {
       "id": "WT-CMD-MONOCHROME",
       "tokens": [
-        "-C"
+        "-C",
+        "--no-color",
+        "--no-colour"
       ],
       "mode": "modifier",
       "arguments": "none",
@@ -144,7 +147,8 @@
     {
       "id": "WT-CMD-PID",
       "tokens": [
-        "-p"
+        "-p",
+        "--pid"
       ],
       "mode": "selector",
       "arguments": "comma-separated PID values 1..4294967295, maximum 1024",
@@ -158,7 +162,8 @@
     {
       "id": "WT-CMD-NAME",
       "tokens": [
-        "-n"
+        "-n",
+        "--name"
       ],
       "mode": "selector",
       "arguments": "comma-separated name fragments",
@@ -172,12 +177,13 @@
     {
       "id": "WT-CMD-USER",
       "tokens": [
-        "-u"
+        "-u",
+        "--user"
       ],
       "mode": "selector",
       "arguments": "USERNAME",
       "status": "inherited_unqualified",
-      "behavior": "Inherited user selector; unavailable metadata remains explicit.",
+      "behavior": "Case-insensitive account-name or SID selector. Unresolved names are counted separately; query processes exits3 if selection cannot be completed.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -186,7 +192,8 @@
     {
       "id": "WT-CMD-SORT",
       "tokens": [
-        "-s"
+        "-s",
+        "--sort-key"
       ],
       "mode": "modifier",
       "arguments": "COLUMN",
@@ -230,10 +237,10 @@
       "tokens": [
         "query"
       ],
-      "mode": "planned",
-      "arguments": "typed selector and fields",
-      "status": "planned",
-      "behavior": "Future bounded noninteractive query; syntax is not yet frozen.",
+      "mode": "snapshot",
+      "arguments": "processes|system|services",
+      "status": "candidate",
+      "behavior": "Foreground typed snapshot through the common model. System/services queries do not open process rows. Optional-provider or unresolved selection results use exit3; ordinary unavailable per-process fields remain typed.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -244,10 +251,10 @@
       "tokens": [
         "inspect"
       ],
-      "mode": "planned",
-      "arguments": "lifetime-aware process selector",
-      "status": "planned",
-      "behavior": "Future detailed process inspection; do not advertise as implemented.",
+      "mode": "snapshot",
+      "arguments": "decimal PID 1..4294967295",
+      "status": "candidate",
+      "behavior": "Inspect one observed PID lifetime. Optional --command-line and --services revalidate creation identity; a missing target or unavailable requested provider uses exit3.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -258,10 +265,10 @@
       "tokens": [
         "log"
       ],
-      "mode": "planned",
-      "arguments": "explicit bounded destination/duration",
-      "status": "planned",
-      "behavior": "Future opt-in history; no daemon/service by default.",
+      "mode": "snapshot",
+      "arguments": "--output PATH|- and --samples COUNT and/or --duration MS",
+      "status": "candidate",
+      "behavior": "Foreground JSON Lines, explicitly bounded by count/time and bytes. Creates file exclusively; staging admits only complete records within byte cap. Reaching byte cap before requested work exits3, failure1, cancellation130. Blocking native I/O has no universal hard deadline.",
       "acceptance": [
         "WT-AC-030-01"
       ],
@@ -300,10 +307,10 @@
       "tokens": [
         "--portable"
       ],
-      "mode": "planned",
-      "arguments": "explicit portable root or executable-relative marker policy",
-      "status": "planned",
-      "behavior": "Future explicit portable data ownership; no PATH/ARP/registry integration. Current explicit settings reads/saves do not establish installation ownership.",
+      "mode": "modifier",
+      "arguments": "none; --portable-root PATH selects an explicit directory",
+      "status": "candidate",
+      "behavior": "Use actual module-relative or explicit portable data root. wtop.portable marker also selects portable ownership; no registry/PATH writes. Explicit portable and --config options conflict.",
       "acceptance": [
         "WT-AC-040-02"
       ],
@@ -355,7 +362,8 @@
       "id": "WT-CMD-MOUSE",
       "tokens": [
         "--mouse",
-        "--no-mouse"
+        "--no-mouse",
+        "-M"
       ],
       "mode": "modifier",
       "arguments": "--mouse auto|on|off; --no-mouse takes no argument",
@@ -376,12 +384,14 @@
       "id": "WT-CMD-STATUS-BAR",
       "tokens": [
         "--status-bar",
-        "--no-status-bar"
+        "--no-status-bar",
+        "--function-bar",
+        "--no-function-bar"
       ],
       "mode": "modifier",
       "arguments": "none",
       "status": "candidate",
-      "behavior": "Show or hide the bottom function/control bar; live prompts and errors remain visible.",
+      "behavior": "Show/hide the final function row; contextual live status and critical messages remain visible.",
       "acceptance": [
         "WT-AC-030-04"
       ],
@@ -400,6 +410,174 @@
       "acceptance": [
         "WT-AC-030-04",
         "WT-AC-040-04"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-DELAY",
+      "tokens": [
+        "--delay"
+      ],
+      "mode": "modifier",
+      "arguments": "integer deciseconds 1..600",
+      "status": "candidate",
+      "behavior": "Htop-compatible long delay; multiply by100ms. Inherited -d stays snapshot; last interval/delay wins.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-CPU-NORMALIZATION",
+      "tokens": [
+        "--cpu-normalization"
+      ],
+      "mode": "modifier",
+      "arguments": "core|machine",
+      "status": "candidate",
+      "behavior": "Default core:100% is one logical CPU. Machine uses observed active capacity; unavailable/changing capacity remains explicit.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-READONLY",
+      "tokens": [
+        "--readonly"
+      ],
+      "mode": "modifier",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Forbid process mutation, external command launch and settings writes through common dispatch. Explicit telemetry log output is allowed.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-PATHS",
+      "tokens": [
+        "--paths"
+      ],
+      "mode": "information",
+      "arguments": "none; --format text|json",
+      "status": "candidate",
+      "behavior": "Resolve owner/module/read/write paths without loading settings, collection, console mutation or writes.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-PORTABLE-ROOT",
+      "tokens": [
+        "--portable-root"
+      ],
+      "mode": "modifier",
+      "arguments": "PATH",
+      "status": "candidate",
+      "behavior": "Select explicit portable directory independently of subsequent CWD; implies --portable.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-COMMAND-LINE",
+      "tokens": [
+        "--command-line"
+      ],
+      "mode": "modifier",
+      "arguments": "none; requires inspect PID",
+      "status": "candidate",
+      "behavior": "Opt-in sensitive command arguments through a bounded owned WMI worker and lifetime checks.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-SERVICES",
+      "tokens": [
+        "--services"
+      ],
+      "mode": "modifier",
+      "arguments": "none; requires inspect PID",
+      "status": "candidate",
+      "behavior": "Read-only service association through a bounded worker, with per-service process identity status.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-PER-CORE",
+      "tokens": [
+        "--per-core"
+      ],
+      "mode": "modifier",
+      "arguments": "none",
+      "status": "candidate",
+      "behavior": "Opt-in PDH per-core observations through a bounded owned worker. Rate collection uses at least1000ms; actual elapsed interval and source instances are reported.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-SAMPLES",
+      "tokens": [
+        "--samples"
+      ],
+      "mode": "modifier",
+      "arguments": "integer 1..1000000; log only",
+      "status": "candidate",
+      "behavior": "Maximum complete log records; either count or duration is required.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-DURATION",
+      "tokens": [
+        "--duration"
+      ],
+      "mode": "modifier",
+      "arguments": "integer milliseconds 50..86400000; log only",
+      "status": "candidate",
+      "behavior": "Foreground sampling time bound checked between collection/output operations; not a universal native-call deadline.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-MAX-BYTES",
+      "tokens": [
+        "--max-bytes"
+      ],
+      "mode": "modifier",
+      "arguments": "integer 1024..1073741824; log only",
+      "status": "candidate",
+      "behavior": "Output byte ceiling, default16777216. Complete record staging prevents intentional cap-induced partial JSON records.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-OUTPUT",
+      "tokens": [
+        "--output"
+      ],
+      "mode": "modifier",
+      "arguments": "PATH or -; log only",
+      "status": "candidate",
+      "behavior": "Required explicit destination. Existing files are preserved; - writes JSON Lines to stdout.",
+      "acceptance": [
+        "WT-AC-030-01"
       ],
       "evidence": []
     }

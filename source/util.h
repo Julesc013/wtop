@@ -36,6 +36,9 @@ void *xrealloc(void *ptr, size_t size);
 void *xcalloc(size_t num, size_t size);
 int WriteTText(HANDLE output, const TCHAR *text, size_t characters);
 char *ToUtf8(const TCHAR *text);
+/* Reports replacement of malformed native text; callers retain this status
+   when serializing observed values. flags uses WTOP_TEXT_* from text.h. */
+char *ToUtf8WithStatus(const TCHAR *text, unsigned *flags);
 TCHAR *FromUtf8(const char *text);
 
 #ifdef UNICODE

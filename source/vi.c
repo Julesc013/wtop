@@ -75,16 +75,24 @@ static void HistoryNext(TCHAR **Str)
 COMMAND_FUNC(kill)
 {
     if(!Argc) { SetViMessage(VI_ERROR, _T("Usage: kill PID(s)")); return 1; }
-    int Result = 0;
+    if(Argc > 1024) { SetViMessage(VI_ERROR, _T("At most 1024 PIDs may be requested")); return 1; }
+    DWORD *Pids = malloc((size_t)Argc * sizeof(*Pids));
+    if(!Pids) { SetViMessage(VI_ERROR, _T("Out of memory: no processes were changed")); return 1; }
     for(DWORD i = 0; i < Argc; ++i) {
         TCHAR *End;
         errno = 0;
         unsigned long Pid = _tcstoul(Argv[i], &End, 10);
         if(!Argv[i][0] || Argv[i][0] == _T('-') || Argv[i][0] == _T('+') || !Pid || *End || errno == ERANGE) {
-            SetViMessage(VI_ERROR, _T("Not a valid PID: %s"), Argv[i]); Result = 1; continue;
+            SetViMessage(VI_ERROR, _T("Not a valid PID: %s; no processes were changed"), Argv[i]);
+            free(Pids);
+            return 1;
         }
-        if(!KillObservedProcess((DWORD)Pid)) Result = 1;
+        Pids[i] = (DWORD)Pid;
     }
+    /* One batch captures all observed lifetimes before the first dispatch and
+       retains an outcome for every target, including denied/vanished targets. */
+    int Result = KillObservedProcesses(Pids, (size_t)Argc) ? 0 : 1;
+    free(Pids);
     return Result;
 }
 
@@ -104,6 +112,10 @@ COMMAND_FUNC(tree)
 
 COMMAND_FUNC(exec)
 {
+    if(WtopIsReadOnly()) {
+        SetViMessage(VI_ERROR, _T("Read-only mode forbids launching commands"));
+        return 1;
+    }
 	if(Argc == 0) {
 		SetViMessage(VI_ERROR, _T("Usage: exec COMMAND"));
 		return 1;
@@ -339,6 +351,16 @@ void ViDisableInput(void)
 	InInputMode = 0;
 
     /* Never discard unrelated queued console events on editor close. */
+}
+
+int ViSetInputText(TCHAR InitialKey, const TCHAR *Text)
+{
+    size_t Length = _tcslen(Text);
+    if(Length + 2 > DEFAULT_STR_SIZE) return 0;
+    ViEnableInput(InitialKey);
+    _tcscpy_s(CurrentInputStr + 1, DEFAULT_STR_SIZE - 1, Text);
+    InputIndex = (DWORD)Length + 1;
+    return 1;
 }
 
 static DWORD PreviousInputPosition(DWORD Position)
