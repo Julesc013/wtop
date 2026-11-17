@@ -62,3 +62,11 @@ on master after exact native packaging succeeds. It cannot auto-publish on push.
 Current source enhancements map to WT-W020/030/040/050/060/070/130. The existing
 acceptance registry retains broad-case scope; beta-specific requirements are
 WT-REQ-063-03 through -06. Do not mark all earlier cases passed from this checkpoint.
+
+## Observed implementation checkpoint
+
+The [18 November verification record](beta-verification-2026-11-18.md) binds the
+six-patch implementation, actual native/packaging checks and corrected failures
+to exact source/artifact identities. Native Server CI and independently downloaded
+byte verification passed. Windows 11 ordinary-user/human review and live Issues
+remain publication blockers; no checkbox or target is promoted on their behalf.
