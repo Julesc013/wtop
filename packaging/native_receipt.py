@@ -38,6 +38,12 @@ def main():
         validate_native(receipt,payload)
         with args.output.open('x',encoding='utf-8') as stream:json.dump(receipt,stream,indent=2);stream.write('\n')
         return 0
+    except subprocess.CalledProcessError as error:
+        # Fixed metadata/version commands only: preserve the native error rather
+        # than turning a failed acquisition into an unknown signing success.
+        diagnostic = (error.stderr or error.stdout or 'no diagnostic output')[-4000:]
+        print('Native receipt command failed: ' + diagnostic, file=sys.stderr)
+        return 2
     except (OSError,ValueError,KeyError,subprocess.SubprocessError) as error:
         print('Native receipt failed: '+str(error),file=sys.stderr);return 2
 if __name__=='__main__':raise SystemExit(main())
