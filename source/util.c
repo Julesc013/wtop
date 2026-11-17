@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <limits.h>
+#include "text.h"
 
 /* Current native profile is Unicode. Redirected output is UTF-8, never UTF-16 bytes. */
 int WriteTText(HANDLE output, const TCHAR *text, size_t characters)
@@ -64,13 +65,20 @@ int WriteTText(HANDLE output, const TCHAR *text, size_t characters)
 	return ok;
 }
 
-char *ToUtf8(const TCHAR *text)
+char *ToUtf8WithStatus(const TCHAR *text, unsigned *flags)
 {
+    if(flags) *flags = 0;
 #ifdef UNICODE
-	int length = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
+    DWORD ConversionFlags = WC_ERR_INVALID_CHARS;
+	int length = WideCharToMultiByte(CP_UTF8, ConversionFlags, text, -1, NULL, 0, NULL, NULL);
+    if(!length && GetLastError() == ERROR_NO_UNICODE_TRANSLATION) {
+        if(flags) *flags = WTOP_TEXT_INVALID | WTOP_TEXT_LOSSY;
+        ConversionFlags = 0;
+        length = WideCharToMultiByte(CP_UTF8, ConversionFlags, text, -1, NULL, 0, NULL, NULL);
+    }
 	if(!length) return NULL;
 	char *result = malloc((size_t)length);
-	if(result && !WideCharToMultiByte(CP_UTF8, 0, text, -1, result, length, NULL, NULL)) {
+	if(result && !WideCharToMultiByte(CP_UTF8, ConversionFlags, text, -1, result, length, NULL, NULL)) {
 		free(result);
 		return NULL;
 	}
@@ -78,6 +86,11 @@ char *ToUtf8(const TCHAR *text)
 #else
 	return _strdup(text);
 #endif
+}
+
+char *ToUtf8(const TCHAR *text)
+{
+    return ToUtf8WithStatus(text, NULL);
 }
 
 TCHAR *FromUtf8(const char *text)

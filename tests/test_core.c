@@ -62,6 +62,41 @@ static void options_test(void)
     assert(!wtop_parse_options(5, write_two_paths, &options, &error));
 }
 
+static void compatibility_test(void)
+{
+    wtop_options options;
+    const char *error;
+    const char *aliases[] = { "wtop", "-d", "--pid=42", "--name=worker",
+        "--user=alice", "--sort-key=CPU%", "--no-colour", "-M",
+        "--no-function-bar", "--cpu-normalization=machine", "--readonly" };
+    const char *delay[] = { "wtop", "--delay=3", "--" };
+    const char *core[] = { "wtop", "--cpu-normalization", "core", "-n", "worker" };
+    const char *metadata[] = { "wtop", "-V" };
+    const char *bare_value[] = { "wtop", "--readonly=yes" };
+    const char *empty_value[] = { "wtop", "--name=" };
+    const char *bad_cpu[] = { "wtop", "--cpu-normalization=host" };
+    const char *after_end[] = { "wtop", "--", "--help" };
+    const char *bad_delay[] = { "wtop", "--delay=601" };
+    const char *read_write[] = { "wtop", "--readonly", "--write-config=out.conf" };
+    const char *precedence[] = { "wtop", "--delay=3", "--interval=250" };
+    assert(wtop_parse_options(11, aliases, &options, &error));
+    assert(options.mode == WTOP_SNAPSHOT && options.cpu_machine && options.readonly);
+    assert(!strcmp(options.pid_filter, "42") && !strcmp(options.name_filter, "worker"));
+    assert(!strcmp(options.user_filter, "alice") && !strcmp(options.sort_column, "CPU%"));
+    assert(options.monochrome && options.mouse_mode == WTOP_MOUSE_OFF && options.show_function_bar == 0);
+    assert(wtop_parse_options(3, delay, &options, &error) && options.interval_ms == 300);
+    assert(wtop_parse_options(5, core, &options, &error) && !options.cpu_machine);
+    assert(!strcmp(options.name_filter, "worker"));
+    assert(wtop_parse_options(2, metadata, &options, &error) && options.action == WTOP_VERSION);
+    assert(!wtop_parse_options(2, bare_value, &options, &error));
+    assert(!wtop_parse_options(2, empty_value, &options, &error));
+    assert(!wtop_parse_options(2, bad_cpu, &options, &error));
+    assert(!wtop_parse_options(3, after_end, &options, &error));
+    assert(!wtop_parse_options(2, bad_delay, &options, &error));
+    assert(!wtop_parse_options(3, read_write, &options, &error));
+    assert(wtop_parse_options(3, precedence, &options, &error) && options.interval_ms == 250);
+}
+
 static void numeric_test(void)
 {
     unsigned long value;
@@ -79,6 +114,54 @@ static void numeric_test(void)
     assert(!wtop_counter_rate(2500.0, 1000.0, 1000.0, &rate));
     assert(!wtop_counter_rate(0.0, 1.0, 0.0, &rate));
     assert(!wtop_counter_rate(0.0, DBL_MAX, 1.0, &rate));
+}
+
+static void command_test(void)
+{
+    wtop_options options;
+    const char *error;
+    const char *query[] = { "wtop", "--format=json", "query", "system", "--per-core" };
+    const char *inspect[] = { "wtop", "inspect", "4294967295", "--command-line", "--services" };
+    const char *log[] = { "wtop", "log", "--output", "-", "--samples=2", "--interval=50", "--max-bytes=8192" };
+    const char *duration[] = { "wtop", "log", "--output=capture.jsonl", "--duration=500", "--samples=10" };
+    const char *paths[] = { "wtop", "--paths", "--portable-root=C:\\tools\\wtop", "--format=json" };
+    const char *invalid[][7] = {
+        { "wtop", "query", NULL },
+        { "wtop", "query", "garbage", NULL },
+        { "wtop", "--snapshot", "query", "system", NULL },
+        { "wtop", "inspect", "0", NULL },
+        { "wtop", "inspect", "4294967296", NULL },
+        { "wtop", "inspect", "42", "--pid=42", NULL },
+        { "wtop", "--command-line", NULL },
+        { "wtop", "query", "processes", "--services", NULL },
+        { "wtop", "log", "--output=-", NULL },
+        { "wtop", "log", "--samples=1", NULL },
+        { "wtop", "log", "--samples=1", "--output=-", "--format=text", NULL },
+        { "wtop", "log", "--samples=0", "--output=-", NULL },
+        { "wtop", "log", "--samples=1000001", "--output=-", NULL },
+        { "wtop", "log", "--duration=86400001", "--output=-", NULL },
+        { "wtop", "log", "--samples=1", "--output=-", "--max-bytes=1023", NULL },
+        { "wtop", "--max-bytes=16777216", NULL },
+        { "wtop", "--portable", "--config=file.conf", NULL }
+    };
+    size_t i;
+    int argc;
+    assert(wtop_parse_options(5, query, &options, &error));
+    assert(options.mode == WTOP_QUERY && options.query_target == WTOP_QUERY_SYSTEM && options.json && options.per_core);
+    assert(wtop_parse_options(5, inspect, &options, &error));
+    assert(options.mode == WTOP_INSPECT && options.inspect_pid == 4294967295UL && options.command_line && options.services);
+    assert(wtop_parse_options(7, log, &options, &error));
+    assert(options.mode == WTOP_LOG && options.json && options.sample_limit == 2 && options.interval_ms == 50 && options.max_bytes == 8192);
+    assert(!strcmp(options.output_path, "-"));
+    assert(wtop_parse_options(5, duration, &options, &error));
+    assert(options.duration_ms == 500 && options.sample_limit == 10);
+    assert(wtop_parse_options(4, paths, &options, &error));
+    assert(options.action == WTOP_PATHS && options.portable && options.json);
+    assert(!strcmp(options.portable_root, "C:\\tools\\wtop"));
+    for (i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        for (argc = 0; invalid[i][argc]; ++argc) { }
+        assert(!wtop_parse_options(argc, invalid[i], &options, &error));
+    }
 }
 
 static void json_test(void)
@@ -99,6 +182,8 @@ static void json_test(void)
 int main(void)
 {
     options_test();
+    compatibility_test();
+    command_test();
     numeric_test();
     json_test();
     puts("core: arguments, numeric bounds, elapsed rates and JSON escaping passed");

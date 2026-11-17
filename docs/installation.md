@@ -1,136 +1,219 @@
-# Distribution, paths and removal
+# Distribution, settings paths and removal
 
-This document explains the intended delivery policy. The initial Wtop foundation
-has no published release, WinGet listing, MSI or managed self-installer. Building
-or downloading a CI candidate does not establish a supported release.
+The current tree implements **delivery candidates**, version-2 settings and a
+native NT settings owner. It does not establish a supported release, a published
+Wtop WinGet listing, or support for every target in the catalog. The application
+has no self-installer. Candidate archives and MSI authoring are described in
+[packaging/README.md](../packaging/README.md); exact native qualification remains
+a separate release gate.
 
 ## One payload, several delivery methods
 
-Each qualified CPU/ABI/API profile produces an application called `wtop.exe`.
-The standalone file runs directly; ZIP adds notices, instructions and portable
-configuration examples. Future EXE/MSI setup packages carry the same application
-payload. Installer technology is selected per supported environment; MSI is not
-an installation route for DOS, Win16, CE or WinPE.
+A built CPU/ABI/API profile produces `wtop.exe`. The candidate packager copies
+those final bytes into a standalone payload and a deterministic
+`wtop-<version>-<profile>-portable.zip`; an MSI candidate carries that same EXE.
+Packaging does not rebuild, relink or sign the application. The verifier compares
+the ZIP payload, recorded hashes and actual PE architecture, imports, subsystem
+and other loader metadata. Passing these checks proves neither runtime support
+nor signature trust.
 
-Example future asset names (not current download URLs):
+The ZIP contains `wtop.exe`, `LICENSE`, `payload.json`, `PORTABLE.txt` and
+`wtop.conf.example`. The example is not an active configuration file, and the
+current ZIP does not contain a `wtop.portable` marker. Select portable ownership
+with `--portable`, an explicit `--portable-root`, or a marker you deliberately
+place beside the executable. Running a bare EXE is also supported by the current
+candidate without installation; its settings ownership rules differ below.
 
-```text
-wtop-v1.0.0-win-nt-x64.exe
-wtop-v1.0.0-win-nt-x64-portable.zip
-wtop-v1.0.0-win-nt-x64-setup.exe
-wtop-v1.0.0-win-nt-x64-setup.msi
-```
+A product version, target profile and package role are separate identities.
+Candidate MSI generation requires an explicit numeric version; it does not strip
+SemVer suffixes or silently truncate fields. Production version mapping, signing,
+corresponding-source delivery, exact-host qualification and channel acquisition
+are unfinished release gates. Candidate promotion deliberately fails. MSI is not
+a delivery route for DOS, Win16, CE or ordinary WinPE images.
 
-The installed application filename remains `wtop.exe`. A release has one semantic
-version; channel, build identity, platform profile and packaging role are separate
-metadata. `1.0.0-stable.1` has prerelease syntax in SemVer despite its name. Use
-`1.0.0` for a stable release and `1.0.0-rc.1`/`0.1.0-dev.1` for prereleases. MSI
-version mapping must reject unsupported ranges/collisions, not truncate fields.
+## Choose and inspect settings ownership
 
-## Direct portable operation
+Normal startup and exit do not write settings. Wtop chooses one document, applies
+it over compiled defaults, then applies CLI preferences. It does not merge all
+files found on the machine. A malformed or inaccessible selected file is an
+error, not a reason to try a different profile. An explicit relative path is
+relative to the caller's working directory; that directory is never an implicit
+search root. Executable-relative paths come from the actual loaded module.
 
-Run an absolute/relative path from any suitable folder. No persistent PATH,
-registry, service, scheduled task or startup entry is needed. Portable settings
-are explicitly selected and remain with the portable copy; read-only media can
-run with in-memory settings. The current candidate supports bounded settings reads and explicit writes. It does
-not implement managed-install owner detection or an installer. A file beside a
-program and a recorded installed owner are different facts.
+| Selection | Read source | Explicit TUI save destination |
+| --- | --- | --- |
+| `--no-config` | Compiled defaults; suppress configuration and installation-owner discovery. | None. Explicit `--write-config PATH` remains possible. |
+| `--config PATH` | Exactly the named existing document. | The same resolved path. |
+| `--portable-root DIR` | `DIR\wtop.conf`, then legacy `DIR\ntop.conf`, otherwise defaults. | `DIR\wtop.conf`. |
+| `--portable` or adjacent `wtop.portable` file | The same portable search under the actual executable directory. | Adjacent `wtop.conf`. |
+| Matching per-user or machine installation record | User roaming `Wtop\wtop.conf`, then machine application-data `Wtop\wtop.conf`, otherwise defaults. | The current user's roaming `Wtop\wtop.conf`. |
+| Unregistered EXE | Adjacent `wtop.conf`, adjacent `ntop.conf`, user roaming `Wtop\wtop.conf`, otherwise defaults. | Selected adjacent file; legacy adjacent input saves to sibling `wtop.conf`; otherwise the user file. |
 
-### Current configuration discovery and saving
+Explicit `--config` conflicts with `--no-config` and with explicit portable
+selection. `--no-config` suppresses implicit persistence even if `--portable` or
+`--portable-root` is also supplied. A marker must be a file, not a directory.
+Writability, a familiar folder name, and a package-manager-looking directory do
+not establish installation ownership. Explicit portable selection takes
+precedence over registration.
 
-Ordinary startup/exit reads settings without writing. Command-line preferences
-override the selected file. The current discovery order is:
+The settings adapter reads at most 128 child records under
+`HKCU\Software\Wtop\Installations` and then the corresponding HKLM key in the
+executable's registry view. A matching child requires `SchemaVersion` as DWORD
+`1` and `InstallPath` as an absolute REG_SZ directory matching the canonical
+module directory. HKCU wins when both scopes match. The application only reads
+these records; ordinary use does not register itself. Registration is a settings
+routing hint, not evidence that an installer is trusted or a binary is qualified.
 
-1. An explicit `--config PATH`, resolved as that requested path.
-2. An existing `wtop.conf` beside the actual executable.
-3. An existing legacy `ntop.conf` beside the executable.
-4. The user's roaming `Wtop\wtop.conf` when neither adjacent file exists.
-5. Compiled defaults when the chosen optional file is absent.
+The NT adapter resolves roaming and common application-data folders through
+optional `SHGetFolderPathW`, without its create flag. `%APPDATA%` and
+`%PROGRAMDATA%` describe those folder roles; they are not concatenated environment
+strings in the resolver. If user-folder resolution is unavailable, operation can
+remain in memory with no implicit save destination. A read-only portable root
+never falls back to another writable folder. An all-users install still saves
+each user's preferences separately and does not edit its machine default.
 
-This is a single-source search, not an implicit merge of all discovered files.
-The current working directory is not searched for settings. An explicit relative
-`--config` or `--write-config` path is interpreted relative to the caller's
-working directory because the user supplied it. Errors in an existing selected
-file are reported instead of silently trying a different profile.
-
-| Selected source | Explicit TUI save destination |
-| --- | --- |
-| `--config PATH` | The same resolved path. |
-| Existing adjacent `wtop.conf` | That adjacent file. |
-| Legacy adjacent `ntop.conf` | Sibling `wtop.conf`; the legacy file remains intact. |
-| No adjacent file | User roaming `Wtop\wtop.conf`. |
-| `--no-config` | No implicit TUI save destination; F2 save/`:save` is disabled. |
-
-F2 `s`, `:save` or the Emacs save binding requests a write and reports its
-resolved destination. The user directory is created only for an explicit save,
-not startup or exit. `--write-config PATH` is a separate no-collector action with
-its own explicit destination; it can be combined with `--no-config` to export
-compiled defaults plus CLI preferences. It does not infer installation scope.
-For example, from the folder intended to hold a portable copy:
+Inspect the current resolution before changing anything:
 
 ```powershell
-.\wtop.exe --no-config --write-config .\wtop.conf
-.\wtop.exe --config .\wtop.conf
+.\wtop.exe --paths
+.\wtop.exe --paths --format=json --portable
+.\wtop.exe --paths --format=json --no-config
 ```
 
-Saving uses a unique sibling temporary file, checks serialization/flush/close,
-and replaces the destination only after successful completion. A failed write
-must preserve the original and clean up its temporary file; it must not choose
-another writable directory. Read-only locations remain usable with in-memory
-preferences. Explicit arbitrary destinations need an existing writable parent;
-only the chosen user settings directory has the application-owned creation path.
-The TUI checks for changes to the loaded/saved bytes before replacement and
-refuses a detected external edit. This reduces accidental lost updates but is
-not an atomic cross-process transaction; simultaneous writers remain a
-qualification case. Explicit export to a named destination is the user's
-replacement request. Filesystem durability, interruption behavior and retention
-of customized file ACLs/metadata still require native acceptance.
+`--paths` performs path and owner discovery, but does not parse configuration,
+collect processes, initialize the TUI or create files. It can report an absent or
+malformed explicit config path; this is not a declaration that loading will
+succeed. JSON uses schema `1`, kind `settings-paths`, with `owner`, `source`,
+`saving_disabled`, `canonical_aliases`, `module`, `read` and `write` fields.
+With `--no-config`, owner is `memory`, source is `compiled`, read/write are empty,
+and saving is disabled; the actual module path is still reported. `--readonly`
+also marks saving disabled while retaining the selected paths. That boolean is a
+policy flag, not a check that a nonempty destination is writable. The alias flag
+reports availability of handle-based canonicalization; lexical fallback and
+nonexistent paths do not establish protection against every path race.
 
-The roaming fallback is a user preference location, not evidence that the
-executable was installed. An existing adjacent file remains the compatibility
-choice; putting such a file inside a package-manager-owned payload directory can
-make it vulnerable to that manager's update/removal. Full portable markers,
-registered owner records, migration and settings-path inspection commands are
-planned separately.
+## Explicit save, export and migration
 
-The future policy and precedence are normative in
-[configuration](../spec/configuration/settings.md). Direct portable and managed
-installation are distinct modes. Do not identify a managed package just because
-its directory resembles a default WinGet path or happens to be writable.
+F2 Setup save, `:save`, and the Emacs save binding request persistence. Changes to
+theme, keymap, colors, views or ordering otherwise stay in memory. The selected
+user `Wtop` directory is created only for an explicit save; arbitrary export or
+portable directories must already exist. No save chooses another destination
+because the requested one failed.
 
-## How WinGet handles a portable application
+```powershell
+# Export defaults plus selected preferences; no collector starts.
+.\wtop.exe --no-config --write-config .\wtop.conf --keymap=htop --theme=htop
+# Use an explicit portable data directory that already exists.
+.\wtop.exe --portable-root D:\Tools\Wtop
+# Inspect the same document without allowing settings or process mutation.
+.\wtop.exe --config .\wtop.conf --readonly
+```
 
-WinGet consumes a publisher/package manifest, selects the applicable architecture
-and installer, downloads the declared URL, verifies its SHA256, resolves declared
-dependencies and performs that installer's operation. For `portable`, WinGet
-does the placement/registration itself; it does not run `wtop --install`.
+`--write-config PATH` creates a separate export transaction. Export preserves the
+selected document's comments and supported unknown fields without rebasing an
+active document's provenance. If the destination exists, it must itself parse as
+a supported configuration; malformed and future-version documents are refused.
+Destination values are not merged into the export. `--no-config` permits export
+of defaults plus CLI preferences; `--readonly` forbids it. Explicit telemetry
+logging is separately allowed in readonly mode and uses its named output path;
+there is no automatic log/cache directory.
 
-Typical default locations:
+Current output is `ConfigVersion 2`. Version-1 and unversioned legacy documents
+load without being rewritten. On an explicit save, stable view IDs are assigned
+and migration is recorded. If an existing destination is replaced during that
+migration, its original bytes are kept in a sibling
+`<destination>.migration-original-<pid>-<tick>-<sequence>`. This also applies to
+`--no-config --write-config` over a version-1 destination. When legacy `ntop.conf`
+is imported into a new sibling `wtop.conf`, the source itself remains untouched.
+Migration originals are not temporary garbage and are not automatically removed
+by subsequent saves or disposal.
 
-| Item | Location |
-|---|---|
-| User payload root | `%LOCALAPPDATA%\Microsoft\WinGet\Packages` |
-| User command links | `%LOCALAPPDATA%\Microsoft\WinGet\Links` |
-| Machine payload root | `%ProgramFiles%\WinGet\Packages` (x86 uses the corresponding x86 program-files root) |
-| Machine command links | `%ProgramFiles%\WinGet\Links` |
+### Concurrent edits and recovery
 
-WinGet normally creates a package/source-specific directory and command alias,
-makes its links directory available through PATH, and records uninstall metadata
-in the appropriate user/machine registry. Root settings or an explicit location
-can change the destination. Alias creation has a PATH fallback; inspect the
-actual installed record rather than assuming a symlink always exists.
+A save serializes and validates the complete bounded candidate in memory before
+opening its destination for replacement. Cooperating writers use one exclusive
+`<destination>.wtop-lock` creation attempt; an existing lock reports `busy`
+without waiting or deleting the other file. Loaded bytes and existence are
+checked again under that lock and immediately before replacement. A detected
+external change reports `conflict` and retains in-memory edits.
 
-Therefore **WinGet portable installation is managed installation of a portable
-payload**, not zero-registry operation. Let WinGet own its files, registration,
-PATH handling and uninstall entry. Wtop must not silently self-register again.
+The adapter writes an exclusive same-directory `.wtop-tmp-*` sibling, checks its
+write/flush/close, then uses `ReplaceFileW` with a reserved backup for an existing
+file, or a non-overwriting `MoveFileExW` for a new file. It rereads the destination
+and verifies the exact candidate before adopting its saved revision. Only the
+captured settings revision may clear the dirty state. Ordinary backups are
+removed after verification; migration originals are retained.
 
-### What NTop currently installs
+| Outcome | Meaning and next step |
+| --- | --- |
+| `busy`, `conflict` | Another writer or changed baseline prevented a verified save. Preserve edits; inspect/reload or export elsewhere. |
+| `invalid`, `unavailable`, `denied`, `unchanged-failure` | Validation, destination policy or an operation before replacement failed. Read the diagnostic; do not assume another path was used. |
+| `recovery-required` | A replacement/move failed with potentially changed names. Inspect the destination and every retained candidate/backup before retrying. |
+| `committed-unverified` | Replacement reported success, but the exact candidate could not be verified afterward. Inspect/reload; the application does not adopt unrelated bytes. |
+| `ok` with a retained-backup diagnostic | The candidate was verified, but cleanup failed. Inspect that backup and reload before another save. |
 
-As checked on 2026-11-16, `gsass1.NTop` 0.3.21 uses a portable manifest, downloads
-only `ntop.exe`, declares the command `ntop` and depends on
-`Microsoft.VCRedist.2015+.x64`. It does not install `ntop.conf`. The manifest says
-`Architecture: neutral`, but the hash-verified published file is PE32+ x86-64;
-Wtop must use the actual artifact architecture in its own future manifests.
+Replacement failures cannot honestly promise that the original remains under its
+original filename. The adapter preserves recoverable candidate/backup paths and
+invalidates its save baseline rather than guessing. CLI export failures report
+retained paths on stderr. Inspect the actual sibling files as well as the
+outcome; a fresh `--paths` process does not know an earlier transaction's recovery
+names. Never delete `.migration-original-*`, `.wtop-backup-*`, `.wtop-tmp-*` or a
+stale lock indiscriminately. Copy and inspect recovery evidence before deciding
+which file to keep. A backup reservation can still be empty if replacement never
+started.
+
+The lock serializes cooperating Wtop writers; it is not filesystem
+compare-and-swap against external editors. Native filesystem calls can block,
+and this synchronous adapter has no hard elapsed-time guarantee. Hard-linked
+settings files are refused. Power loss, unusual filesystems, reparse races,
+metadata/ACL retention and interruption behavior still require exact native
+qualification. The [configuration specification](../spec/configuration/settings.md)
+records these boundaries and acceptance cases.
+
+## Candidate MSI and CLI acquisition
+
+The current WiX 4.0.6 authoring defaults to per-user scope and can request machine
+scope through Windows Installer. It installs only the unchanged EXE and license
+under the profile's programs directory, plus owned MSI metadata. It carries no
+active `wtop.conf`, changes no PATH token and installs no service, updater,
+startup entry or scheduled task. Use the full executable path. Optional owned
+PATH integration is unfinished.
+
+Its settings record follows the schema above and also stores `Owner=msi`,
+`ProductCode` and `PayloadSha256` as strings. An embedded synchronous guard checks
+ownership, destination collisions and exact owned-file hashes before the MSI
+transaction, including direct repair/uninstall. Automatic upgrades are refused.
+This guard is a preflight, not atomic compare-and-delete/replace: another actor
+can change paths after validation. The package remains explicitly unqualified;
+passing basic install fixtures does not establish safe interruption, UAC, every
+scope combination or a target support floor. See the packaging document for
+build commands and disposable-host tests.
+
+`packaging/acquire.ps1` accepts an exact tagged Wtop GitHub release asset URL, an
+independently supplied SHA256 and a new destination under an existing staging
+directory. It verifies the download and can explicitly invoke the same MSI in
+user or machine scope. It does not execute downloaded EXE/ZIP files, invent a
+release URL or install a package-manager listing. A matching digest establishes
+integrity relative to that digest; obtain the digest through a trusted channel.
+There is no published-release claim in this script. Older environments can
+receive already verified files copied from another machine.
+
+## WinGet and the inherited NTop package
+
+WinGet's portable installer manages payload placement, command aliases/PATH and
+uninstall registration itself; it does not require `wtop --install`. Its managed
+payload directory is not a durable preferences directory. A future Wtop listing
+must coordinate installer ownership and settings routing; the current settings
+adapter does not infer a WinGet owner from generic WinGet uninstall metadata or a
+hard-coded default path. No working `winget install` command for Wtop is claimed.
+
+The upstream package audit checked on **2026-11-16** found `gsass1.NTop` 0.3.21
+using a portable manifest for `ntop.exe`, command `ntop`, and dependency
+`Microsoft.VCRedist.2015+.x64`, without `ntop.conf`. Its manifest said architecture
+`neutral` although the hash-verified payload was PE32+ x86-64. That audit concerns
+NTop, not Wtop installation support. Wtop manifests must describe actual artifact
+architecture. Inspect the current installed record rather than guessing its
+location:
 
 ```powershell
 winget show --id gsass1.NTop --exact
@@ -138,62 +221,35 @@ winget list --id gsass1.NTop --exact
 winget --info
 ```
 
-Wtop's future package identifier is reserved in project planning only. Do not
-advertise a working `winget install` command until the package is published and
-its acquired bytes have passed qualification.
+## Ownership-aware removal
 
-## CLI download without WinGet
+For a direct copy, stop Wtop and remove the EXE and the specific companion files
+you placed there. Remove deliberately saved portable/user settings separately if
+you want to discard them. Do not recursively delete an arbitrary parent folder.
 
-A future release should document an explicit tag, exact profile/asset, digest and
-source revision. A modern PowerShell example can use `Invoke-WebRequest`,
-`Get-FileHash` and `Expand-Archive`; a plain EXE can use `curl.exe` plus a SHA256
-check. Download, inspect and verify before running. Do not make piping a remote
-script into an evaluator the installation contract. Old targets can receive
-verified files copied from another machine and need no modern TLS client.
+For an MSI-owned candidate, use Windows Installer. The candidate preserves user
+settings and unknown files/registry values; changed owned payloads are a reported
+maintenance conflict. Review and preserve changed files before resolving that
+conflict. For a WinGet-owned package, use that package's WinGet uninstall; Wtop
+must not remove a manager's files or shared PATH location itself. Ordinary Wtop
+execution has no installation registration to undo.
 
-Current use is **build from source** using [development](development.md), or
-inspect an explicitly labelled CI candidate. No placeholder GitHub release URL
-is presented as a working installer.
+User settings, migration originals, recovery copies and explicit telemetry logs
+remain deliberate user data. Review them separately, and preserve recovery
+copies until their contents are understood. Application removal cannot promise
+erasure of Windows' own event records, download history or security logs.
 
-## Per-user and machine installations
+## Primary references
 
-Future per-user setup places the application in the appropriate user programs
-location; machine setup uses the corresponding program-files directory. Resolve
-these with target-specific APIs. Do not copy application files into System32 or
-the Windows directory. An optional PATH entry is exact, deduplicated and owned;
-never replace the entire PATH value. Existing terminals may need to be reopened.
-
-Installed preferences/themes live outside the package root, with common defaults
-separate from user state. The planned `config`/`paths` inspection surface must
-report the effective locations and mode. The current candidate can explicitly
-save user preferences through the discovery policy above, but does not modify
-PATH, register an installation or determine which package manager owns the
-payload.
-
-## Complete, ownership-aware removal
-
-- Direct portable copy: stop the process and remove its EXE and explicitly chosen
-  portable settings. If the roaming fallback was explicitly saved, remove that
-  settings file separately if desired. Never recursively delete an arbitrary
-  parent folder.
-- WinGet-owned copy: use WinGet's uninstall operation. It removes owned payload,
-  aliases and registration; it does not understand Wtop preferences as a domain.
-- MSI-owned copy: route to MSI. A self-installer must not remove MSI-owned files.
-- Future Wtop-managed copy: remove only recorded owned paths/entries; preserve
-  changed or foreign files and report them.
-
-Application settings require an explicit remove-settings choice. WinGet may
-remove tracked ZIP directories recursively, and portable purge can remove an
-installer-created directory including adjacent data. This is why managed-mode
-preferences must be outside the payload directory. Uninstall must not remove a
-shared PATH directory or a foreign registration. Removing Wtop-owned artifacts
-cannot promise erasure of Windows' own logs, download history or security records.
-
-## Sources checked 2026-11-16
+The following external references support platform behavior, not qualification
+of Wtop's candidates. The inherited NTop/WinGet audit above is dated 2026-11-16;
+MSI candidate implementation references were checked on 2026-11-17 in the
+[packaging notes](../packaging/README.md).
 
 - [WinGet documentation](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
-- [Portable roots and settings](https://learn.microsoft.com/en-us/windows/package-manager/winget/settings)
 - [NTop manifest](https://github.com/microsoft/winget-pkgs/blob/master/manifests/g/gsass1/NTop/0.3.21/gsass1.NTop.installer.yaml)
-- [WinGet stable portable installer](https://github.com/microsoft/winget-cli/blob/v1.29.380/src/AppInstallerCLICore/PortableInstaller.cpp)
-- [WinGet stable portable registration](https://github.com/microsoft/winget-cli/blob/v1.29.380/src/AppInstallerCommonCore/PortableARPEntry.cpp)
+- [WinGet portable installer](https://github.com/microsoft/winget-cli/blob/v1.29.380/src/AppInstallerCLICore/PortableInstaller.cpp)
+- [Known folder roles](https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid)
+- [ReplaceFileW, including partial-failure states](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew)
+- [MSI single-package authoring](https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring)
 - [MSI ProductVersion](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)

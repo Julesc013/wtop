@@ -13,48 +13,35 @@ assigned without measured capacity and evidence.
 
 ## Current position
 
-The NTop-derived application and helper files now live under `source/`, with root
-CMake, license, version, repository instructions and contributor navigation.
-The initial foundation provides explicit TUI/snapshot modes, early information
-commands, truthful field states, lifetime-aware process actions, and modern
-x86/x64/ARM64 build candidates. Narrow native CLI results are recorded in
-[bootstrap verification](docs/bootstrap-verification.md).
+The application is **0.4.0-dev.1**, developed on canonical `master`. Application,
+helper and inherited configuration/build files remain under `source/`; root CMake
+is the build entrypoint. GPL history and the fixed NTop baseline remain intact.
 
-The current presentation increment adopts htop-style controls and color roles by
-default, optional vi/vim and Emacs maps, a default-visible last-row
-function bar, graceful mouse input, named views, and explicit configuration saving.
-Its [native observations](docs/presentation-verification.md) include x86/x64
-console interaction and settings checks on Windows Server 2025.
-Fully contextual overlay bar labels remain unfinished. Its implementation and
-tests must be assessed independently of the earlier bootstrap. A work unit can contain useful candidate code while its broader
-acceptance remains open; contributors must inspect that code before extending it.
+The eight requested implementation streams now have candidate code: measurement
+and action modules, timestamps/freshness, contextual htop-style presentation,
+version-2 settings/store transactions, query/inspect/log and typed system output,
+isolated optional providers, exact-payload packaging and historical probes.
+See the [current implementation record](docs/implementation-verification-2026-11-17.md)
+for boundaries, actual checks and remaining failures. The earlier
+[audit](docs/wtop-release-readiness-2026-11-17.md) and
+[design](docs/implementation-plan-2026-11-17.md) retain their pinned context.
 
-Historical ports, managed installation, broad query/inspection/logging, additional
-hardware providers, full htop parity and GUI support remain separate work.
-
-The [17 November source/fork audit](docs/ntop-fork-audit-2026-11-17.md) and
-[release-readiness assessment](docs/wtop-release-readiness-2026-11-17.md) identify
-specific remaining defects and gaps. Correct system-commit/CPU-sample semantics,
-preserve bulk outcomes and expose stale samples before adding optional providers.
-The visible function bar exists, but continuous live status and contextual labels
-are incomplete. Passing native smoke tests do not close those findings.
-
-The [implementation design](docs/implementation-plan-2026-11-17.md) translates
-these findings into reuse boundaries, compatibility decisions, proposed tests and
-reviewable increments mapped to the existing work catalog. It is a design
-proposal; its interfaces and recommended schema migrations are not implemented
-features or a second work-status authority.
+This is implementation progress, not a stable release or a claim that every
+formal acceptance case has passed. Native console fixtures, current CI-host
+execution, ARM64 compilation, scripted DOS instruction tests and historical
+OS execution are distinct evidence. MSI wrappers are explicitly unqualified and
+release promotion is blocked. WinGet publication and the native GUI are absent.
 
 ## Named release milestones
 
 | Milestone | Intended outcome | Evidence boundary |
 | --- | --- | --- |
 | **0.4.0** — first Wtop release | Qualified modern Windows TUI, explicit settings, bounded CLI snapshots and requested portable/per-user/system delivery ownership | Correct known metric/action/lifecycle gaps; qualify every advertised OS/CPU/host and installation channel; historical targets remain explicitly pending |
-| **Subsequent 0.x** | Rich process inspection, per-core providers, broad query/logging, configuration/CLI compatibility and historical backend slices | Promote each implemented capability independently; preserve source, fixture and runtime evidence |
+| **Subsequent 0.x** | Extend and qualify the implemented query/inspection/logging/providers, complete compatibility and historical backend slices | Promote each implemented capability independently; preserve source, fixture and runtime evidence |
 | **1.0.0** — agreed TUI/CLI product complete | Stable public CLI/output/settings contracts and closure of the agreed capability/platform scope | An experimental or unimplemented historical port does not become completed scope by relabeling it; a narrower 1.0 would require an explicit scope decision |
 
-The application is still `0.1.0-dev.2`; **0.4.0 is a planned product version**,
-following NTop 0.3.x. Future candidate names can use `0.4.0-dev.N` and
+The current application is `0.4.0-dev.1`; **stable 0.4.0 remains a release goal**,
+following NTop 0.3.x. Candidate names use `0.4.0-dev.N` and
 `0.4.0-rc.N`, with stable `0.4.0`. The version number is independent of Actions
 run numbers. `0.4.0-stable.N` would still be a SemVer prerelease and is not the
 recommended stable naming scheme. The [release contract](spec/development/release.md)

@@ -67,9 +67,9 @@ are mode aware and must not steal text editing or accidentally trigger actions.
 Function keys and the help screen provide a common recovery path.
 
 The bottom row is a function/control bar, shown by default. Its displayed actions
-and click regions derive from the same command context. The current candidate
-retains common F1–F10 navigation cells across panels; fully contextual overlay
-labels remain an open portion of this requirement. Live mode, sort, filter,
+and click regions derive from the same command context. The current candidate resolves function keys, labels, enabled reasons and mouse
+buttons from one context policy for process/help/setup/edit/sort/confirmation/results
+views. Native event-ordering and console behavior still need exact-host evidence. Live mode, sort, filter,
 selection, collection/error and unsaved-settings status belongs in the adjacent
 status area when space permits. Hiding the bar is a saved preference and gives
 its row back to the process view; errors and active prompts remain visible.
@@ -96,9 +96,21 @@ Header rows, their order, process columns/order, sort direction, tree view and
 named tabs are configuration data. The candidate starts with Main and I/O views;
 all exposed views must be actual projections over the same process observations.
 Saved columns use stable IDs rather than screen positions. The setup interface
-must disclose which setting is global and which belongs to the current tab.
+discloses which setting is global and which belongs to the current tab. Its Tabs
+page implements bounded create, duplicate, rename, confirmed delete and reorder;
+stable numeric IDs retain unknown scoped fields through migration and reordering.
 Arbitrary graphical panels, plugin tabs, affinity, thread/detail views and full
 htop parity remain separate work until implemented and qualified.
+
+## Current renderer boundary
+
+The current renderer projects each non-ASCII Unicode scalar to one ASCII `?`
+cell, escapes control input and reports substitution. Decoding and clipping never
+split a surrogate/scalar; model/configuration/JSON retain their raw Unicode text.
+This is a qualified conservative algorithm, not full Unicode terminal-cell support.
+Changed-cell rendering, true wide/combining/emoji layout and accessibility across
+console hosts remain work. The minimum layout is 40 by 10 cells; below it the
+resize/quit fallback replaces unsafe controls.
 
 ## Requirements and acceptance
 

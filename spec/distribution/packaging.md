@@ -13,9 +13,9 @@ sources: [{"id": "user", "resource": "../references/sources.json#user"}, {"id": 
 # Artifacts, installation and update ownership
 
 The first delivery is a standalone native program and an optional ZIP containing
-that program, license/notices, example configuration and checksums. Setup, MSI,
-package-manager manifests and self-install actions are planned work, not implied
-by compilation. One payload per qualified target profile is the application
+that program, license/notices, example configuration and checksums. Exact-byte portable packaging and a modern MSI wrapper are candidate
+implementations under `packaging/`; neither is a qualified release. Native EXE
+setup, package-manager publication and self-install actions remain planned. One payload per qualified target profile is the application
 identity. Portable/per-user/system modes do not require separate implementations.
 
 Installed and portable distributions reuse the same application bytes for a
@@ -31,7 +31,7 @@ name is wtop.exe or the profile's explicitly justified executable form. VERSION
 uses X.Y.Z for stable releases and X.Y.Z-dev.N or X.Y.Z-rc.N for prereleases.
 Build metadata and source revision remain separately recorded. A stable.N label,
 if requested, is channel metadata; it must not falsely imply a semantic-version
-stable release. The initial development version is 0.1.0-dev.1.
+stable release. The current development version is 0.4.0-dev.1.
 
 An installation receipt records product/version/profile, scope, exact executable
 hash, owned files, created shortcuts, registry values and any optional PATH entry.
@@ -65,6 +65,22 @@ No publication, tag or package-manager availability is claimed by this spec.
 [^winget]: Modern WinGet platform floor.
 [^msi-legacy]: Versioned historical Installer requirements.
 [^winpe]: WinPE excludes ordinary MSI installation.
+
+## Current delivery boundary
+
+`tools/inspect_pe.py` records final machine/subsystem/import/resource data.
+`tools/package_candidate.py` uses unchanged payload bytes in the EXE and ZIP,
+retains provenance/digests and independently verifies ZIP contents. Candidate MSI
+builds use pinned WiX 4.0.6 and the same payload; MSI guards refuse modified or
+foreign expected files and ownership records. Its preflight is not an atomic
+compare-and-replace/delete operation. Updates are refused, and candidate promotion
+is deliberately blocked until path races, interruption/rollback, target/token
+coverage and release-source/signature/channel gates close.
+
+The MSI presently makes no PATH changes and owns no user preferences. User and
+machine scope use explicit HKCU/HKLM profile registration; portable mode changes
+no registry. See [packaging implementation](../../packaging/README.md) for exact
+commands and limitations. Broad intended ownership requirements below remain open.
 
 ## Requirements and acceptance
 

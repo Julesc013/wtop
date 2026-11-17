@@ -14,6 +14,8 @@
 #define WTOP_FILTER_BYTES 128
 #define WTOP_CONFIG_MAX_BYTES 32768UL
 #define WTOP_CONFIG_LINE_BYTES 1024
+#define WTOP_CONFIG_VERSION 2
+#define WTOP_TAB_ID_MAX 4294967295UL
 
 typedef enum wtop_keymap {
     WTOP_KEYMAP_HTOP, WTOP_KEYMAP_VI, WTOP_KEYMAP_EMACS
@@ -43,6 +45,7 @@ typedef enum wtop_column {
 } wtop_column;
 
 typedef struct wtop_tab {
+    unsigned long id; /* Persistent positive 32-bit identity; independent of index/name. */
     char name[WTOP_TAB_NAME_BYTES];
     char filter[WTOP_FILTER_BYTES];
     int visible;
@@ -66,6 +69,7 @@ typedef struct wtop_settings {
     wtop_tab tabs[WTOP_MAX_TABS];
     int tab_count;
     int active_tab;
+    unsigned long next_tab_id; /* Zero means the identity space is exhausted. */
 } wtop_settings;
 
 /* Original bytes are owned by this document; initialize to {0} before reading.
@@ -73,6 +77,9 @@ typedef struct wtop_settings {
 typedef struct wtop_config_document {
     char *original;
     size_t length;
+    int schema_version;
+    int tab_count;
+    unsigned long tab_ids[WTOP_MAX_TABS];
 } wtop_config_document;
 
 void wtop_settings_defaults(wtop_settings *settings);
@@ -95,6 +102,27 @@ int wtop_settings_read(FILE *input, wtop_settings *settings,
                        const char **error);
 int wtop_settings_write(FILE *output, const wtop_settings *settings,
                         const wtop_config_document *document, const char **error);
+/* Allocate a complete bounded UTF-8 candidate before any filesystem mutation.
+   The caller owns *bytes on success; outputs are unchanged on failure. */
+int wtop_settings_serialize(const wtop_settings *settings,
+                            const wtop_config_document *document,
+                            char **bytes, size_t *length, const char **error);
+/* Independent owned copy for export without rebasing an active session. */
+int wtop_config_document_clone(wtop_config_document *destination,
+                                const wtop_config_document *source, const char **error);
 void wtop_config_document_free(wtop_config_document *document);
+
+/* Transactional view edits: failure leaves settings byte-for-byte unchanged.
+   Existing IDs move with views; insert/duplicate consume an ID without reuse.
+   Duplicate copies recognized settings. Unknown extension records stay associated
+   with their original ID in the document and are never silently reassigned. */
+int wtop_settings_tab_find(const wtop_settings *settings, unsigned long id);
+int wtop_settings_tab_insert(wtop_settings *settings, int index, const char *name, const char **error);
+int wtop_settings_tab_duplicate(wtop_settings *settings, int source, int index,
+                                 const char *name, const char **error);
+int wtop_settings_tab_rename(wtop_settings *settings, int index, const char *name, const char **error);
+int wtop_settings_tab_move(wtop_settings *settings, int from, int to, const char **error);
+int wtop_settings_tab_delete(wtop_settings *settings, int index, const char **error);
+int wtop_settings_tab_set_visible(wtop_settings *settings, int index, int visible, const char **error);
 
 #endif

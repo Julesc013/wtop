@@ -28,6 +28,7 @@ jobs:
       - name: Validate specification and tooling
         run: |
           python tools/specctl.py validate
+          python tools/command_help.py --check
           python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Build portable C90 core with sanitizers
         run: |
@@ -37,7 +38,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -73,35 +74,56 @@ jobs:
           name: wtop-native-checks-${{ matrix.arch }}-${{ github.sha }}
           path: |
             out/windows/native-tui-observations.json
+            out/windows/native-provider-observations.json
             out/windows/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 14
-      - name: Record candidate identity
+      - name: Inspect and package the exact candidate payload
         shell: pwsh
         run: |
-          $identity = [ordered]@{
-            source = '${{ github.sha }}'
-            version = (Get-Content VERSION -Raw).Trim()
-            architecture = '${{ matrix.arch }}'
-            runner = '${{ runner.os }}'
-            runnerImage = $env:ImageVersion
-            kernel = [Environment]::OSVersion.VersionString
-            cliRuntimeTestedHere = ('${{ matrix.arch }}' -ne 'ARM64')
-            nativeConsoleInteractionTestedHere = ('${{ matrix.arch }}' -ne 'ARM64')
-            historicalOsQualified = $false
-            tuiHumanAccepted = $false
-            releaseSupported = $false
-            sha256 = (Get-FileHash out/windows/Release/wtop.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $profile = @{ Win32 = 'win-nt-x86'; x64 = 'win-nt-x64'; ARM64 = 'win-nt-arm64' }['${{ matrix.arch }}']
+          python packaging/record_build.py out/windows out/build-provenance.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py create --exe out/windows/Release/wtop.exe --output out/candidate --profile $profile --provenance out/build-provenance.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py verify out/candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build pinned modern MSI candidate
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        env:
+          DOTNET_ROLL_FORWARD: Major
+        run: |
+          if ([int]$env:GITHUB_RUN_NUMBER -lt 1 -or [int]$env:GITHUB_RUN_NUMBER -gt 65534) {
+            throw 'Candidate MSI version range exhausted; assign a reviewed mapping instead of truncating.'
           }
-          $identity | ConvertTo-Json | Set-Content out/windows/Release/candidate.json -Encoding utf8
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          dotnet tool install wix --tool-path out/wix --version 4.0.6
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe --msi-version "0.0.$env:GITHUB_RUN_NUMBER"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify direct MSI ownership and refusal fixtures
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          python tests/test_native_install.py out/candidate --disposable-host --machine
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify candidate cannot be promoted as a supported release
+        shell: pwsh
+        run: |
+          python tools/package_candidate.py verify out/candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py promote out/candidate
+          if ($LASTEXITCODE -ne 2) { throw 'Unqualified candidate unexpectedly passed promotion.' }
+          exit 0
+      - name: Retain exact candidate bytes and installer observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wtop-${{ matrix.arch }}-candidate-${{ github.sha }}
           path: |
-            out/windows/Release/wtop.exe
-            out/windows/Release/candidate.json
-            LICENSE
-          if-no-files-found: error
+            out/candidate/**
+            out/build-provenance.json
+          if-no-files-found: warn
           retention-days: 14
 
 # Candidates never create a tag or release. The inherited workflow published a

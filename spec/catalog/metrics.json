@@ -16,13 +16,13 @@
       "id": "process.cpu.one_core_percent",
       "unit": "percent_of_one_logical_cpu",
       "definition": "100 * delta(kernel_time + user_time) / monotonic_elapsed; may exceed 100",
-      "status": "planned"
+      "status": "candidate"
     },
     {
       "id": "process.cpu.machine_percent",
       "unit": "percent_of_declared_active_capacity",
       "definition": "one_core_percent divided by declared active logical capacity; topology changes reset the baseline",
-      "status": "planned"
+      "status": "candidate"
     },
     {
       "id": "process.memory.working_set_bytes",
@@ -51,13 +51,55 @@
     {
       "id": "host.cpu.accounted_busy_percent",
       "unit": "percent_of_accounted_time",
-      "definition": "sum(busy deltas) / sum(total accounted deltas) * 100, under a named provider definition",
-      "status": "planned"
+      "definition": "GetSystemTimes delta(kernel + user - idle) / delta(kernel + user) * 100; kernel includes idle; provider scope is the caller primary group on machines above 64 logical processors",
+      "status": "candidate"
     },
     {
       "id": "host.memory.available_bytes",
       "unit": "bytes",
       "definition": "Available physical memory under the native provider's documented accounting",
+      "status": "candidate"
+    },
+    {
+      "id": "host.memory.total_bytes",
+      "unit": "bytes",
+      "definition": "GlobalMemoryStatusEx total physical memory",
+      "status": "candidate"
+    },
+    {
+      "id": "host.memory.commit_bytes",
+      "unit": "bytes",
+      "definition": "GetPerformanceInfo CommitTotal pages multiplied by PageSize with checked exact arithmetic",
+      "status": "candidate"
+    },
+    {
+      "id": "host.memory.commit_limit_bytes",
+      "unit": "bytes",
+      "definition": "GetPerformanceInfo CommitLimit pages multiplied by PageSize; not page-file residency or size",
+      "status": "candidate"
+    },
+    {
+      "id": "host.uptime_ms",
+      "unit": "milliseconds",
+      "definition": "GetTickCount64 elapsed milliseconds reported by this native host",
+      "status": "candidate"
+    },
+    {
+      "id": "process.age_ms",
+      "unit": "milliseconds",
+      "definition": "Wall clock at observation minus GetProcessTimes creation FILETIME; backward wall-clock discontinuity is not fabricated age",
+      "status": "candidate"
+    },
+    {
+      "id": "process.io.read_write_bytes_per_second",
+      "unit": "bytes/second",
+      "definition": "Checked delta(read transfer bytes + write transfer bytes) over measured elapsed milliseconds; not physical disk bandwidth",
+      "status": "candidate"
+    },
+    {
+      "id": "host.cpu.logical_busy_percent",
+      "unit": "percent_of_one_logical_cpu",
+      "definition": "Optional PDH Processor Information instance rate, with original group/instance labels and an explicitly marked legacy Processor fallback",
       "status": "candidate"
     }
   ]

@@ -22,6 +22,9 @@ class SpecificationValidationTests(unittest.TestCase):
         # Specs link to source/evidence explanations outside the bundle. Preserve
         # those real dependencies so each negative case isolates its own defect.
         shutil.copytree(REPO / "docs", self.root / "docs")
+        shutil.copytree(REPO / "packaging", self.root / "packaging")
+        shutil.copytree(REPO / "source", self.root / "source")
+        shutil.copytree(REPO / "tests", self.root / "tests", ignore=shutil.ignore_patterns("__pycache__"))
 
     def tearDown(self):
         self.temp.cleanup()

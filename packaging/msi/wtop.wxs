@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Candidate authoring for WiX 4.0.6. SPDX-License-Identifier: GPL-3.0-only -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Wtop candidate ($(var.Profile))" Manufacturer="Wtop contributors"
+           Version="$(var.MsiVersion)" ProductCode="$(var.ProductCode)"
+           UpgradeCode="$(var.UpgradeCode)" Language="1033" InstallerVersion="500"
+           Scope="perUserOrMachine" Compressed="yes">
+    <SummaryInformation Description="Unqualified Wtop delivery candidate" />
+    <MediaTemplate EmbedCab="yes" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Julesc013/wtop" />
+    <!-- Scope owns ALLUSERS=2 and MSIINSTALLPERUSER=1. Re-declaring either
+         Property, even without a Value, duplicates its WiX 4 symbol. -->
+    <Property Id="INSTALLFOLDER" Secure="yes" />
+    <Upgrade Id="$(var.UpgradeCode)">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes" Property="WTOP_RELATED" />
+    </Upgrade>
+    <Launch Condition="VersionNT &gt;= 601" Message="This candidate MSI mechanism requires Windows Installer 5.0 on Windows 7/Server 2008 R2 or newer. Application runtime qualification is separate." />
+    <Launch Condition="Installed OR NOT WTOP_RELATED" Message="Candidate automatic upgrades are blocked. Preserve user data and uninstall the existing unmodified candidate before installing this version." />
+    <StandardDirectory Id="$(var.ProgramFilesDirectory)">
+      <Directory Id="WtopDirectory" Name="Wtop">
+        <Directory Id="INSTALLFOLDER" Name="$(var.Profile)">
+          <Component Id="Payload" Guid="$(var.PayloadComponent)" Bitness="$(var.Bitness)">
+            <File Id="WtopExecutable" Source="$(var.PayloadExe)" Name="wtop.exe" />
+            <RegistryValue Root="HKMU" Key="Software\Wtop\Installations\$(var.Profile)" Name="InstallPath" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+            <RegistryValue Root="HKMU" Key="Software\Wtop\Installations\$(var.Profile)" Name="SchemaVersion" Value="1" Type="integer" />
+            <RegistryValue Root="HKMU" Key="Software\Wtop\Installations\$(var.Profile)" Name="Owner" Value="msi" Type="string" />
+            <RegistryValue Root="HKMU" Key="Software\Wtop\Installations\$(var.Profile)" Name="ProductCode" Value="[ProductCode]" Type="string" />
+            <RegistryValue Root="HKMU" Key="Software\Wtop\Installations\$(var.Profile)" Name="PayloadSha256" Value="$(var.PayloadHash)" Type="string" />
+          </Component>
+          <Component Id="License" Guid="$(var.LicenseComponent)" Bitness="$(var.Bitness)">
+            <File Id="LicenseFile" Source="$(var.LicenseFile)" Name="LICENSE" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Wtop" Title="Wtop candidate" Level="1">
+      <ComponentRef Id="Payload" />
+      <ComponentRef Id="License" />
+    </Feature>
+    <Binary Id="Guard" SourceFile="$(var.GuardDll)" />
+    <CustomAction Id="CheckOwnedPayload" BinaryRef="Guard" DllEntry="WtopGuard" Execute="immediate" Return="check" />
+    <InstallExecuteSequence>
+      <!-- Runs inside direct msiexec installation, removal and repair, not just
+           an optional download/bootstrap script. Preflight does not mutate. -->
+      <Custom Action="CheckOwnedPayload" Before="InstallInitialize" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

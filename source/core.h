@@ -4,15 +4,34 @@
 #include <stddef.h>
 #include <stdio.h>
 typedef enum wtop_action {
-    WTOP_RUN, WTOP_HELP, WTOP_VERSION, WTOP_CAPABILITIES, WTOP_WRITE_CONFIG
+    WTOP_RUN, WTOP_HELP, WTOP_VERSION, WTOP_CAPABILITIES, WTOP_WRITE_CONFIG,
+    WTOP_PATHS
 } wtop_action;
-typedef enum wtop_mode { WTOP_TUI, WTOP_SNAPSHOT, WTOP_GUI } wtop_mode;
+typedef enum wtop_mode {
+    WTOP_TUI, WTOP_SNAPSHOT, WTOP_GUI, WTOP_QUERY, WTOP_INSPECT, WTOP_LOG
+} wtop_mode;
+typedef enum wtop_query_target {
+    WTOP_QUERY_PROCESSES, WTOP_QUERY_SYSTEM, WTOP_QUERY_SERVICES
+} wtop_query_target;
 typedef struct wtop_options {
     wtop_action action;
     wtop_mode mode;
     int json;
     int monochrome;
     int no_config;
+    int cpu_machine; /* 0: one logical CPU is 100%; 1: declared machine capacity. */
+    int readonly; /* Common mutation/launch policy; not merely a hidden key. */
+    int portable;
+    const char *portable_root;
+    wtop_query_target query_target;
+    unsigned long inspect_pid;
+    int command_line; /* Sensitive command arguments are strictly opt-in. */
+    int services;
+    int per_core;
+    unsigned long sample_limit; /* Zero: no count bound; log requires a time/count bound. */
+    unsigned long duration_ms;
+    unsigned long max_bytes;
+    const char *output_path; /* Log destination; '-' is explicit stdout. */
     int interval_set;
     unsigned long interval_ms;
     const char *config_path;

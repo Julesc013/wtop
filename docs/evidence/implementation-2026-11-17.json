@@ -1,0 +1,895 @@
+{
+  "schema": "wtop.informative-observation/1",
+  "purpose": "Source-bound implementation observations; not an acceptance, support or release qualification record.",
+  "observed_date": "2026-11-17",
+  "product_version": "0.4.0-dev.1",
+  "source": {
+    "repository": "https://github.com/Julesc013/wtop",
+    "pr": 3,
+    "head": "8733cf278227e5cbefef9b8f078bc66c0c55e298",
+    "checkout": "d981abff2a03e07819def21d64432e30a5e74489",
+    "tree": "401dfa272dcea0c7b029683f872c84ad6a044320",
+    "head_and_checkout_trees_equal": true
+  },
+  "ci": {
+    "run_id": 44069558700,
+    "run_number": 27,
+    "url": "https://github.com/Julesc013/wtop/actions/runs/44069558700",
+    "conclusion": "success",
+    "completed_at": "2026-11-17T10:59:04Z",
+    "jobs": [
+      {
+        "id": 133991992805,
+        "name": "specification-and-core",
+        "conclusion": "success",
+        "python": {
+          "discovered": 69,
+          "passed": 36,
+          "skipped": 33
+        },
+        "portable_ctest": {
+          "passed": 7,
+          "sanitizers": [
+            "address",
+            "undefined"
+          ]
+        }
+      },
+      {
+        "id": 133991992997,
+        "name": "windows (Win32)",
+        "conclusion": "success",
+        "native_ctest_passed": 18,
+        "nested_cli_cases": 25,
+        "nested_provider_cases": 6,
+        "nested_tui_scenario_groups": 13,
+        "execution_host": "x64 Windows Server 2025"
+      },
+      {
+        "id": 133991992920,
+        "name": "windows (x64)",
+        "conclusion": "success",
+        "native_ctest_passed": 18,
+        "nested_cli_cases": 25,
+        "nested_provider_cases": 6,
+        "nested_tui_scenario_groups": 13,
+        "execution_host": "x64 Windows Server 2025",
+        "msi_scopes": [
+          "user",
+          "machine"
+        ]
+      },
+      {
+        "id": 133991992773,
+        "name": "windows (ARM64)",
+        "conclusion": "success",
+        "native_execution": false,
+        "scope": [
+          "compilation",
+          "PE inspection",
+          "candidate packaging and verification"
+        ]
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": 14322830085,
+      "name": "wtop-x64-candidate-d981abff2a03e07819def21d64432e30a5e74489",
+      "archive_sha256": "3e3576c5b061954e75196bebc36987ad55ae07bb02678ec42dae96a007716031",
+      "files": [
+        {
+          "path": "candidate/candidate.json",
+          "size": 16899,
+          "sha256": "2775013a8cde61166640953c5ee77d8d5a317bef484739283c9aa88f95e97234"
+        },
+        {
+          "path": "candidate/LICENSE",
+          "size": 35823,
+          "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809"
+        },
+        {
+          "path": "candidate/native-install-logs/machine-collision-refusal.log",
+          "size": 56024,
+          "sha256": "fa017231b1b1161dc114e6d50d345efab0d80bcbbf2c39dbd9f85d2d45a811ec"
+        },
+        {
+          "path": "candidate/native-install-logs/machine-install.log",
+          "size": 91630,
+          "sha256": "178f101209575295404500b0588a9eedfc35c997a33fc157cc93e0e326f634d3"
+        },
+        {
+          "path": "candidate/native-install-logs/machine-remove-refusal.log",
+          "size": 56380,
+          "sha256": "853c92435c0c3f656ea90d7561229c8775ea57017dc155ba80dbb519eec23b26"
+        },
+        {
+          "path": "candidate/native-install-logs/machine-remove.log",
+          "size": 80906,
+          "sha256": "4e6d9bec4672d36bdd0b9640566d1eeff9ca060573871c0f9993771b2dc16303"
+        },
+        {
+          "path": "candidate/native-install-logs/machine-repair-refusal.log",
+          "size": 56588,
+          "sha256": "cf050907fa97585ad6900e65095fade0514d5982c3563eb14805e137ced520cc"
+        },
+        {
+          "path": "candidate/native-install-logs/machine-upgrade-refusal.log",
+          "size": 40290,
+          "sha256": "9b22076cd0d7166a3a6294dc980b64b97b20ae804b6135158de023153535b595"
+        },
+        {
+          "path": "candidate/native-install-logs/user-collision-refusal.log",
+          "size": 56336,
+          "sha256": "0a3a901006ff761e3b9c812faee2ea9b831ee4c421dc07c98eadab9774cbb7ee"
+        },
+        {
+          "path": "candidate/native-install-logs/user-install.log",
+          "size": 93040,
+          "sha256": "b2fd3712153f5c55c5691c4019b1d4cc1383ab42178924222685cb42f553c46e"
+        },
+        {
+          "path": "candidate/native-install-logs/user-remove-refusal.log",
+          "size": 56648,
+          "sha256": "de38c9f7a31fb61d3e7dcafca8cf8b16bfd1605c5be9e869abaaa90f249ad52b"
+        },
+        {
+          "path": "candidate/native-install-logs/user-remove.log",
+          "size": 82036,
+          "sha256": "20416936eea0e247c786f43e9610200eb101224c6fe96db648d7c8298e6fcb3b"
+        },
+        {
+          "path": "candidate/native-install-logs/user-repair-refusal.log",
+          "size": 56854,
+          "sha256": "96a05b52c69531859df10a4f836d93f3ada302825631da187470a4c449cce91f"
+        },
+        {
+          "path": "candidate/native-install-logs/user-upgrade-refusal.log",
+          "size": 40354,
+          "sha256": "0d43e4122f0adcd1df8a3014e3b2cb7c9f4671ae3ba061b56e6c080a2d4f369d"
+        },
+        {
+          "path": "candidate/native-install-observations.json",
+          "size": 1374,
+          "sha256": "5dfc5eab0bf3cd70c4a9493ecd6704f2537305ffd150d484ffc72fbacf72f36e"
+        },
+        {
+          "path": "candidate/payload.json",
+          "size": 8116,
+          "sha256": "8dcc2fe8f70dbacdbfebc734bf28cc4ea0953fda8835d2c9f3f47c287168b855"
+        },
+        {
+          "path": "candidate/PORTABLE.txt",
+          "size": 727,
+          "sha256": "02074f4d73a28120252732c7a7a767d9249470ae68144ba6be4e840b58872a12"
+        },
+        {
+          "path": "candidate/SHA256SUMS",
+          "size": 371,
+          "sha256": "04ccdc5e9fedf4cfc33d673d4d542d7fac0dd8f2f9f6c37e2c553aa74c34ae00"
+        },
+        {
+          "path": "candidate/wtop-0.4.0-dev.1-win-nt-x64-candidate.msi",
+          "size": 319488,
+          "sha256": "f7ce6bf948bc923b34a21bb40c8af032363ba97a87ccb77647380e4d6f456225"
+        },
+        {
+          "path": "candidate/wtop-0.4.0-dev.1-win-nt-x64-candidate.wixpdb",
+          "size": 10228,
+          "sha256": "ffc2104d37fa11f559ccdbbb4d088426b87d699d9fd278ecd1df9fd23cb364af"
+        },
+        {
+          "path": "candidate/wtop.conf.example",
+          "size": 788,
+          "sha256": "6984fbf4c4f961162c5ee8a79bbc5e8174618f207c57ebd5abe017c534716f09"
+        },
+        {
+          "path": "candidate/wtop-0.4.0-dev.1-win-nt-x64-portable.zip",
+          "size": 196474,
+          "sha256": "403c598a478896f223cafd52db554ca7664853cf645e61515f04f5ef7b751dff"
+        },
+        {
+          "path": "candidate/wtop.exe",
+          "size": 355328,
+          "sha256": "29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61"
+        },
+        {
+          "path": "build-provenance.json",
+          "size": 1401,
+          "sha256": "153886e89f537ce3dee6ef133742bada632a2869f945aa265ac893bdde3ac3aa"
+        }
+      ],
+      "independent_candidate_verification": {
+        "command": [
+          "python",
+          "tools/package_candidate.py",
+          "verify",
+          "<downloaded-artifact>/candidate"
+        ],
+        "exit_code": 0,
+        "stdout": "Candidate bytes, ZIP identity and PE inventory verified; this is not release qualification."
+      },
+      "build_provenance": {
+        "compiler": {
+          "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
+          "CMAKE_C_COMPILER_ID": "MSVC",
+          "CMAKE_C_COMPILER_VERSION": "19.51.36260.0",
+          "CMAKE_C_COMPILER_ARCHITECTURE_ID": "x64"
+        },
+        "linker": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/link.exe",
+        "sdk": "UNVERIFIED; inspect CMake configure log",
+        "runtime": "MSVC MultiThreaded Release target property; inspect PE dependencies independently",
+        "flags": {
+          "CMAKE_C_FLAGS": "/DWIN32 /D_WINDOWS",
+          "CMAKE_C_FLAGS_DEBUG": "/Zi /Ob0 /Od /RTC1",
+          "CMAKE_C_FLAGS_MINSIZEREL": "/O1 /Ob1 /DNDEBUG",
+          "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+          "CMAKE_C_FLAGS_RELWITHDEBINFO": "/Zi /O2 /Ob1 /DNDEBUG"
+        },
+        "build_command": [
+          "cmake",
+          "--build",
+          "out\\windows",
+          "--config",
+          "Release",
+          "--parallel",
+          "2"
+        ],
+        "generator": "Visual Studio 18 2026",
+        "generated_compiler_description_sha256": "22bbdc698dbdef0ad8f467e96f86ed4c69990abe7e8144dda0e4501ca92c04fe",
+        "cmake_cache_sha256": "90ad0ba700a723428245623d8e6fba70bf522b2518b49745a7ad8542783a9f6c",
+        "host": {
+          "system": "Windows",
+          "release": "2025Server",
+          "version": "10.0.26100",
+          "machine": "AMD64",
+          "runner_image": "20261103.298.1"
+        }
+      },
+      "candidate_artifacts": [
+        {
+          "kind": "standalone",
+          "name": "wtop.exe",
+          "sha256": "29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61",
+          "size": 355328
+        },
+        {
+          "kind": "portable-zip",
+          "name": "wtop-0.4.0-dev.1-win-nt-x64-portable.zip",
+          "sha256": "403c598a478896f223cafd52db554ca7664853cf645e61515f04f5ef7b751dff",
+          "size": 196474
+        },
+        {
+          "kind": "msi",
+          "name": "wtop-0.4.0-dev.1-win-nt-x64-candidate.msi",
+          "sha256": "f7ce6bf948bc923b34a21bb40c8af032363ba97a87ccb77647380e4d6f456225",
+          "size": 319488
+        }
+      ],
+      "install_observations": {
+        "schema": "wtop.install-observations/1",
+        "kernel": 26100,
+        "token_elevated": true,
+        "scope_results": [
+          {
+            "scope": "user",
+            "passed": true,
+            "exact_payload_sha256": "29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61",
+            "install_directory": "C:\\Users\\runneradmin\\AppData\\Local\\Programs\\Wtop\\win-nt-x64",
+            "modified_repair_refused": true,
+            "modified_uninstall_refused": true,
+            "automatic_upgrade_refused": true,
+            "foreign_file_and_registry_value_preserved": true,
+            "user_data_preserved": true
+          },
+          {
+            "scope": "machine",
+            "passed": true,
+            "exact_payload_sha256": "29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61",
+            "install_directory": "C:\\Program Files\\Wtop\\win-nt-x64",
+            "modified_repair_refused": true,
+            "modified_uninstall_refused": true,
+            "automatic_upgrade_refused": true,
+            "foreign_file_and_registry_value_preserved": true,
+            "user_data_preserved": true
+          }
+        ],
+        "qualified": false,
+        "limits": [
+          "preflight-to-mutation race",
+          "standard-user UAC boundary when runner elevated",
+          "interrupted transaction/rollback",
+          "host matrix",
+          "automatic upgrade implementation"
+        ],
+        "payload_sha256": "29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61"
+      }
+    },
+    {
+      "id": 14322505512,
+      "name": "wtop-Win32-candidate-d981abff2a03e07819def21d64432e30a5e74489",
+      "archive_sha256": "30ca3865c221828bb43e767f1aa3c6d8249b4aa63779beab65cab2b46cfc5794",
+      "files": [
+        {
+          "path": "candidate/candidate.json",
+          "size": 9276,
+          "sha256": "f26b275228afca00ac09ac62a70cd064e1a0c9cc8ced70f2d837ba64af524f1c"
+        },
+        {
+          "path": "candidate/payload.json",
+          "size": 7987,
+          "sha256": "04a2f9b908983df7f4ed5921e759024876233d13d717d84b6ca422572cc1bc41"
+        },
+        {
+          "path": "candidate/LICENSE",
+          "size": 35823,
+          "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809"
+        },
+        {
+          "path": "candidate/PORTABLE.txt",
+          "size": 727,
+          "sha256": "02074f4d73a28120252732c7a7a767d9249470ae68144ba6be4e840b58872a12"
+        },
+        {
+          "path": "candidate/SHA256SUMS",
+          "size": 263,
+          "sha256": "4ffa05f37a8a942f8dbb4097f4ca6b7c5904f42e2e0834ab9df2722df44f1ad4"
+        },
+        {
+          "path": "candidate/wtop-0.4.0-dev.1-win-nt-x86-portable.zip",
+          "size": 175281,
+          "sha256": "1ad1aec47922682b20ce92b6c37f7b501b2d4f344b257289138ca989930be34f"
+        },
+        {
+          "path": "candidate/wtop.conf.example",
+          "size": 788,
+          "sha256": "6984fbf4c4f961162c5ee8a79bbc5e8174618f207c57ebd5abe017c534716f09"
+        },
+        {
+          "path": "candidate/wtop.exe",
+          "size": 305152,
+          "sha256": "f278fe3989c56f74e8a86a2ec1a5d9b789e765682ae0be1d2cf775d93a13daa7"
+        },
+        {
+          "path": "build-provenance.json",
+          "size": 1401,
+          "sha256": "4e8a0a90735706623a01d39c8faf4575fd08c3530e426b8e249426cca329ca60"
+        }
+      ],
+      "independent_candidate_verification": {
+        "command": [
+          "python",
+          "tools/package_candidate.py",
+          "verify",
+          "<downloaded-artifact>/candidate"
+        ],
+        "exit_code": 0,
+        "stdout": "Candidate bytes, ZIP identity and PE inventory verified; this is not release qualification."
+      },
+      "build_provenance": {
+        "compiler": {
+          "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x86/cl.exe",
+          "CMAKE_C_COMPILER_ID": "MSVC",
+          "CMAKE_C_COMPILER_VERSION": "19.51.36260.0",
+          "CMAKE_C_COMPILER_ARCHITECTURE_ID": "X86"
+        },
+        "linker": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x86/link.exe",
+        "sdk": "UNVERIFIED; inspect CMake configure log",
+        "runtime": "MSVC MultiThreaded Release target property; inspect PE dependencies independently",
+        "flags": {
+          "CMAKE_C_FLAGS": "/DWIN32 /D_WINDOWS",
+          "CMAKE_C_FLAGS_DEBUG": "/Zi /Ob0 /Od /RTC1",
+          "CMAKE_C_FLAGS_MINSIZEREL": "/O1 /Ob1 /DNDEBUG",
+          "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+          "CMAKE_C_FLAGS_RELWITHDEBINFO": "/Zi /O2 /Ob1 /DNDEBUG"
+        },
+        "build_command": [
+          "cmake",
+          "--build",
+          "out\\windows",
+          "--config",
+          "Release",
+          "--parallel",
+          "2"
+        ],
+        "generator": "Visual Studio 18 2026",
+        "generated_compiler_description_sha256": "36195aa86de91307d8f7c1dc84e3ee4ea91d5a785606f5f7d58fa253e311cce2",
+        "cmake_cache_sha256": "997b259b54a7f1d4ecf86b0b8c3e4497a902d01012e07e932ed654e29670bf89",
+        "host": {
+          "system": "Windows",
+          "release": "2025Server",
+          "version": "10.0.26100",
+          "machine": "AMD64",
+          "runner_image": "20261103.298.1"
+        }
+      },
+      "candidate_artifacts": [
+        {
+          "kind": "standalone",
+          "name": "wtop.exe",
+          "sha256": "f278fe3989c56f74e8a86a2ec1a5d9b789e765682ae0be1d2cf775d93a13daa7",
+          "size": 305152
+        },
+        {
+          "kind": "portable-zip",
+          "name": "wtop-0.4.0-dev.1-win-nt-x86-portable.zip",
+          "sha256": "1ad1aec47922682b20ce92b6c37f7b501b2d4f344b257289138ca989930be34f",
+          "size": 175281
+        }
+      ]
+    },
+    {
+      "id": 14322290916,
+      "name": "wtop-ARM64-candidate-d981abff2a03e07819def21d64432e30a5e74489",
+      "archive_sha256": "3763626611c6b73ca104941346129e96a03e0ca77145bfa5341b540dbd3f2221",
+      "files": [
+        {
+          "path": "candidate/payload.json",
+          "size": 8018,
+          "sha256": "039280921e479840464fd538a1fce5c2265edda49a6ca65b3337cf6ac00cdcb1"
+        },
+        {
+          "path": "candidate/candidate.json",
+          "size": 9311,
+          "sha256": "b9848b68b3d0fa3ea062ddc8b4e9a48b5996db194f27adda9d095cd8d7230e05"
+        },
+        {
+          "path": "candidate/PORTABLE.txt",
+          "size": 727,
+          "sha256": "02074f4d73a28120252732c7a7a767d9249470ae68144ba6be4e840b58872a12"
+        },
+        {
+          "path": "candidate/LICENSE",
+          "size": 35823,
+          "sha256": "230184f60bae2feaf244f10a8bac053c8ff33a183bcc365b4d8b876d2b7f4809"
+        },
+        {
+          "path": "candidate/SHA256SUMS",
+          "size": 265,
+          "sha256": "cd47ae86395bbf5b328f9620447c2490bbd7ba633bf45e891514d98eef0c1263"
+        },
+        {
+          "path": "candidate/wtop-0.4.0-dev.1-win-nt-arm64-portable.zip",
+          "size": 180588,
+          "sha256": "f615fc7c2d2f0397a1fa4d4e6b35ef075755cfe5100169554663e72526154545"
+        },
+        {
+          "path": "candidate/wtop.conf.example",
+          "size": 788,
+          "sha256": "6984fbf4c4f961162c5ee8a79bbc5e8174618f207c57ebd5abe017c534716f09"
+        },
+        {
+          "path": "candidate/wtop.exe",
+          "size": 358400,
+          "sha256": "6809bb996e23c57f544ab53fbc5468ae24eda782f7e6f737565968981d501b09"
+        },
+        {
+          "path": "build-provenance.json",
+          "size": 1407,
+          "sha256": "062a22aa68bbba23dccefaba9266d9454999d6d40e14c02d7a2975b674b4dc3d"
+        }
+      ],
+      "independent_candidate_verification": {
+        "command": [
+          "python",
+          "tools/package_candidate.py",
+          "verify",
+          "<downloaded-artifact>/candidate"
+        ],
+        "exit_code": 0,
+        "stdout": "Candidate bytes, ZIP identity and PE inventory verified; this is not release qualification."
+      },
+      "build_provenance": {
+        "compiler": {
+          "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/arm64/cl.exe",
+          "CMAKE_C_COMPILER_ID": "MSVC",
+          "CMAKE_C_COMPILER_VERSION": "19.51.36260.0",
+          "CMAKE_C_COMPILER_ARCHITECTURE_ID": "ARM64"
+        },
+        "linker": "C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/arm64/link.exe",
+        "sdk": "UNVERIFIED; inspect CMake configure log",
+        "runtime": "MSVC MultiThreaded Release target property; inspect PE dependencies independently",
+        "flags": {
+          "CMAKE_C_FLAGS": "/DWIN32 /D_WINDOWS",
+          "CMAKE_C_FLAGS_DEBUG": "/Zi /Ob0 /Od /RTC1",
+          "CMAKE_C_FLAGS_MINSIZEREL": "/O1 /Ob1 /DNDEBUG",
+          "CMAKE_C_FLAGS_RELEASE": "/O2 /Ob2 /DNDEBUG",
+          "CMAKE_C_FLAGS_RELWITHDEBINFO": "/Zi /O2 /Ob1 /DNDEBUG"
+        },
+        "build_command": [
+          "cmake",
+          "--build",
+          "out\\windows",
+          "--config",
+          "Release",
+          "--parallel",
+          "2"
+        ],
+        "generator": "Visual Studio 18 2026",
+        "generated_compiler_description_sha256": "a7dc1f1cbe9cc29b823cc522d6f35a0672703cd771d31c953efb82b75dbb8a46",
+        "cmake_cache_sha256": "679f4816a2510d62e4a72dcca983e6f230574e54375d54802bde94f5c2cb020e",
+        "host": {
+          "system": "Windows",
+          "release": "2025Server",
+          "version": "10.0.26100",
+          "machine": "AMD64",
+          "runner_image": "20261103.298.1"
+        }
+      },
+      "candidate_artifacts": [
+        {
+          "kind": "standalone",
+          "name": "wtop.exe",
+          "sha256": "6809bb996e23c57f544ab53fbc5468ae24eda782f7e6f737565968981d501b09",
+          "size": 358400
+        },
+        {
+          "kind": "portable-zip",
+          "name": "wtop-0.4.0-dev.1-win-nt-arm64-portable.zip",
+          "sha256": "f615fc7c2d2f0397a1fa4d4e6b35ef075755cfe5100169554663e72526154545",
+          "size": 180588
+        }
+      ]
+    },
+    {
+      "id": 14321777359,
+      "name": "wtop-native-checks-x64-d981abff2a03e07819def21d64432e30a5e74489",
+      "archive_sha256": "845bb05bfba917ec2c9afdad3770efd1165ecd6001f01643c1e929afdcb40420",
+      "files": [
+        {
+          "path": "native-tui-observations.json",
+          "size": 52563,
+          "sha256": "21f7798b4ee1d93b83761ada39e933671ffae59ef9a76fb75a58d5b6b65ae9af"
+        },
+        {
+          "path": "native-provider-observations.json",
+          "size": 2860,
+          "sha256": "16ef1797bc1a17ba76a55bcb08b4c62c4ab7e550c6aa015dafbf6a75488ba542"
+        },
+        {
+          "path": "Testing/Temporary/LastTest.log",
+          "size": 117502,
+          "sha256": "c589c41771b8d0126451e14d89ccfbbb8ef8cf33c1fa7d7d12a87b152253db30"
+        }
+      ]
+    },
+    {
+      "id": 14320559465,
+      "name": "wtop-native-checks-Win32-d981abff2a03e07819def21d64432e30a5e74489",
+      "archive_sha256": "69b7dc519a7fdbdf825c7132dc52e53526875a6a4f02f1bdd59c476c54f3089e",
+      "files": [
+        {
+          "path": "native-tui-observations.json",
+          "size": 52563,
+          "sha256": "8a3d857a42fb31270d166fc71c5ce89ac1090ce81f91b17d5608a3e885904d96"
+        },
+        {
+          "path": "native-provider-observations.json",
+          "size": 2860,
+          "sha256": "9c24f4d913d643e8ca6636136e02e7db9b22f40f2ec50b78fa9b9fb1e64fcb15"
+        },
+        {
+          "path": "Testing/Temporary/LastTest.log",
+          "size": 118004,
+          "sha256": "463c4c4334eb609d039cee05c14e7a8f40be28e63a73048adff133c509f22651"
+        }
+      ]
+    }
+  ],
+  "native_observations": [
+    {
+      "artifact_id": 14321777359,
+      "providers": {
+        "schema": 1,
+        "kind": "native-provider-observations",
+        "exe_sha256": "29e718870ce80ac1cb74ed38985c2eacc6b9885d53efaa2f882359dce3557a61",
+        "windows": [
+          10,
+          0,
+          26100,
+          2,
+          ""
+        ],
+        "observations": [
+          {
+            "test": "test_command_line_is_explicit_and_lifetime_bound",
+            "profile": "win-nt-x64",
+            "provider": "command_line",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 0,
+            "total_count": 0,
+            "started_ms": "229625",
+            "observed_ms": "229703",
+            "elapsed_ms": 0.0,
+            "acquisition_ms": 0.0,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": null
+          },
+          {
+            "test": "test_optional_per_core_work_does_not_age_the_process_snapshot",
+            "profile": "win-nt-x64",
+            "provider": "per_core",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 4,
+            "total_count": 4,
+            "started_ms": "229734",
+            "observed_ms": "231062",
+            "elapsed_ms": 1011.8618,
+            "acquisition_ms": 0.1272,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": "processor-information"
+          },
+          {
+            "test": "test_per_core_labels_are_observed_instances",
+            "profile": "win-nt-x64",
+            "provider": "per_core",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 4,
+            "total_count": 4,
+            "started_ms": "231203",
+            "observed_ms": "232531",
+            "elapsed_ms": 1010.9199,
+            "acquisition_ms": 0.1365,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": "processor-information"
+          },
+          {
+            "test": "test_service_inspection_keeps_target_identity",
+            "profile": "win-nt-x64",
+            "provider": "services",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 0,
+            "total_count": 0,
+            "started_ms": "232859",
+            "observed_ms": "232859",
+            "elapsed_ms": 0.0,
+            "acquisition_ms": 0.0,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": null
+          },
+          {
+            "test": "test_service_inventory_qualifies_each_pid_association",
+            "profile": "win-nt-x64",
+            "provider": "services",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 259,
+            "total_count": 259,
+            "started_ms": "233015",
+            "observed_ms": "233015",
+            "elapsed_ms": 0.0,
+            "acquisition_ms": 0.0,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": null
+          }
+        ],
+        "limitation": "Typed degradation checks can pass without a provider supplying data; inspect statuses. No target or release qualification is implied."
+      },
+      "tui": {
+        "checks": [
+          "default htop function bar and native mouse mode",
+          "mouse function action and keyboard overlays",
+          "held/repeated F9 and Enter never confirm; contextual help/cancel remain non-mutating",
+          "mouse actions cancel commands and preserve filter ownership across tabs",
+          "explicit save, unknown/comment preservation, reload and console restoration",
+          "external edits survive refused save and normal exit",
+          "vi navigation does not invoke htop k action",
+          "Emacs search/cancel and keyboard-only fallback",
+          "queued actions after quit are discarded before mutation",
+          "eight single Help clicks at 50 ms sampling each acknowledge and cancel the editor, without click retries",
+          "contextual Setup CRUD/reorder/save with stable IDs, keyboard/mouse labels, Unicode raw preservation and bounded ASCII display",
+          "readonly :exec/:kill/:save and function buttons retain per-target denial and leave all owned fixtures/settings unchanged",
+          "process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case"
+        ],
+        "human_visual_acceptance": false,
+        "result": "passed"
+      },
+      "ctest_entries": [
+        "portable_core",
+        "portable_settings",
+        "portable_ui",
+        "portable_text",
+        "portable_metrics",
+        "portable_actions",
+        "portable_legacy_probe",
+        "native_settings_store",
+        "native_providers",
+        "native_output",
+        "native_tree",
+        "cli_version",
+        "cli_capabilities",
+        "cli_gui_reserved",
+        "cli_snapshot",
+        "native_cli_behavior",
+        "native_provider_behavior",
+        "native_tui_interaction"
+      ],
+      "provider_handle_iterations": [
+        "native provider handles after iteration 0: expected=75, actual=75",
+        "native provider handles after iteration 1: expected=75, actual=75",
+        "native provider handles after iteration 2: expected=75, actual=75",
+        "native provider handles after iteration 3: expected=75, actual=75",
+        "native provider handles after iteration 4: expected=75, actual=75"
+      ]
+    },
+    {
+      "artifact_id": 14320559465,
+      "providers": {
+        "schema": 1,
+        "kind": "native-provider-observations",
+        "exe_sha256": "f278fe3989c56f74e8a86a2ec1a5d9b789e765682ae0be1d2cf775d93a13daa7",
+        "windows": [
+          10,
+          0,
+          26100,
+          2,
+          ""
+        ],
+        "observations": [
+          {
+            "test": "test_command_line_is_explicit_and_lifetime_bound",
+            "profile": "win-nt-x86",
+            "provider": "command_line",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 0,
+            "total_count": 0,
+            "started_ms": "257281",
+            "observed_ms": "257562",
+            "elapsed_ms": 0.0,
+            "acquisition_ms": 0.0,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": null
+          },
+          {
+            "test": "test_optional_per_core_work_does_not_age_the_process_snapshot",
+            "profile": "win-nt-x86",
+            "provider": "per_core",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 4,
+            "total_count": 4,
+            "started_ms": "257640",
+            "observed_ms": "259062",
+            "elapsed_ms": 1001.4039,
+            "acquisition_ms": 0.1494,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": "processor-information"
+          },
+          {
+            "test": "test_per_core_labels_are_observed_instances",
+            "profile": "win-nt-x86",
+            "provider": "per_core",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 4,
+            "total_count": 4,
+            "started_ms": "259203",
+            "observed_ms": "260609",
+            "elapsed_ms": 1002.1106,
+            "acquisition_ms": 0.1393,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": "processor-information"
+          },
+          {
+            "test": "test_service_inspection_keeps_target_identity",
+            "profile": "win-nt-x86",
+            "provider": "services",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 0,
+            "total_count": 0,
+            "started_ms": "260937",
+            "observed_ms": "260937",
+            "elapsed_ms": 0.0,
+            "acquisition_ms": 0.0,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": null
+          },
+          {
+            "test": "test_service_inventory_qualifies_each_pid_association",
+            "profile": "win-nt-x86",
+            "provider": "services",
+            "status": "valid",
+            "error_domain": 0,
+            "native_error": 0,
+            "count": 259,
+            "total_count": 259,
+            "started_ms": "261078",
+            "observed_ms": "261078",
+            "elapsed_ms": 0.0,
+            "acquisition_ms": 0.0,
+            "retirement_confirmed": true,
+            "response_received": true,
+            "scope": null
+          }
+        ],
+        "limitation": "Typed degradation checks can pass without a provider supplying data; inspect statuses. No target or release qualification is implied."
+      },
+      "tui": {
+        "checks": [
+          "default htop function bar and native mouse mode",
+          "mouse function action and keyboard overlays",
+          "held/repeated F9 and Enter never confirm; contextual help/cancel remain non-mutating",
+          "mouse actions cancel commands and preserve filter ownership across tabs",
+          "explicit save, unknown/comment preservation, reload and console restoration",
+          "external edits survive refused save and normal exit",
+          "vi navigation does not invoke htop k action",
+          "Emacs search/cancel and keyboard-only fallback",
+          "queued actions after quit are discarded before mutation",
+          "eight single Help clicks at 50 ms sampling each acknowledge and cancel the editor, without click retries",
+          "contextual Setup CRUD/reorder/save with stable IDs, keyboard/mouse labels, Unicode raw preservation and bounded ASCII display",
+          "readonly :exec/:kill/:save and function buttons retain per-target denial and leave all owned fixtures/settings unchanged",
+          "process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case"
+        ],
+        "human_visual_acceptance": false,
+        "result": "passed"
+      },
+      "ctest_entries": [
+        "portable_core",
+        "portable_settings",
+        "portable_ui",
+        "portable_text",
+        "portable_metrics",
+        "portable_actions",
+        "portable_legacy_probe",
+        "native_settings_store",
+        "native_providers",
+        "native_output",
+        "native_tree",
+        "cli_version",
+        "cli_capabilities",
+        "cli_gui_reserved",
+        "cli_snapshot",
+        "native_cli_behavior",
+        "native_provider_behavior",
+        "native_tui_interaction"
+      ],
+      "provider_handle_iterations": [
+        "native provider handles after iteration 0: expected=95, actual=95",
+        "native provider handles after iteration 1: expected=95, actual=95",
+        "native provider handles after iteration 2: expected=95, actual=95",
+        "native provider handles after iteration 3: expected=95, actual=95",
+        "native provider handles after iteration 4: expected=95, actual=95"
+      ]
+    }
+  ],
+  "qualification": {
+    "promoted": false,
+    "human_visual_acceptance": false,
+    "limits": [
+      "One Windows kernel/runner environment; no native ARM64 or historical guest coverage.",
+      "Provider counts do not establish validity of every per-core value or service identity.",
+      "Five exact handle-count provider iterations do not establish an unrestricted soak/leak guarantee.",
+      "No independent CPU-group/hotplug or performance/resource-envelope qualification.",
+      "Baseline native calls, console/filesystem work and output are not universally hard-deadline cancellable.",
+      "The conservative TUI rendering profile does not implement full Unicode grapheme width.",
+      "MSI preflight races, standard-user UAC, interrupted transactions/rollback, upgrades and host matrix remain open.",
+      "Exact Windows SDK version is not established by recorded provenance.",
+      "No reproducible-build, signing, stable-release, package-manager or acquired-release qualification.",
+      "Historical probes and scripted interrupt tests are not full monitors or guest OS execution."
+    ]
+  }
+}

@@ -31,6 +31,7 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent);
 unsigned long ViInputCursor(void);
 void ViExecInput(void);
 void ViEnableInput(TCHAR InitialKey);
+int ViSetInputText(TCHAR InitialKey, const TCHAR *Text);
 void ViDisableInput(void);
 void SetViError(TCHAR *Fmt, ...);
 

@@ -1,5 +1,6 @@
 /* Portable UI contracts. SPDX-License-Identifier: GPL-3.0-only */
 #include "ui.h"
+#include "text.h"
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
@@ -111,9 +112,148 @@ static void metric_units(void)
     assert(wtop_ui_format_age(31557600000.0 * 10000, value, sizeof(value)) && !strcmp(value, ">9999y"));
 }
 
+
+static void contexts(void)
+{
+    static const wtop_ui_action setup_actions[10] = {
+        WTOP_UI_HELP, WTOP_UI_SETUP_NEXT_PAGE, WTOP_UI_TAB_NEW,
+        WTOP_UI_TAB_DUPLICATE, WTOP_UI_TAB_RENAME, WTOP_UI_TAB_DELETE,
+        WTOP_UI_TAB_MOVE_LEFT, WTOP_UI_TAB_MOVE_RIGHT, WTOP_UI_SAVE, WTOP_UI_QUIT
+    };
+    wtop_ui_context_options options;
+    wtop_ui_binding binding;
+    int map, slot, context;
+    wtop_ui_context_defaults(&options, WTOP_CONTEXT_PROCESS);
+    options.has_selection = options.identity_known = options.kill_supported = 1;
+    options.priority_supported = options.save_available = 1;
+    options.can_add_tab = options.can_delete_tab = 1;
+    options.can_move_left = options.can_move_right = options.setup_tabs = 1;
+    for (map=WTOP_KEYMAP_HTOP; map<=WTOP_KEYMAP_EMACS; ++map) {
+        for (context=WTOP_CONTEXT_PROCESS; context<=WTOP_CONTEXT_RESULTS; ++context) {
+            options.context = (wtop_ui_context)context;
+            for (slot=0; slot<10; ++slot) {
+                wtop_ui_action key;
+                wtop_ui_resolve_function(&options, slot, &binding);
+                key = wtop_ui_context_key_action(&options, map, WTOP_KEY_F1+slot, 0);
+                assert(key == (binding.enabled ? binding.action : WTOP_UI_NONE));
+                if (binding.enabled) assert(binding.label[0] && binding.compact_label[0]);
+            }
+            assert(wtop_ui_context_key_action(&options, map, WTOP_KEY_F1, 0) == WTOP_UI_HELP);
+            assert(wtop_ui_context_key_action(&options, map, WTOP_KEY_F10, 0) == WTOP_UI_QUIT);
+            assert(wtop_ui_context_key_action(&options, map, 27, 0) == WTOP_UI_CANCEL);
+        }
+    }
+    options.context = WTOP_CONTEXT_SETUP;
+    for (slot=0; slot<10; ++slot) {
+        wtop_ui_resolve_function(&options, slot, &binding);
+        assert(binding.enabled && binding.action == setup_actions[slot]);
+    }
+    options.setup_tabs = 0;
+    wtop_ui_resolve_function(&options, 2, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_WRONG_CONTEXT);
+    wtop_ui_resolve_function(&options, 6, &binding);
+    assert(binding.enabled && binding.action == WTOP_UI_ADJUST_DOWN);
+    options.context = WTOP_CONTEXT_CONFIRM;
+    for (slot=0; slot<40; ++slot)
+        assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, WTOP_KEY_F9, 0) == WTOP_UI_NONE);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, '\r', 0) == WTOP_UI_NONE);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'y', 0) == WTOP_UI_CONFIRM);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_VI, 'Y', WTOP_MOD_SHIFT) == WTOP_UI_CONFIRM);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'y', WTOP_MOD_CTRL) == WTOP_UI_NONE);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'n', 0) == WTOP_UI_CANCEL);
+    wtop_ui_resolve_action(&options, WTOP_UI_SAVE, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_WRONG_CONTEXT);
+    options.context = WTOP_CONTEXT_EDITOR;
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'q', 0) == WTOP_UI_NONE);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, '\r', 0) == WTOP_UI_ACCEPT);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_EMACS, 7, WTOP_MOD_CTRL) == WTOP_UI_CANCEL);
+}
+
+static void availability(void)
+{
+    wtop_ui_context_options options;
+    wtop_ui_binding binding;
+    wtop_ui_context_defaults(&options, WTOP_CONTEXT_PROCESS);
+    options.readonly = 1;
+    wtop_ui_resolve_function(&options, 8, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_READONLY);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'k', 0) == WTOP_UI_NONE);
+    options.readonly = 0;
+    wtop_ui_resolve_function(&options, 8, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_NO_SELECTION);
+    options.has_selection = 1;
+    wtop_ui_resolve_function(&options, 8, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_NO_IDENTITY);
+    options.identity_known = 1;
+    wtop_ui_resolve_function(&options, 8, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_UNSUPPORTED);
+    options.kill_supported = 1;
+    wtop_ui_resolve_function(&options, 8, &binding);
+    assert(binding.enabled && !strcmp(binding.label, "Kill"));
+    options.context = WTOP_CONTEXT_SETUP;
+    options.setup_tabs = 1;
+    wtop_ui_resolve_function(&options, 2, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_CAPACITY);
+    wtop_ui_resolve_function(&options, 5, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_LAST_VIEW);
+    wtop_ui_resolve_function(&options, 6, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_ORDER_BOUNDARY);
+    wtop_ui_resolve_function(&options, 8, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_NO_SAVE_DESTINATION);
+    wtop_ui_resolve_function(&options, -1, &binding);
+    assert(!binding.enabled && binding.action == WTOP_UI_NONE);
+    wtop_ui_resolve_action(NULL, WTOP_UI_KILL, &binding);
+    assert(!binding.enabled);
+}
+
+static void live_status(void)
+{
+    wtop_ui_status status;
+    char out[256], small[5];
+    unsigned flags;
+    size_t n;
+    memset(&status, 0, sizeof(status));
+    status.sample_available = 1;
+    status.age_ms = 2500;
+    status.stale = 1;
+    status.view = "Main";
+    status.filter = "worker";
+    status.sort = "CPU%";
+    status.descending = 1;
+    status.dirty = 1;
+    status.selected_rows = 3; status.observed_rows = 400;
+    n = wtop_ui_status_format(&status, 120, out, sizeof(out), &flags);
+    assert(!strcmp(out, "STALE age 2s view Main filter worker sort CPU% v *unsaved* rows 3/400"));
+    assert(n == strlen(out) && !flags);
+    status.prompt = "Denied: cannot signal";
+    wtop_ui_status_format(&status, 80, out, sizeof(out), &flags);
+    assert(!strcmp(out, status.prompt)); /* Prompt displaces lower-priority state. */
+    wtop_ui_status_format(&status, 8, out, sizeof(out), &flags);
+    assert(!strcmp(out, "Denied:~") && (flags & WTOP_TEXT_CLIPPED));
+    status.prompt = "bad\033[31m";
+    wtop_ui_status_format(&status, 80, out, sizeof(out), &flags);
+    assert(!strcmp(out, "bad?[31m"));
+    assert(flags & WTOP_TEXT_CONTROL);
+    status.prompt = NULL;
+    n = wtop_ui_status_format(&status, 5, out, sizeof(out), &flags);
+    assert(n == 5 && !strcmp(out, "STALE"));
+    assert(flags & WTOP_TEXT_CLIPPED);
+    wtop_ui_status_format(&status, 4, out, sizeof(out), &flags);
+    assert(out[0] == '!');
+    status.sample_available = 0; status.stale = 0;
+    wtop_ui_status_format(&status, 2, out, sizeof(out), &flags);
+    assert(!strcmp(out, "?"));
+    memset(small, '#', sizeof(small));
+    n = wtop_ui_status_format(&status, INT_MAX, small, 4, &flags);
+    assert(n < 4 && small[n] == 0 && small[4] == '#');
+    assert(wtop_ui_status_format(&status, -1, out, sizeof(out), &flags) == 0 && !out[0]);
+    assert(wtop_ui_status_format(&status, 80, NULL, 0, &flags) == 0);
+}
+
 int main(void)
 {
     keymaps(); action_bar(); columns(); metric_units();
+    contexts(); availability(); live_status();
     puts("portable UI contracts passed");
     return 0;
 }
