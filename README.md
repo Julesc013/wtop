@@ -30,6 +30,10 @@ pinned source revisions. They are not descriptions of this newer implementation.
 
 ## Start here
 
+- [Portable beta notes](docs/beta-release-notes.md), [tester guide](docs/beta-testing.md),
+  [exact packaging](docs/beta-packaging.md), and [draft/publication gates](docs/beta-publication.md).
+- [Privacy-aware issue templates](.github/ISSUE_TEMPLATE/bug.yml) and [security reporting](SECURITY.md).
+
 - [TODO](TODO.md): practical closure tasks and remaining risks, linked to work IDs.
 - [ROADMAP](ROADMAP.md): implementation sequence, dependencies and completion gates.
 - [Specification entry point](spec/START-HERE.md) and [OKF index](spec/index.md).

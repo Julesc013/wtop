@@ -50,3 +50,15 @@ Use six reviewable commits with focused tests, then integrate checked changes to
 only authorized after its required client/human/feedback evidence exists.
 Do not rename an old development executable; build and test the embedded beta
 version. Do not rebuild between accepted candidate and publication.
+
+## Implementation checkpoint
+
+All six patches have source implementations in this branch. Portable tests and
+negative gate fixtures are run locally. Windows native CI, actual desktop review,
+feedback enabling, and the publication state are separate observations; this
+paragraph does not mark them passed. `tools/publish_beta.py` may stage only a draft
+on master after exact native packaging succeeds. It cannot auto-publish on push.
+
+Current source enhancements map to WT-W020/030/040/050/060/070/130. The existing
+acceptance registry retains broad-case scope; beta-specific requirements are
+WT-REQ-063-03 through -06. Do not mark all earlier cases passed from this checkpoint.

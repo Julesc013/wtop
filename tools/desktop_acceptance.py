@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -74,6 +75,18 @@ def run_smoke(exe: Path, version: str) -> None:
         if args[0] == "query" and (data.get("schema") != 2 or data.get("version") != version):
             raise ValueError("snapshot contract/version mismatch")
 
+def interactive_run(arguments):
+    # A custom parent handler (not SIG_IGN) lets the child exercise Ctrl+C without
+    # aborting this evidence collector or passing an inherited ignore flag.
+    original = signal.signal(signal.SIGINT, lambda _signal, _frame: None)
+    try:
+        result = subprocess.run(arguments, timeout=600)
+        if result.returncode not in (0, 130):
+            raise ValueError("interactive candidate did not exit normally or by cooperative cancellation")
+    finally:
+        signal.signal(signal.SIGINT, original)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate", type=Path, help="directory containing wtop.exe and payload.json")
@@ -115,15 +128,15 @@ def main(argv=None) -> int:
                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print("Review", keymap, "with disposable PID", child.pid, "; F10 quits. Try required resize sizes.")
                 try:
-                    subprocess.run([str(exe), "--config", str(config), "--keymap", keymap,
-                                    "--pid", str(child.pid)], check=True, timeout=600)
+                    interactive_run([str(exe), "--config", str(config), "--keymap", keymap,
+                                     "--pid", str(child.pid)])
                 finally:
                     if child.poll() is None:
                         child.terminate()
                     child.wait(timeout=10)
                     child = None
-            subprocess.run([str(exe), "--config", str(config), "--readonly", "--keymap", "htop",
-                            "--pid", str(os.getpid())], check=True, timeout=600)
+            interactive_run([str(exe), "--config", str(config), "--readonly", "--keymap", "htop",
+                             "--pid", str(os.getpid())])
             answers = []
             for check in CHECKS:
                 answer = input(check + " [type PASS only after actually checking; anything else blocks]: ")
