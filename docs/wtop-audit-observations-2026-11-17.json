@@ -1,0 +1,654 @@
+{
+  "schema": "wtop.current-audit/1",
+  "observed_at": "2026-11-17T00:54:24.909305+00:00",
+  "source_sha": "1ca153b77e7df203b9f6d1f8cfb2ff472318bc27",
+  "baseline_sha": "326ccd80b41842868f4247d1e8978e854658a710",
+  "product_version": "0.1.0-dev.2",
+  "audit_kind": "read-only static source review plus existing host tests; no native run performed by this reviewer",
+  "native_evidence_context": "Existing implementation CI and postmerge master CI are narrower than release qualification; see docs/presentation-verification.md and run43976010499.",
+  "source_hashes": {
+    "source/ui.h": "c870451fa98e8b42d4893730f425bc214600f90a8952d0de154a1bca76ac7753",
+    "source/ui.c": "1105f80d06e174d103d1557d297e51c410a409f7be31387321d4901fa758440b",
+    "source/vi.h": "2508e524fed2ee13441f7d70a7d8bed68cd83f962f743152df9afbba61f01568",
+    "source/settings.c": "050853b2997295822fdddda8a27094b9e30ddaf51f8f80240b81e588aee7b085",
+    "source/core.h": "7207f937f547c1d25c993fef03ca6a0639457f2a9c40640e0837cdcad0eed0eb",
+    "source/util.h": "86c052dc8e48ae30a3c19598dd4350a0483814ca05f84b28396e1a153669d834",
+    "source/core.c": "e1ad3abc6e521d709a2a5d516b68a452030cff4958f394dfd4dcc6c367ea0b0a",
+    "source/settings.h": "e4e5a986b668a5fdefc6466276a93bf5aed3ceaee006f1e3304305c1984b023d",
+    "source/ntop.c": "29e65be87326855c552e61f288c284d7d8ec4ee0fac6090afe9ce0bedc18cb22",
+    "source/ntop.h": "ad828bd0097904a312d90de7eb45afc61eb1c35768c4fba259bc77efe81a1884",
+    "source/util.c": "6f2d1a42152b31af086a3ff01b730bc958af72a35af51abfd810f5073f869866",
+    "source/vi.c": "6c616c0428eafb7f84b864cdcd3dc38130023dc556f665de026c7e8b3af9c97d"
+  },
+  "requested_features": [
+    {
+      "feature": "htop default / vi-vim / Emacs presets",
+      "implemented": true,
+      "limits": "Presets, not full editor emulation or arbitrary rebinding",
+      "source": "source/settings.c:102-109,152-181; source/ui.c:48-111",
+      "evidence": "tests/test_ui.c:8-35; native harness vi/Emacs cases"
+    },
+    {
+      "feature": "default-visible hideable final-row function bar",
+      "implemented": true,
+      "limits": "Static common labels; fully contextual/live status incomplete",
+      "source": "source/settings.c:163; source/ntop.c:2008-2028,2154-2157",
+      "evidence": "native harness default/hide/save/reload"
+    },
+    {
+      "feature": "mouse click/wheel/header/tab/bar handling",
+      "implemented": true,
+      "limits": "Native console; full resize/failure/host matrix not qualified",
+      "source": "source/ntop.c:1483-1497,1779-1834",
+      "evidence": "native harness button/tab click, modes, disabled mouse; not exhaustive gestures"
+    },
+    {
+      "feature": "htop-like palette plus overrides",
+      "implemented": true,
+      "limits": "14 console-attribute roles 0-255, host palette; no truecolor theme engine",
+      "source": "source/settings.c:140-150; source/settings.h:27-33",
+      "evidence": "tests/test_settings.c:46-68; native attribute checks"
+    },
+    {
+      "feature": "ordered/hidden header rows and process columns",
+      "implemented": true,
+      "limits": "Five built-in header rows, nine built-in process columns; no arbitrary definitions or custom widths",
+      "source": "source/settings.h:9-16,34-43; source/ntop.c:1675-1685",
+      "evidence": "portable settings roundtrip and layout tests"
+    },
+    {
+      "feature": "saved named per-tab views/sort/filter/tree",
+      "implemented": true,
+      "limits": "Eight max; tab create/rename/delete through config only",
+      "source": "source/settings.h:45-69; source/ntop.c:1686-1703",
+      "evidence": "portable multi-tab roundtrip; native filter ownership and persistence"
+    },
+    {
+      "feature": "explicit saving",
+      "implemented": true,
+      "limits": "F2 s/:save/C-x C-s/--write-config; no autosave; best effort concurrent edit check; ACL limitation",
+      "source": "source/ntop.c:209-291,1499-1510,1870-1874",
+      "evidence": "native save/readonly/unknown-key/external-edit checks"
+    }
+  ],
+  "findings": [
+    {
+      "id": "CUR-001",
+      "classification": "source-confirmed semantic defect",
+      "priority": "P1 before 0.4.0 stable",
+      "title": "Commit meter is not guaranteed to measure system commit",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1065,
+            1077
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2143,
+            2146
+          ]
+        }
+      ],
+      "finding": "Cmt derives used/limit from MEMORYSTATUSEX ullTotalPageFile and ullAvailPageFile. Those fields may reflect current-process limits and commit availability rather than whole-system CommitTotal/CommitLimit. Merely renaming inherited PageMemory to commit did not prove the intended host metric.",
+      "closure": "Use GetPerformanceInfo/PERFORMANCE_INFORMATION CommitTotal and CommitLimit with PageSize, explicit state and overflow checks, or label and expose the exact process-constrained scope. Test under a job/process memory limit and compare an independent system-commit observer.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex",
+        "https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-performance_information"
+      ],
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-002",
+      "classification": "source-confirmed sampling-boundary defect; magnitude unmeasured",
+      "priority": "P1 before 0.4.0 stable",
+      "title": "Process CPU deltas use a different observation window from system denominator",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            890,
+            941
+          ]
+        }
+      ],
+      "finding": "GetSystemTimes before is read before the whole first process pass; after is read before the second pass. Each process CPU interval is shifted by per-process read cost, but CPU% divides by the common system delta without own elapsed time. Variable pass costs can bias percentages, especially short intervals/large process sets. A separate documented GetSystemTimes processor-group limitation remains.",
+      "closure": "Define and implement per-process monotonic sample bounds/CPU capacity or a consistently sampled native provider. Test delayed individual reads and changing process counts with independent expected values. Either handle processor groups or report unavailable/explicit scoped metric on unsupported topology.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes"
+      ],
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-003",
+      "classification": "source-confirmed gap",
+      "priority": "P1 before 0.4.0 stable",
+      "title": "Bulk mutation results lose per-target outcomes",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1417,
+            1438
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1587,
+            1595
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1726,
+            1735
+          ]
+        }
+      ],
+      "finding": "Priority loops repeatedly overwrite one status message; termination retains only success/failure counts after overwriting detail. A later success can hide an earlier denied/failed target. Identity is revalidated, but required individual result reporting is incomplete.",
+      "closure": "Collect bounded per-target structured outcomes, display a summary with inspectable failures, and use the same result type for future CLI actions. Test mixed success/denied/exited/reused identities against owned fixtures.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-004",
+      "classification": "source-confirmed feature gap and documented risk",
+      "priority": "P1 before 0.4.0 stable",
+      "title": "Slow/stalled samples remain displayed without freshness state",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            845,
+            861
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            964,
+            980
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1082,
+            1095
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2183,
+            2188
+          ]
+        }
+      ],
+      "finding": "Synchronous account-name lookup is inside the single collector. Published values have no sample-age/stale display; LastSampleElapsed changes only after completion. Main loop can continue rendering old values as ordinary measurements.",
+      "closure": "Add publication timestamps, stale/missed/degraded status and bounded provider policy. Fault-inject a blocked lookup. Cache or isolate expensive lookup only with explicit ownership; a timeout is not cancellation.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-005",
+      "classification": "source-confirmed feature gap",
+      "priority": "P1 to close user-requested bar contract; not a crash finding",
+      "title": "Function bar is implemented but fully contextual/live status is incomplete",
+      "source": [
+        {
+          "path": "source/ui.c",
+          "lines": [
+            6,
+            25
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2008,
+            2028
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2127,
+            2150
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2183,
+            2188
+          ]
+        }
+      ],
+      "finding": "Bar is default visible, hideable and clickable, with static F1-F10 labels in every panel. Persistent active-filter/sort/provider/freshness status is not implemented; adjacent row is only allocated for prompt/message/Emacs prefix.",
+      "closure": "Implement a shared context-action/hint table plus concise active-view/filter/sort/dirty/freshness status, keeping hidden-bar recovery and narrow geometry correct.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-006",
+      "classification": "source-confirmed layout limitation",
+      "priority": "P1 qualify supported encoding before 0.4.0; richer shaping may be later",
+      "title": "UTF-16 code-unit length is used as display-cell width",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            91,
+            107
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2171,
+            2181
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2210,
+            2226
+          ]
+        }
+      ],
+      "finding": "Clipping, RenderColumn, tab hit widths and editor cursor mostly count UTF-16 units, with only surrogate-pair boundary protection. CJK wide characters, combining sequences and host-specific width can misalign display and hitboxes.",
+      "closure": "Implement explicit cell-width policy with conservative substitution where necessary; test ASCII, wide/combining/surrogate inputs and every supported host. Do not claim all-Unicode layout from UTF-8 configuration parsing.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-007",
+      "classification": "source-confirmed storage limitation; race not reproduced",
+      "priority": "P1 before claiming safe installed settings",
+      "title": "Settings replacement does not preserve custom ACLs and is not atomic CAS",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            209,
+            291
+          ]
+        }
+      ],
+      "finding": "Two byte-equality checks detect many stale edits but a writer can change an existing target between final check and MoveFileEx replacement. A newly created temporary file is renamed over target without metadata/ACL transfer.",
+      "closure": "Specify concurrent-writer contract; choose a qualified replacement/metadata strategy preserving intended ACLs and attributes. Test two instances/editor race, denied paths, disk-full and interrupted replacement.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-008",
+      "classification": "source-confirmed compatibility conflict",
+      "priority": "P1 policy before first stable CLI promise",
+      "title": "Literal htop CLI parity conflicts with Wtop aliases",
+      "source": [
+        {
+          "path": "source/core.c",
+          "lines": [
+            48,
+            75
+          ]
+        },
+        {
+          "path": "source/core.c",
+          "lines": [
+            121,
+            127
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1267,
+            1299
+          ]
+        }
+      ],
+      "finding": "Wtop -d selects dump/snapshot; stable htop 3.5.3 -d expects decisecond delay. Wtop inherited -n means names; development htop 3.6.0-dev uses -n for max iterations, but stable 3.5.3 does not. Most htop long aliases and several distinct behaviors are not implemented.",
+      "closure": "Freeze an explicit compatibility table. Preserve NTop aliases deliberately; decide -d before first stable release. Prefer nonambiguous long options and document deviations instead of blanket parity.",
+      "sources": [
+        "https://github.com/htop-dev/htop/blob/20882b8ef8271fb49ea0eb74bbfd484e9b0a11d8/htop.1.in",
+        "https://github.com/htop-dev/htop/blob/21bbc80c7811149ee33f449748addf23740c7b9f/htop.1.in"
+      ],
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-009",
+      "classification": "source-confirmed architectural cost; performance unmeasured",
+      "priority": "P2 measurement gate for 0.4.0; optimize when evidence warrants",
+      "title": "Flat-view sorting still builds process tree and frames redraw in full",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            503,
+            533
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            549,
+            609
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2154,
+            2168
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2323,
+            2336
+          ]
+        }
+      ],
+      "finding": "FindParentChildProcesses scans process pairs and ancestry and runs after flat sorting too. DrawFrame clears every row and rewrites it; per-cell colors/cursor/output use multiple API calls. These are plausible scaling/remote-output hotspots, not a measured regression.",
+      "closure": "Benchmark process-count/terminal-size/interval matrix, collect CPU/handles/memory/output bytes and responsiveness. Only then remove unused tree work, index identities/parents or coalesce/dirty-render output with behavioral checks.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-010",
+      "classification": "documented lifecycle risk and missing qualification",
+      "priority": "P1 before 0.4.0 stable",
+      "title": "Emergency self-exit does not qualify orderly shutdown on blocked native calls",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1116,
+            1128
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            2234,
+            2376
+          ]
+        }
+      ],
+      "finding": "Initial snapshot runs on main thread. TUI main thread also holds SyncLock around input/render and explicit save. Normal cleanup joins for 3000 ms; CtrlHandler waits 3500 ms and may TerminateProcess self, bypassing restoration if main has not reached cleanup. No native fault-injection or handle-soak evidence closes this broad contract.",
+      "closure": "Exercise provider/output/settings stalls, Ctrl+C/close/error/resize, repeated launches and normal/emergency exit. Define and expose emergency behavior; qualify isolation only if used. No claim of zero leaks/crashes from compile or normal-path smoke.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-011",
+      "classification": "source-confirmed feature gap",
+      "priority": "P2 UX; can remain documented 0.4.0 limit if scope agrees",
+      "title": "Tabs support configuration creation but no TUI create/rename/delete",
+      "source": [
+        {
+          "path": "source/settings.h",
+          "lines": [
+            9,
+            16
+          ]
+        },
+        {
+          "path": "source/settings.h",
+          "lines": [
+            45,
+            69
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1686,
+            1703
+          ]
+        }
+      ],
+      "finding": "Up to eight named views and per-view filter/sort/direction/tree/columns exist. F2 can hide/reorder existing tabs; create, rename and delete require file editing. Column widths are responsive constants, not user-defined. Keymaps are presets, not arbitrary declarative rebinding.",
+      "closure": "Either retain and clearly document bounded 0.4.0 scope or add small TUI CRUD/edit operations with round-trip validation. Do not repeat the claim as missing all customization.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-012",
+      "classification": "source-confirmed release/evidence gap",
+      "priority": "P1 release gate",
+      "title": "Formal acceptance and evidence registers remain unpromoted",
+      "source": [
+        {
+          "path": "spec/catalog/evidence.json",
+          "lines": [
+            1,
+            5
+          ]
+        },
+        {
+          "path": "spec/work/units.json",
+          "lines": [
+            1,
+            59
+          ]
+        }
+      ],
+      "finding": "specctl reports 51 not_run, 1 active/14 planned, 0 evidence records, 15 unqualified targets and 1 policy-blocked. Real native CI exists separately. Whole-product gates must not be marked passed by narrow CI, but stale work status obscures completed implementation.",
+      "closure": "Reconcile source-bound narrow observations, split broad acceptance into reviewable scoped cases where necessary, and advance only satisfied work. Build an exact 0.4.0 feature/profile closure.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-013",
+      "classification": "source-confirmed implementation gap",
+      "priority": "P1 if advertised in 0.4.0; otherwise explicitly later scope",
+      "title": "No managed packaging/install channels or portable ownership mode",
+      "source": [
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            165,
+            207
+          ]
+        },
+        {
+          "path": "source/ntop.c",
+          "lines": [
+            1301,
+            1313
+          ]
+        },
+        {
+          "path": "CMakeLists.txt",
+          "lines": [
+            1,
+            57
+          ]
+        }
+      ],
+      "finding": "Current backend has adjacent/legacy/user config discovery and config export, not installed portable/per-user/machine ownership, migration, updater/rollback/uninstall, setup EXE/MSI or WinGet manifests. Merely distributing one EXE does not complete installation modes.",
+      "closure": "Package exact qualified payload with honest target metadata, checksums/license/source correspondence and reversible owned PATH/registration. Preserve settings outside payload ownership. Only publish channels actually built/installed/uninstalled/tested.",
+      "native_reproduced": false
+    },
+    {
+      "id": "CUR-014",
+      "classification": "source-confirmed scope gap",
+      "priority": "0.5+ / 1.0 work; not automatic first-release blocker",
+      "title": "Full low-level CLI, htop feature superset and historical backends are unimplemented",
+      "source": [
+        {
+          "path": "source/core.c",
+          "lines": [
+            31,
+            150
+          ]
+        },
+        {
+          "path": "source/version.h.in",
+          "lines": [
+            7,
+            15
+          ]
+        },
+        {
+          "path": "CMakeLists.txt",
+          "lines": [
+            22,
+            57
+          ]
+        }
+      ],
+      "finding": "Current application supports only Windows NT x86/x64/ARM64 compile profiles, simple snapshots and build-capabilities metadata. Query/inspect/continuous bounded logging, runtime provider negotiation, full commands/threads/details/affinity/per-core telemetry and DOS/Win16/Win9x/CE/OS2 providers do not exist. GUI is explicitly deferred.",
+      "closure": "Implement capability-based vertical slices and qualify exact target images. Preserve all requested families as goals with explicit feasibility/support decisions; blocked/unavailable is not fabricated completion.",
+      "native_reproduced": false
+    }
+  ],
+  "htop_reference": {
+    "stable_version": "3.5.3",
+    "stable_sha": "20882b8ef8271fb49ea0eb74bbfd484e9b0a11d8",
+    "stable_release_published_at": "2026-08-16T16:07:11Z",
+    "development_version": "3.6.0-dev",
+    "development_sha": "21bbc80c7811149ee33f449748addf23740c7b9f",
+    "development_committed_at": "2026-11-13T15:13:01Z"
+  },
+  "formal_status": {
+    "acceptance_not_run": 51,
+    "work_active": 1,
+    "work_planned": 14,
+    "evidence_records": 0,
+    "targets_unqualified": 15,
+    "targets_policy_blocked": 1
+  },
+  "verification": {
+    "observed_at": "2026-11-17T00:50:52.267887+00:00",
+    "source": "1ca153b77e7df203b9f6d1f8cfb2ff472318bc27",
+    "host": "Linux ba99da806bb9 6.18.57 #1 SMP Tue Oct 20 21:56:04 UTC 2026 x86_64 GNU/Linux",
+    "records": [
+      {
+        "command": [
+          "python",
+          "tools/specctl.py",
+          "validate"
+        ],
+        "exit_code": 0,
+        "stdout": "Valid Wtop writer-profile structure: 17 concepts, 51 requirements, 51 acceptance cases.\nNo product/native/release qualification is created by this check.\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "python",
+          "tools/specctl.py",
+          "status"
+        ],
+        "exit_code": 0,
+        "stdout": "{\n  \"schema\": \"wtop.spec-status/1\",\n  \"concepts\": 17,\n  \"requirements\": 51,\n  \"acceptance\": {\n    \"not_run\": 51\n  },\n  \"work\": {\n    \"active\": 1,\n    \"planned\": 14\n  },\n  \"commands\": {\n    \"candidate\": 14,\n    \"inherited_unqualified\": 5,\n    \"planned\": 6,\n    \"unavailable\": 1\n  },\n  \"targets\": {\n    \"policy_blocked\": 1,\n    \"unqualified\": 15\n  },\n  \"evidence_records\": 0,\n  \"limitation\": \"Structural validation does not qualify native behavior or release support.\"\n}\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "python",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-p",
+          "test_specctl.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "test_broken_local_link_is_rejected (test_specctl.SpecificationValidationTests.test_broken_local_link_is_rejected) ... ok\ntest_completed_work_without_evidence_is_rejected (test_specctl.SpecificationValidationTests.test_completed_work_without_evidence_is_rejected) ... ok\ntest_duplicate_frontmatter_key_is_rejected (test_specctl.SpecificationValidationTests.test_duplicate_frontmatter_key_is_rejected) ... ok\ntest_duplicate_json_key_is_rejected (test_specctl.SpecificationValidationTests.test_duplicate_json_key_is_rejected) ... ok\ntest_duplicate_registry_id_is_rejected (test_specctl.SpecificationValidationTests.test_duplicate_registry_id_is_rejected) ... ok\ntest_exact_evidence_identity_detects_mutation (test_specctl.SpecificationValidationTests.test_exact_evidence_identity_detects_mutation) ... ok\ntest_native_record_cannot_qualify_another_target (test_specctl.SpecificationValidationTests.test_native_record_cannot_qualify_another_target) ... ok\ntest_native_support_without_native_evidence_is_rejected (test_specctl.SpecificationValidationTests.test_native_support_without_native_evidence_is_rejected) ... ok\ntest_nonexistent_registry_anchor_is_rejected (test_specctl.SpecificationValidationTests.test_nonexistent_registry_anchor_is_rejected) ... ok\ntest_nonfinite_and_deep_json_are_rejected (test_specctl.SpecificationValidationTests.test_nonfinite_and_deep_json_are_rejected) ... ok\ntest_pass_without_evidence_is_rejected (test_specctl.SpecificationValidationTests.test_pass_without_evidence_is_rejected) ... ok\ntest_path_escape_is_rejected_even_when_destination_exists (test_specctl.SpecificationValidationTests.test_path_escape_is_rejected_even_when_destination_exists) ... ok\ntest_record_for_another_command_cannot_promote_help (test_specctl.SpecificationValidationTests.test_record_for_another_command_cannot_promote_help) ... ok\ntest_requirement_owner_mismatch_is_rejected (test_specctl.SpecificationValidationTests.test_requirement_owner_mismatch_is_rejected) ... ok\ntest_stale_index_is_rejected_and_regeneration_is_deterministic (test_specctl.SpecificationValidationTests.test_stale_index_is_rejected_and_regeneration_is_deterministic) ... ok\ntest_symlink_escape_is_rejected (test_specctl.SpecificationValidationTests.test_symlink_escape_is_rejected) ... ok\ntest_unknown_safe_extension_is_preserved (test_specctl.SpecificationValidationTests.test_unknown_safe_extension_is_preserved) ... ok\ntest_unknown_status_is_rejected (test_specctl.SpecificationValidationTests.test_unknown_status_is_rejected) ... ok\ntest_unresolved_requirement_reference_is_rejected (test_specctl.SpecificationValidationTests.test_unresolved_requirement_reference_is_rejected) ... ok\ntest_unsupported_schema_keyword_cannot_be_silently_ignored (test_specctl.SpecificationValidationTests.test_unsupported_schema_keyword_cannot_be_silently_ignored) ... ok\ntest_validation_does_not_create_product_passes_or_advance_work (test_specctl.SpecificationValidationTests.test_validation_does_not_create_product_passes_or_advance_work) ... ok\ntest_work_dependency_cycle_is_rejected (test_specctl.SpecificationValidationTests.test_work_dependency_cycle_is_rejected) ... ok\ntest_wrong_boolean_type_does_not_satisfy_integer_schema (test_specctl.SpecificationValidationTests.test_wrong_boolean_type_does_not_satisfy_integer_schema) ... ok\ntest_yaml_alias_is_outside_safe_writer_subset (test_specctl.SpecificationValidationTests.test_yaml_alias_is_outside_safe_writer_subset) ... ok\n\n----------------------------------------------------------------------\nRan 24 tests in 0.524s\n\nOK\n"
+      },
+      {
+        "command": [
+          "/workspace/scratch/f7da8b17662d/wtop-tools/cmake/data/bin/cmake",
+          "-S",
+          "/workspace/scratch/f7da8b17662d/wtop",
+          "-B",
+          "/workspace/scratch/f7da8b17662d/wtop-audit-20261117/current/host-build",
+          "-DCMAKE_BUILD_TYPE=Debug",
+          "-DCMAKE_C_FLAGS=-Wall -Wextra -Werror -pedantic"
+        ],
+        "exit_code": 0,
+        "stdout": "-- The C compiler identification is GNU 14.2.0\n-- Detecting C compiler ABI info\n-- Detecting C compiler ABI info - done\n-- Check for working C compiler: /usr/bin/cc - skipped\n-- Detecting C compile features\n-- Detecting C compile features - done\n-- Building portable core tests only; the current application backend requires Windows.\n-- Configuring done (0.3s)\n-- Generating done (0.0s)\n-- Build files have been written to: /workspace/scratch/f7da8b17662d/wtop-audit-20261117/current/host-build\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/workspace/scratch/f7da8b17662d/wtop-tools/cmake/data/bin/cmake",
+          "--build",
+          "/workspace/scratch/f7da8b17662d/wtop-audit-20261117/current/host-build",
+          "--parallel",
+          "2"
+        ],
+        "exit_code": 0,
+        "stdout": "[ 10%] Building C object CMakeFiles/wtop_core.dir/source/settings.c.o\n[ 20%] Building C object CMakeFiles/wtop_core.dir/source/core.c.o\n[ 30%] Building C object CMakeFiles/wtop_core.dir/source/ui.c.o\n[ 40%] Linking C static library libwtop_core.a\n[ 40%] Built target wtop_core\n[ 50%] Building C object CMakeFiles/test_settings.dir/tests/test_settings.c.o\n[ 60%] Building C object CMakeFiles/test_core.dir/tests/test_core.c.o\n[ 70%] Linking C executable test_core\n[ 80%] Linking C executable test_settings\n[ 80%] Built target test_core\n[ 80%] Built target test_settings\n[ 90%] Building C object CMakeFiles/test_ui.dir/tests/test_ui.c.o\n[100%] Linking C executable test_ui\n[100%] Built target test_ui\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/workspace/scratch/f7da8b17662d/wtop-tools/cmake/data/bin/ctest",
+          "--test-dir",
+          "/workspace/scratch/f7da8b17662d/wtop-audit-20261117/current/host-build",
+          "--output-on-failure"
+        ],
+        "exit_code": 0,
+        "stdout": "Test project /workspace/scratch/f7da8b17662d/wtop-audit-20261117/current/host-build\n    Start 1: portable_core\n1/3 Test #1: portable_core ....................   Passed    0.00 sec\n    Start 2: portable_settings\n2/3 Test #2: portable_settings ................   Passed    0.00 sec\n    Start 3: portable_ui\n3/3 Test #3: portable_ui ......................   Passed    0.00 sec\n\n100% tests passed out of 3\n\nTotal Test time (real) =   0.01 sec\n",
+        "stderr": ""
+      }
+    ]
+  },
+  "postmerge_ci_rechecked": {
+    "source": "1ca153b77e7df203b9f6d1f8cfb2ff472318bc27",
+    "run_id": 43976010499,
+    "url": "https://github.com/Julesc013/wtop/actions/runs/43976010499",
+    "jobs": [
+      {
+        "id": 133680063055,
+        "name": "specification-and-core",
+        "conclusion": "success"
+      },
+      {
+        "id": 133680063422,
+        "name": "windows (Win32)",
+        "conclusion": "success"
+      },
+      {
+        "id": 133680064448,
+        "name": "windows (x64)",
+        "conclusion": "success"
+      },
+      {
+        "id": 133680063464,
+        "name": "windows (ARM64)",
+        "conclusion": "success",
+        "execution": "skipped"
+      }
+    ],
+    "scope": "Previously completed CI; job conclusions re-fetched during this audit. ARM64 build only. This is not a new native run or product release qualification."
+  },
+  "documentation_verification": {
+    "scope": "Audit documentation and validator fixture only; application source/version and acceptance statuses unchanged.",
+    "initial_result": {
+      "command": "python -m unittest discover -s tests -p test_specctl.py -v",
+      "tests": 24,
+      "passed": 21,
+      "failures": 1,
+      "errors": 2,
+      "cause": "New spec-to-docs link was valid in the repository but absent from isolated fixtures, which copied only spec/."
+    },
+    "repair": "Copy actual docs/ dependencies into the isolated validator fixture; preserve all link validation and negative assertions.",
+    "final_result": {
+      "validator_tests_passed": 24,
+      "specification_validation": "passed",
+      "git_diff_check": "passed",
+      "audited_application_source_hashes_unchanged": 12
+    },
+    "fixture_path": "tests/test_specctl.py",
+    "fixture_sha256": "2919009e1dfef3d4d475115d642935975fcffd75d39f2cc88627bb97ae28321b",
+    "native_run_performed_by_audit": false,
+    "release_or_acceptance_promotion": false
+  }
+}

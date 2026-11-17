@@ -18,6 +18,12 @@ Root TODO.md and ROADMAP.md are human-readable projections of this queue and
 its acceptance contracts, not separate status authorities. The spec tool prints current active work and dependency-ready planned units.
 It never executes commands, expands permission or marks work complete.
 
+The [17 November implementation design](../../docs/implementation-plan-2026-11-17.md)
+is an informative companion mapping the eight requested workstreams to existing
+work IDs, code boundaries, compatibility choices and independent regression
+cases. Incorporate each chosen behavior into its owning concept/catalog when
+implemented; the design itself changes no acceptance, support or work status.
+
 The sequence starts with the existing fork, scoped defect repair and modern
 Windows build. It then establishes invocation, a shared snapshot model and
 truthful CLI serialization. Process identity/actions and TUI parity build on that

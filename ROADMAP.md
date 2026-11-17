@@ -32,6 +32,38 @@ acceptance remains open; contributors must inspect that code before extending it
 Historical ports, managed installation, broad query/inspection/logging, additional
 hardware providers, full htop parity and GUI support remain separate work.
 
+The [17 November source/fork audit](docs/ntop-fork-audit-2026-11-17.md) and
+[release-readiness assessment](docs/wtop-release-readiness-2026-11-17.md) identify
+specific remaining defects and gaps. Correct system-commit/CPU-sample semantics,
+preserve bulk outcomes and expose stale samples before adding optional providers.
+The visible function bar exists, but continuous live status and contextual labels
+are incomplete. Passing native smoke tests do not close those findings.
+
+The [implementation design](docs/implementation-plan-2026-11-17.md) translates
+these findings into reuse boundaries, compatibility decisions, proposed tests and
+reviewable increments mapped to the existing work catalog. It is a design
+proposal; its interfaces and recommended schema migrations are not implemented
+features or a second work-status authority.
+
+## Named release milestones
+
+| Milestone | Intended outcome | Evidence boundary |
+| --- | --- | --- |
+| **0.4.0** — first Wtop release | Qualified modern Windows TUI, explicit settings, bounded CLI snapshots and requested portable/per-user/system delivery ownership | Correct known metric/action/lifecycle gaps; qualify every advertised OS/CPU/host and installation channel; historical targets remain explicitly pending |
+| **Subsequent 0.x** | Rich process inspection, per-core providers, broad query/logging, configuration/CLI compatibility and historical backend slices | Promote each implemented capability independently; preserve source, fixture and runtime evidence |
+| **1.0.0** — agreed TUI/CLI product complete | Stable public CLI/output/settings contracts and closure of the agreed capability/platform scope | An experimental or unimplemented historical port does not become completed scope by relabeling it; a narrower 1.0 would require an explicit scope decision |
+
+The application is still `0.1.0-dev.2`; **0.4.0 is a planned product version**,
+following NTop 0.3.x. Future candidate names can use `0.4.0-dev.N` and
+`0.4.0-rc.N`, with stable `0.4.0`. The version number is independent of Actions
+run numbers. `0.4.0-stable.N` would still be a SemVer prerelease and is not the
+recommended stable naming scheme. The [release contract](spec/development/release.md)
+owns promotion rules; the audit's release table maps closure work to existing IDs.
+
+The original platform and installation ambitions remain visible. A portable-only
+first release, or a modern-only 1.0, is a possible narrower milestone rather than
+an implicit change to the agreed product goal. The native GUI remains deferred.
+
 ## Delivery principles
 
 1. Preserve useful behavior while extracting responsibility-sized modules.
