@@ -74,6 +74,7 @@ jobs:
           name: wtop-native-checks-${{ matrix.arch }}-${{ github.sha }}
           path: |
             out/windows/native-tui-observations.json
+            out/windows/native-provider-observations.json
             out/windows/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 14

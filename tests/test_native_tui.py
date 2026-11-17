@@ -277,8 +277,9 @@ class Console:
         return self.wait(lambda f: f["width"] == width and f["height"] == height,
                          f"console resized to {width}x{height}")
 
-    def click(self, x, y):
-        frame = self.frame()
+    def click(self, x, y, *, frame=None):
+        if frame is None:
+            frame = self.frame()
         events = []
         for buttons in (1, 0):
             event = InputRecord()
@@ -383,11 +384,25 @@ def assert_function(frame, number, label, enabled=True):
         assert all(color == 8 for color in colors), (number, shown, colors)
 
 
+def function_ready(frame, number, label, enabled=True):
+    _start, _end, shown, colors = function_slot(frame, number)
+    prefix = "F" + str(number)
+    if not shown.startswith(prefix) or not shown[len(prefix):].strip().startswith(label):
+        return False
+    return any(color != 8 for color in colors) if enabled else bool(colors) and all(color == 8 for color in colors)
+
+
 def click_function(console, number, label, enabled=True):
-    frame = console.frame()
+    # The editor/overlay can become readable before its footer is painted.
+    # Observe the requested label/state and the last button before clicking;
+    # do not replace that acknowledged frame with an unchecked repaint read.
+    # Waiting only samples output. The action itself is injected exactly once.
+    frame = console.wait(lambda f: function_ready(f, number, label, enabled)
+                         and function_ready(f, 10, "Quit"),
+                         f"F{number} {label} button ready")
     assert_function(frame, number, label, enabled)
     start, end, _shown, _colors = function_slot(frame, number)
-    console.click(start + (end - start) // 2, frame["height"] - 1)
+    console.click(start + (end - start) // 2, frame["height"] - 1, frame=frame)
 
 
 def setup_rows(frame):
@@ -464,15 +479,20 @@ def setup_contract(console, exe, directory, pids, observations):
         stream.write("\n# Setup fixture extension must follow I/O's stable identity\nTab1.FutureScoped io-owned\n")
     console.start(exe, config, pids, "--status-bar")
     console.key(0x71)
-    frame = console.wait(lambda f: overlay_contains(f, "Setup") and f["rows"][1].startswith("General"), "Setup General page")
+    frame = console.wait(lambda f: overlay_contains(f, "Setup") and f["rows"][1].startswith("General")
+                         and function_ready(f, 2, "Next") and function_ready(f, 10, "Quit"), "Setup General page")
     assert_function(frame, 2, "Next")
     console.key(0x71)  # Contextual F2 advances a page; it does not reopen General.
     console.wait(lambda f: f["rows"][1].startswith("Meters"), "keyboard next Setup page")
     click_function(console, 2, "Next")
     console.wait(lambda f: f["rows"][1].startswith("Columns"), "mouse same next-page binding")
     console.key(0x71)
-    frame = console.wait(lambda f: f["rows"][1].startswith("Tabs"), "Setup Tabs page")
-    for number, label in ((3, "New"), (4, "Copy"), (5, "Rename"), (6, "Delete"), (8, "Move+"), (9, "Save")):
+    tab_functions = ((3, "New"), (4, "Copy"), (5, "Rename"), (6, "Delete"), (8, "Move+"), (9, "Save"))
+    frame = console.wait(lambda f: f["rows"][1].startswith("Tabs")
+                         and all(function_ready(f, number, label) for number, label in tab_functions)
+                         and function_ready(f, 7, "Move-", False)
+                         and function_ready(f, 10, "Quit"), "Setup Tabs page and contextual controls")
+    for number, label in tab_functions:
         assert_function(frame, number, label)
     assert_function(frame, 7, "Move-", False)  # Already at the first view.
     console.key(0x72)
@@ -491,7 +511,8 @@ def setup_contract(console, exe, directory, pids, observations):
     frame = console.wait(lambda f: editor_contains(f, "=" + shown_name), "CJK, combining and surrogate-pair input uses explicit ASCII cells")
     bounded_ascii_frame(frame)
     click_function(console, 9, "Apply")
-    frame = console.wait(lambda f: shown_name in setup_rows(f) and "Apply" not in function_slot(f, 9)[2], "renamed view remains in Setup")
+    frame = console.wait(lambda f: shown_name in setup_rows(f) and function_ready(f, 9, "Save")
+                         and text_contains(f, "ASCII substitution"), "renamed view remains in Setup")
     assert text_contains(frame, "ASCII substitution"), "lossy display was not disclosed"
     console.key(0x76)
     console.wait(lambda f: setup_rows(f) == ["Main", shown_name, expected_new, "I/O"], "F7 reorders selected stable view")
@@ -533,7 +554,9 @@ def setup_contract(console, exe, directory, pids, observations):
                              and f["rows"][0].startswith(title), "bounded redraw or explicit minimum-size fallback")
         bounded_ascii_frame(frame)
     console.key(0x75)
-    frame = console.wait(lambda f: overlay_contains(f, "Delete view"), "F6 captures view deletion")
+    frame = console.wait(lambda f: overlay_contains(f, "Delete view")
+                         and str(next_id + 1) in f["rows"][1]
+                         and function_ready(f, 10, "Quit"), "F6 captures view deletion")
     assert str(next_id + 1) in frame["rows"][1]
     assert not function_slot(frame, 9)[2].strip(), "delete confirmation accidentally exposes a repeated F9 action"
     console.key(27, "\x1b")
@@ -558,8 +581,11 @@ def readonly_contract(console, exe, directory, pids, fixtures, observations):
     original = config.read_bytes()
     sentinel = directory / "must-not-launch.txt"
     console.start(exe, config, pids, "--readonly", "--keymap", "vi", "--status-bar")
-    frame = console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids), "read-only process view")
-    for number, label in ((7, "Prio+"), (8, "Prio-"), (9, "Kill")):
+    disabled_functions = ((7, "Prio+"), (8, "Prio-"), (9, "Kill"))
+    frame = console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids)
+                         and all(function_ready(f, number, label, False) for number, label in disabled_functions)
+                         and function_ready(f, 10, "Quit"), "read-only process view and disabled controls")
+    for number, label in disabled_functions:
         assert_function(frame, number, label, False)
     console.key(0x78)
     console.wait(lambda f: is_main(f) and text_contains(f, "read-only"), "read-only keyboard action refusal")
@@ -581,7 +607,9 @@ def readonly_contract(console, exe, directory, pids, fixtures, observations):
     console.wait(lambda f: text_contains(f, "writes disabled by --readonly"), "read-only :save refusal")
     assert config.read_bytes() == original
     console.key(0x71)
-    frame = console.wait(lambda f: overlay_contains(f, "Setup"), "read-only Setup")
+    frame = console.wait(lambda f: overlay_contains(f, "Setup")
+                         and function_ready(f, 9, "Save", False)
+                         and function_ready(f, 10, "Quit"), "read-only Setup and disabled save")
     assert_function(frame, 9, "Save", False)
     click_function(console, 9, "Save", False)
     console.wait(lambda f: overlay_contains(f, "Setup") and text_contains(f, "Save: read-only"), "read-only save button is disabled with its reason")
@@ -647,7 +675,7 @@ def worker(exe, output):
             assert not console.mode() & 0x06, "line/echo modes can intercept TUI control keys"
             observations["checks"].append("default htop function bar and native mouse mode")
 
-            console.click(frame["width"] * 15 // 100, frame["height"] - 1)
+            click_function(console, 2, "Setup")
             console.wait(lambda f: overlay_contains(f, "Setup"), "mouse-opened setup")
             console.key(27, "\x1b")
             console.wait(lambda f: has_bar(f) and is_main(f), "setup close")
@@ -659,7 +687,8 @@ def worker(exe, output):
 
             console.wait(lambda f: visible_pids(f, pids) == set(pids), "identity-bearing targets before confirmation")
             console.records(console.key_records(0x78, repeat=32))  # Held initiating F9.
-            frame = console.wait(lambda f: overlay_contains(f, "Terminate"), "termination confirmation")
+            frame = console.wait(lambda f: overlay_contains(f, "Terminate")
+                                 and function_ready(f, 10, "Quit"), "termination confirmation")
             assert all(p.poll() is None for p in fixtures), "opening confirmation mutated a process"
             assert not function_slot(frame, 9)[2].strip(), "F9 was actionable inside confirmation"
             repeated = []
@@ -678,7 +707,7 @@ def worker(exe, output):
             console.type(":unfinished-fixture-command")
             frame = console.wait(lambda f: editor_contains(f, ":unfinished-fixture-command"),
                                  "unfinished command editor")
-            console.click(frame["width"] * 5 // 100, frame["height"] - 1)
+            click_function(console, 1, "Help")
             console.wait(lambda f: overlay_contains(f, "Help"), "mouse help cancels command editor")
             console.key(27, "\x1b")
             console.wait(lambda f: is_main(f) and has_bar(f) and not editor_contains(f, ":"),

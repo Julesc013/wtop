@@ -56,6 +56,25 @@ class NativeCliTests(unittest.TestCase):
 
     @staticmethod
     def path_key(value: str):
+        # Windows temp roots may use an 8.3 alias (RUNNER~1) while the product
+        # reports the handle-resolved long name. Resolve actual filesystem
+        # identity, including the nearest existing parent of a new destination;
+        # case folding alone cannot compare those aliases. Only absence permits
+        # walking upward: denied/invalid paths must still fail the oracle.
+        path = Path(value)
+        if not path.is_absolute():
+            raise AssertionError(f"expected an absolute native path: {value!r}")
+        missing = []
+        while True:
+            try:
+                resolved = path.resolve(strict=True)
+                break
+            except FileNotFoundError:
+                if path.parent == path:
+                    raise
+                missing.append(path.name)
+                path = path.parent
+        value = str(resolved.joinpath(*reversed(missing)))
         if value.startswith("\\\\?\\UNC\\"):
             value = "\\\\" + value[8:]
         elif value.startswith("\\\\?\\"):
@@ -399,6 +418,13 @@ class NativeCliTests(unittest.TestCase):
             self.assertIs(paths["saving_disabled"], False)
             self.assertIsInstance(paths["canonical_aliases"], bool)
             self.assertEqual(selected.read_bytes(), sentinel)
+            new_destination = root / "new.conf"
+            new_paths = json.loads(self.run_cli("--paths", "--format=json", f"--config={new_destination}").stdout)
+            self.assertEqual(new_paths["owner"], "explicit")
+            self.assertEqual(new_paths["source"], "explicit-file")
+            self.assertEqual(self.path_key(new_paths["read"]), self.path_key(str(new_destination)))
+            self.assertEqual(self.path_key(new_paths["write"]), self.path_key(str(new_destination)))
+            self.assertFalse(new_destination.exists())
             missing = root / "absent-parent" / "new.conf"
             absent = json.loads(self.run_cli("--paths", "--format=json", f"--config={missing}").stdout)
             self.assertEqual(self.path_key(absent["write"]), self.path_key(str(missing)))

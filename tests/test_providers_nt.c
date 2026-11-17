@@ -6,6 +6,86 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include <stddef.h>
+
+/* Diagnostic only: this native ABI is queried dynamically and is never a
+   product dependency or a reason to waive the exact handle-count assertion.
+   ProcessHandleInformation (51) and its layout are recorded by System Informer:
+   https://github.com/winsiderss/phnt/blob/master/ntpsapi.h
+   Only object TYPE is queried; object-name/file queries can block in drivers. */
+typedef struct handle_entry {
+    HANDLE value;
+    SIZE_T handle_count, pointer_count;
+    ULONG access, type_index, attributes, reserved;
+} handle_entry;
+typedef struct handle_snapshot {
+    ULONG_PTR count, reserved;
+    handle_entry entries[1];
+} handle_snapshot;
+typedef struct diagnostic_unicode {
+    USHORT length, maximum_length;
+    WCHAR *buffer;
+} diagnostic_unicode;
+typedef LONG (NTAPI *query_native_fn)(HANDLE, ULONG, void *, ULONG, ULONG *);
+
+static query_native_fn native_query(const char *name)
+{
+    query_native_fn query = NULL;
+    FARPROC address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), name);
+    if(address) memcpy(&query, &address, sizeof(query));
+    return query;
+}
+
+static handle_snapshot *snapshot_handles(void)
+{
+    const ULONG capacity = 65536;
+    query_native_fn query = native_query("NtQueryInformationProcess");
+    handle_snapshot *snapshot;
+    ULONG bytes = 0;
+    LONG status;
+    if(!query) return NULL;
+    snapshot = calloc(1, capacity);
+    if(!snapshot) return NULL;
+    status = query(GetCurrentProcess(), 51, snapshot, capacity, &bytes);
+    if(status < 0 || snapshot->count > (capacity - offsetof(handle_snapshot, entries)) / sizeof(handle_entry)) {
+        free(snapshot); return NULL;
+    }
+    return snapshot;
+}
+
+static void print_new_handles(const char *stage, const handle_snapshot *before, const handle_snapshot *after)
+{
+    query_native_fn query = native_query("NtQueryObject");
+    ULONG_PTR i, j;
+    if(!before || !after || !query) {
+        fprintf(stderr, "handle difference at %s: native type diagnostics unavailable\n", stage);
+        fflush(stderr);
+        return;
+    }
+    for(i = 0; i < after->count; ++i) {
+        const handle_entry *entry = &after->entries[i];
+        void *information;
+        ULONG bytes = 0;
+        LONG status;
+        for(j = 0; j < before->count; ++j)
+            if(before->entries[j].value == entry->value && before->entries[j].type_index == entry->type_index) break;
+        if(j < before->count) continue;
+        information = calloc(1, 4096);
+        status = information ? query(entry->value, 2, information, 4096, &bytes) : (LONG)0xc0000017UL;
+        fprintf(stderr, "new handle at %s: value=%p, type_index=%lu, access=0x%08lx, type=", stage,
+            (void *)entry->value, entry->type_index, entry->access);
+        if(status >= 0) {
+            const diagnostic_unicode *name = information;
+            ULONG_PTR start = (ULONG_PTR)information, text = (ULONG_PTR)name->buffer;
+            if(name->buffer && !(name->length % sizeof(WCHAR)) && name->length <= 4096 &&
+               text >= start && text - start <= 4096 - name->length)
+                fprintf(stderr, "%.*ls", (int)(name->length / sizeof(WCHAR)), name->buffer);
+        } else fprintf(stderr, "query failed 0x%08lx", (unsigned long)status);
+        fputc('\n', stderr);
+        free(information);
+    }
+    fflush(stderr);
+}
 
 static DWORD WINAPI signal_cancel(void *context)
 {
@@ -69,18 +149,29 @@ int wmain(int argc, WCHAR **argv)
     wtop_provider_result *result;
     HANDLE cancel, thread;
     FILETIME created, exited, kernel, user;
-    DWORD cold, before, after, sequence;
+    DWORD cold, diagnostics_ready, before, after, sequence;
+    handle_snapshot *cold_handles, *diagnostic_handles, *baseline_handles;
     int code, i;
     ULONGLONG started;
     if(wtop_provider_worker_dispatch(argc, argv, &code)) return code;
     result = calloc(1, sizeof(*result));
     assert(result);
     wtop_provider_session_init(&session);
+    cold_handles = snapshot_handles();
     assert(GetProcessHandleCount(GetCurrentProcess(), &cold));
+    /* Initialize diagnostic I/O before the measured API path. A static CRT may
+       initialize stdio lazily; the diagnostic itself must not look like a leak. */
+    fprintf(stderr, "native provider diagnostics starting: cold handles=%lu\n", cold);
+    fflush(stderr);
+    assert(GetProcessHandleCount(GetCurrentProcess(), &diagnostics_ready));
+    diagnostic_handles = snapshot_handles();
+    if(cold != diagnostics_ready) print_new_handles("diagnostic stream initialization", cold_handles, diagnostic_handles);
+    free(cold_handles); free(diagnostic_handles);
     prime_process_creation();
     assert(GetProcessHandleCount(GetCurrentProcess(), &before));
-    fprintf(stderr, "native process-creation preflight handles: cold=%lu, warm=%lu\n", cold, before);
+    fprintf(stderr, "native process-creation preflight handles: cold=%lu, diagnostics=%lu, warm=%lu\n", cold, diagnostics_ready, before);
     fflush(stderr);
+    baseline_handles = snapshot_handles();
     request_kind(&request, WTOP_PROVIDER_TEST_VALID);
     for(i = 0; i < 5; ++i) {
         assert(wtop_provider_collect(&session, &request, 3000, NULL, result) == WTOP_PROVIDER_VALID);
@@ -90,8 +181,14 @@ int wmain(int argc, WCHAR **argv)
         assert(GetProcessHandleCount(GetCurrentProcess(), &after));
         fprintf(stderr, "native provider handles after iteration %d: expected=%lu, actual=%lu\n", i, before, after);
         fflush(stderr);
+        if(before != after) {
+            handle_snapshot *current = snapshot_handles();
+            print_new_handles("provider collection", baseline_handles, current);
+            free(current);
+        }
         assert(before == after);
     }
+    free(baseline_handles);
 
     request_kind(&request, WTOP_PROVIDER_TEST_DELAY);
     started = GetTickCount64();

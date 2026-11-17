@@ -96,7 +96,8 @@ if(WIN32)
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_cli.py" "$<TARGET_FILE:wtop>")
             set_tests_properties(native_cli_behavior PROPERTIES TIMEOUT 90)
             add_test(NAME native_provider_behavior
-                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_providers.py" "$<TARGET_FILE:wtop>")
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_providers.py" "$<TARGET_FILE:wtop>"
+                    --observations "${CMAKE_CURRENT_BINARY_DIR}/native-provider-observations.json")
             set_tests_properties(native_provider_behavior PROPERTIES TIMEOUT 90)
             add_test(NAME native_tui_interaction
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_tui.py" "$<TARGET_FILE:wtop>")

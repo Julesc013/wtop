@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import json
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -18,10 +19,14 @@ import sys
 import unittest
 
 EXE = None
+OBSERVATIONS = None
 if __name__ == "__main__":
     if len(sys.argv) < 2 or not Path(sys.argv[1]).is_file():
         raise SystemExit("usage: test_native_providers.py PATH_TO_WTOP_EXE")
     EXE = str(Path(sys.argv.pop(1)).resolve())
+    if len(sys.argv) > 2 and sys.argv[1] == "--observations":
+        sys.argv.pop(1)
+        OBSERVATIONS = Path(sys.argv.pop(1))
 
 STATES = {
     "valid", "warming_up", "unsupported", "denied", "unavailable", "error",
@@ -34,6 +39,7 @@ STATES = {
 class NativeProviderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.observations = []
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.GetCurrentProcess.restype = wintypes.HANDLE
         kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
@@ -41,6 +47,18 @@ class NativeProviderTests(unittest.TestCase):
         if not kernel.GetProcessTimes(kernel.GetCurrentProcess(), *(ctypes.byref(value) for value in times)):
             raise ctypes.WinError(ctypes.get_last_error())
         cls.creation = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+
+    @classmethod
+    def tearDownClass(cls):
+        if OBSERVATIONS:
+            receipt = {
+                "schema": 1, "kind": "native-provider-observations",
+                "exe_sha256": hashlib.sha256(Path(EXE).read_bytes()).hexdigest(),
+                "windows": list(sys.getwindowsversion()),
+                "observations": cls.observations,
+                "limitation": "Typed degradation checks can pass without a provider supplying data; inspect statuses. No target or release qualification is implied.",
+            }
+            OBSERVATIONS.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
     def run_json(self, *args):
         result = subprocess.run(
@@ -55,6 +73,9 @@ class NativeProviderTests(unittest.TestCase):
 
     def provider(self, data, name):
         provider = data["providers"][name]
+        self.observations.append({"test": self._testMethodName, "profile": data["profile"], "provider": name,
+            **{key: provider.get(key) for key in ("status", "error_domain", "native_error", "count", "total_count",
+                "started_ms", "observed_ms", "elapsed_ms", "acquisition_ms", "retirement_confirmed", "response_received", "scope")}})
         self.assertIn(provider["status"], STATES)
         self.assertIsInstance(provider["retirement_confirmed"], bool)
         self.assertIsInstance(provider["response_received"], bool)
