@@ -1,0 +1,30 @@
+name: Import verified beta source objects
+on:
+  push:
+    branches: [transfer/wtop-beta-six-20261118]
+permissions:
+  contents: write
+concurrency:
+  group: wtop-exact-beta-source-transfer
+  cancel-in-progress: false
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate packet, apply data-only patches and create exact Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 transfer/import_objects.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: wtop-beta-object-import-${{ github.sha }}
+          path: import-result.json
+          if-no-files-found: error
+          retention-days: 14
+# Temporary transport branch only. No remote reference, release, configuration,
+# repository setting or installation is changed by this one-use workflow.
