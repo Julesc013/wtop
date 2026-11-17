@@ -1,5 +1,7 @@
 # Wtop roadmap
 
+Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+
 Wtop aims to provide a dense htop-style native TUI and a unified command-line
 inspection/control interface from one maintainable source tree. Compatibility is
 qualified per CPU, executable ABI, loader/runtime floor and actual environment.

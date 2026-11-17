@@ -511,6 +511,46 @@
       "oracle": "Combine CLI keymap/theme/mouse/bar overrides with config/no-config and metadata; invalid/conflicting forms fail before collection and write-config performs no process sample.",
       "status": "not_run",
       "evidence": []
+    },
+    {
+      "id": "WT-AC-063-03",
+      "requirements": [
+        "WT-REQ-063-03"
+      ],
+      "method": "artifact",
+      "oracle": "Exact beta revision/version/profile, clean source, successful mandatory tests, observed provenance and unchanged executable/ZIP/source; negative cases reject mismatches.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-063-04",
+      "requirements": [
+        "WT-REQ-063-04"
+      ],
+      "method": "native",
+      "oracle": "Exact payload on ordinary-user Windows 11 x64 workstation plus explicit human terminal review; server, elevated-only and wrong-payload records cannot pass.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-063-05",
+      "requirements": [
+        "WT-REQ-063-05"
+      ],
+      "method": "review",
+      "oracle": "Live Issues route and issue templates exist; allowlisted diagnostics omit secret process/user/configuration sentinels.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "WT-AC-063-06",
+      "requirements": [
+        "WT-REQ-063-06"
+      ],
+      "method": "artifact",
+      "oracle": "Draft/publication state machine refuses missing evidence and existing public releases; actual acquired final assets match recorded hashes.",
+      "status": "not_run",
+      "evidence": []
     }
   ]
 }

@@ -1,5 +1,7 @@
 # Wtop TODO
 
+Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+
 This is the contributor checklist for the complete currently agreed product scope.
 The [work registry](spec/work/units.json) owns work-unit status; the
 [acceptance registry](spec/catalog/acceptance.json) owns qualification results.

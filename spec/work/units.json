@@ -468,7 +468,7 @@
     {
       "id": "WT-W130",
       "title": "Exact-payload release qualification",
-      "status": "planned",
+      "status": "active",
       "dependencies": [
         "WT-W070"
       ],
@@ -486,11 +486,16 @@
       "deliverables": [
         "Qualified release manifest",
         "Acquired-byte verification",
-        "Honest support and channel documentation"
+        "Honest support and channel documentation",
+        "Six-patch portable beta scope, fail-closed draft/publication pipeline and exact-client/human receipts; stable/historical acceptance remains independent"
       ],
       "acceptance": [
         "WT-AC-063-01",
-        "WT-AC-063-02"
+        "WT-AC-063-02",
+        "WT-AC-063-03",
+        "WT-AC-063-04",
+        "WT-AC-063-05",
+        "WT-AC-063-06"
       ],
       "evidence": []
     }

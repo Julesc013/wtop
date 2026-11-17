@@ -60,7 +60,7 @@
       "mode": "modifier",
       "arguments": "integer milliseconds 50..60000",
       "status": "candidate",
-      "behavior": "Default1000; initial candidate uses same sampling/redraw interval.",
+      "behavior": "Default 1000 ms; requested process sampling interval. Optional providers and input handling have separate cadence; the implementation also uses this as its redraw interval.",
       "acceptance": [
         "WT-AC-030-01"
       ],

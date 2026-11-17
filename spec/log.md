@@ -2,6 +2,11 @@
 
 ## 2026-11-17
 
+- Authorized portable public-beta subset: added four narrow release requirements,
+  mapped exact-client/human/feedback/promotion gates, retained the guarded target
+  evidence requirement, and added privacy-aware templates.
+  Existing broad acceptance records remain unpromoted.
+
 - Implemented 0.4.0-dev.1 measurement/actions/text/context policy modules, native
   settings/provider/output adapters, typed schema-2 snapshots, query/inspect/log,
   schema-2 stable-tab settings and explicit owner/path discovery. Preserved `-d`

@@ -1,5 +1,7 @@
 # Wtop
 
+Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+
 Wtop is a native terminal process monitor derived from
 [NTop](https://github.com/gsass1/NTop). It keeps a compact process table and meters,
 with **htop-style controls and colors by default**, optional Vi/Vim and Emacs

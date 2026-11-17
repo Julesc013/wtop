@@ -6,7 +6,7 @@ resource: "urn:wtop:spec:wt-063"
 tags: ["wtop", "development"]
 status: "draft"
 generated: {"by": "chatgpt/gpt-6-astra-pro", "at": "2026-11-17T01:02:17Z"}
-wtop: {"id": "WT-063", "profile": "wtop-spec/1", "version": "0.1.1", "authority": "proposed-normative", "review": "pending", "depends_on": ["WT-020", "WT-050", "WT-062"], "requirements": ["WT-REQ-063-01", "WT-REQ-063-02"]}
+wtop: {"id": "WT-063", "profile": "wtop-spec/1", "version": "0.1.1", "authority": "proposed-normative", "review": "pending", "depends_on": ["WT-020", "WT-050", "WT-062"], "requirements": ["WT-REQ-063-01", "WT-REQ-063-02", "WT-REQ-063-03", "WT-REQ-063-04", "WT-REQ-063-05", "WT-REQ-063-06"]}
 sources: [{"id": "user", "resource": "../references/sources.json#user"}, {"id": "release-intent-20261117", "resource": "../references/sources.json#release-intent-20261117"}, {"id": "wtop-audit-20261117", "resource": "../references/sources.json#wtop-audit-20261117"}, {"id": "semver-2", "resource": "../references/sources.json#semver-2"}]
 ---
 
@@ -46,8 +46,8 @@ first useful Windows TUI release.
 ## Named milestones and version policy
 
 The next intended product release is **Wtop 0.4.0**, the first Wtop-branded
-release following the inherited NTop 0.3.x line. The audited source remains
-0.1.0-dev.2 until a separately tested version transition. Calling a milestone
+release following the inherited NTop 0.3.x line. The integrated implementation reached 0.4.0-dev.1; public beta candidates use
+0.4.0-beta.N and are distinct from the eventual stable release. Calling a milestone
 0.4.0 does not publish it, change an acceptance result or qualify a target.
 
 The [dated release-readiness assessment](../../docs/wtop-release-readiness-2026-11-17.md)
@@ -65,7 +65,7 @@ An infeasibility or policy restriction requires a recorded scope disposition;
 it cannot silently count as a working port. A modern-only 1.0 is a different
 scope decision. GUI remains deferred independently of the TUI/CLI milestone.
 
-Use explicit development/prerelease labels, for example 0.4.0-dev.N and
+Use explicit development/prerelease labels, for example 0.4.0-dev.N, 0.4.0-beta.N and
 0.4.0-rc.N, followed by stable 0.4.0. Do not derive product versions from CI run
 counts. Under SemVer, 0.4.0-stable.N is a prerelease despite its wording; use
 ordinary stable versions and channel/profile metadata. A changed published
@@ -90,3 +90,69 @@ Acceptance: WT-AC-063-01 — Inspect manifest, source/import/native records and 
 Published support and installation commands MUST reflect actually observed release/package channels and must retain prerelease status.
 
 Acceptance: WT-AC-063-02 — Compare release metadata and package identity against the real published artifact; planned channels remain unavailable.
+
+## Public beta boundary
+
+The authorized first public beta is **0.4.0-beta.1**, a portable x64 Windows NT
+TUI and explicit CLI monitor, not the complete stable 0.4.0 or historical 1.0
+scope. The target remains `WT-TGT-WIN64-MODERN`; no new duplicate target is
+created. x86/ARM64 can remain CI candidates and are not public beta assets until
+their own evidence is admitted. MSI, WinGet, self-install and GUI are excluded
+from this beta's published assets. Existing stable install goals remain open.
+
+A draft may hold verified, visibly unqualified candidates while native client
+or human evidence is absent. Public publication requires all beta gates below.
+Server CI is not Windows 11 desktop evidence; injected input is not human visual
+review. Missing credentials, a disabled issue tracker, unavailable hardware or a
+failed gate produces a blocked result, never a fabricated pass or waived gate.
+
+Candidate construction, native execution, draft staging, public promotion and
+post-publication acquisition are separate operations. A release cannot verify
+its own public download before publication: verify draft assets first, publish
+only after pre-publication gates, then immediately verify the public asset URLs.
+A failed post-publication check is a release incident, not permission to replace
+bytes under the same version. Retain the failed manifest and publish a new version.
+
+The narrow beta gate receipt supplements the existing broad acceptance cases.
+It references their IDs and exact inputs; it does not promote full target support.
+Historical audit documents retain their original revision and are not rewritten.
+
+### WT-REQ-063-03
+
+A public beta MUST bind its version, source revision and portable x64 payload to
+passing automated tests, observed build/SDK provenance and same-byte source/license
+and archive verification; it MUST exclude unqualified install/profile artifacts.
+
+Acceptance: WT-AC-063-03 — Reject wrong revision/version/profile, dirty source,
+missing provenance, failed/skipped mandatory tests, changed EXE/ZIP/source and
+unexpected artifacts; retain exact successful candidate hashes.
+
+### WT-REQ-063-04
+
+A public beta MUST have a receipt for the exact executable on Windows 11 x64
+workstation under an ordinary user token and an explicit human review of its
+console interaction/restoration, with host and terminal identities recorded.
+
+Acceptance: WT-AC-063-04 — Run the exact candidate on a named Windows 11 desktop;
+review keymaps, mouse fallback, small/resize layouts, prompts, settings and exit.
+Reject server, elevated-only, wrong-payload and automatically asserted human evidence.
+
+### WT-REQ-063-05
+
+A public beta MUST have an accessible issue-reporting route and privacy-safe
+report instructions; diagnostics MUST NOT collect process names, command lines,
+SIDs, usernames, environment, paths or user settings without explicit selection.
+
+Acceptance: WT-AC-063-05 — Verify live repository Issues availability and report
+templates; inspect a diagnostic report from a fixture containing secret sentinels
+and ensure only the documented non-sensitive allowlist is included.
+
+### WT-REQ-063-06
+
+Beta staging and publication MUST be explicit, exact-source-bound operations;
+publication MUST refuse missing gates and existing non-draft releases, and MUST
+verify acquired asset bytes without rebuilding or silently replacing a version.
+
+Acceptance: WT-AC-063-06 — Exercise dry-run/draft/publication state transitions,
+missing gates, mismatched tag/source and existing releases; independently acquire
+and hash the final assets. An offline validator cannot assert live publication.

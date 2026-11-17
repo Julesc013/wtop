@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible Wtop defect without disclosing private process data.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Do not paste raw snapshots, command lines, usernames, SIDs, file paths or configuration without reviewing them. Redact credentials. For security-sensitive issues, see SECURITY.md."
+  - type: input
+    id: version
+    attributes:
+      label: Wtop version and executable SHA-256
+      description: Use --version and Get-FileHash; include the download channel.
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Windows version/build, architecture and terminal
+      placeholder: Windows 11 build ..., x64, Windows Terminal/conhost, ordinary user/admin
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction
+      description: Use disposable processes and redacted arguments. Do not terminate unrelated applications.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Optional reviewed diagnostics
+      description: Only paste allowlisted diagnostic output or manually reviewed excerpts. No dumps by default.
