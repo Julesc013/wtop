@@ -650,6 +650,49 @@ def churn_contract(console, exe, directory, pids, fixtures, observations):
     observations["checks"].append("process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case")
 
 
+def viewport_matrix_contract(console, exe, directory, pids, observations):
+    """Exercise the actual screen buffer; saved layout must not be rewritten."""
+    config = directory / "viewport-matrix.conf"
+    new_config(exe, config)
+    original = config.read_bytes()
+    console.start(exe, config, pids, "--keymap", "htop", "--status-bar", interval=50)
+    sizes = [(40, 25), (80, 25), (40, 10), (39, 9), (80, 25)]
+    observed = []
+    for width, height in sizes:
+        console.resize(width, height)
+        if width < 40 or height < 10:
+            console.wait(lambda f: text_contains(f, "Resize to at least"), "safe tiny viewport")
+        else:
+            console.wait(is_main, "main view after resize")
+            console.key(0x70)
+            console.wait(lambda f: overlay_contains(f, "Help"), "help after resize")
+            console.key(27, "\x1b")
+            console.wait(is_main, "keyboard recovery after resize")
+        frame = console.frame()
+        assert len(frame["rows"]) == height
+        assert all(len(row) == width for row in frame["rows"])
+        observed.append([width, height])
+    # Test 80x50 only when the real host permits that viewport. A host limitation
+    # is disclosed, not a fabricated pass; the desktop review still requires it.
+    handle = console.open("CONOUT$")
+    try:
+        maximum = console.info(handle).maximum
+    finally:
+        console.k.CloseHandle(handle)
+    if maximum.X >= 80 and maximum.Y >= 50:
+        console.resize(80, 50)
+        console.wait(is_main, "80x50 native view")
+        observed.append([80, 50])
+    else:
+        observations["viewport_80x50"] = "host-limited; desktop review required"
+    console.resize(console.width, console.height)
+    console.wait(is_main, "original viewport recovery")
+    console.stop()
+    assert config.read_bytes() == original, "resizing implicitly saved settings"
+    observations["viewport_sizes"] = observed
+    observations["checks"].append("native viewport matrix, tiny fallback, keyboard recovery and unchanged settings")
+
+
 def worker(exe, output):
     console = None
     fixtures = []
@@ -816,6 +859,7 @@ def worker(exe, output):
             console.stop(send_key=False)
             assert all(p.poll() is None for p in fixtures), "input after quit mutated an owned process"
             observations["checks"].append("queued actions after quit are discarded before mutation")
+            viewport_matrix_contract(console, exe, Path(temp), pids, observations)
             sampling_click_contract(console, exe, Path(temp), pids, observations)
             setup_contract(console, exe, Path(temp), pids, observations)
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
