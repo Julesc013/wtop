@@ -19,7 +19,7 @@ criteria; some already have candidate code and need evidence rather than rewriti
 
 ## 0. Current implementation and first-release gates
 
-The current application is **0.4.0-dev.1**. The earlier
+The current application is **0.4.0-beta.1 (unpublished candidate)**. The earlier
 [17 November source audit](docs/wtop-release-readiness-2026-11-17.md) describes
 `1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`; the
 [current implementation record](docs/implementation-verification-2026-11-17.md)

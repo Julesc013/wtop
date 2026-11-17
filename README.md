@@ -11,7 +11,7 @@ bindings, and explicit command-line output and settings operations.
 the unmodified NTop starting revision. Develop Wtop on short-lived branches from
 `master`; see [branch and upstream policy](docs/development.md#branches-and-upstream).
 
-**Status: development candidate, version 0.4.0-dev.1.** The current application
+**Status: development candidate, version 0.4.0-beta.1 (unpublished candidate).** The current application
 backend is Windows NT. This increment implements the eight-workstream design:
 corrected measurements/actions, sample freshness, contextual TUI and Setup,
 versioned settings ownership, query/inspect/log, bounded optional providers,
