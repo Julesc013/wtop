@@ -109,7 +109,17 @@ class _NativeToken:
         raise RuntimeError("token information changed beyond the bounded query retries")
 
     def scalar(self, token, kind):
-        buffer, returned = self.information(token, kind)
+        if kind not in (18, 20, 21):
+            raise ValueError("no fixed scalar contract for token information class " + str(kind))
+        # These classes have a known maximum four-byte result. Some Windows
+        # builds return ERROR_BAD_LENGTH for a zero-byte scalar sizing probe;
+        # query the documented storage directly instead of weakening the
+        # variable-length SID query's ERROR_INSUFFICIENT_BUFFER contract.
+        buffer = ctypes.c_uint32()
+        needed = w.DWORD()
+        self.checked(self.security.GetTokenInformation(token, kind,
+            ctypes.byref(buffer), ctypes.sizeof(buffer), ctypes.byref(needed)))
+        returned = needed.value
         # TokenHasRestrictions is a BOOLEAN in native implementations despite
         # the DWORD wording of the public enum documentation. Read only bytes
         # actually returned and preserve the observed length in the receipt.
@@ -117,7 +127,7 @@ class _NativeToken:
         allowed = (1, 4) if kind == 21 else (4,)
         if returned not in allowed:
             raise RuntimeError("unexpected scalar size for token information class " + str(kind))
-        return int.from_bytes(buffer.raw[:returned], "little"), returned
+        return int.from_bytes(ctypes.string_at(ctypes.byref(buffer), returned), "little"), returned
 
     def sid_string(self, token, kind):
         buffer, returned = self.information(token, kind)
