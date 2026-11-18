@@ -126,7 +126,7 @@ same single EXE. The guard's callback, ownership and retirement rules are in
 Only on a disposable Windows VM/runner with no existing profile registration:
 
 ```powershell
-python tests/test_native_install.py out/candidate --disposable-host --machine --restricted-user
+python tests/test_native_install.py out/candidate --disposable-host --machine --standard-user
 ```
 
 This harness exercises both scopes, exact application/legal-file hashes,
@@ -147,12 +147,21 @@ preceding actual file/registry writes, the failed new product to be unregistered
 the original product fully registered, exact restored payload/legal bytes and
 no skipped failed rollback operations.
 
-`--restricted-user` repeats the per-user lifecycle under a medium-integrity
-primary token with Administrators disabled and privileges removed. The child
-asserts it has no administrator membership and writes its own receipt. This
-creates no account/service/task and is ordinary-token automation, not a new-user
-profile test, UAC interaction or human desktop review. Failed commands/logs are
-retained. Unittest discovery does not run this mutating harness.
+`--standard-user` requires a disposable host and a fresh local standard account,
+separate profile, exact copied candidate and independently checked token state.
+The account/profile/staging and processes have explicit test ownership and
+cleanup; credentials are not command arguments or log fields. This is automated
+fresh-account coverage, not interactive UAC or human desktop review. The native
+receipt must establish both lifecycle and cleanup outcomes.
+
+`--restricted-user` instead uses the existing account with administrator
+membership disabled, privileges removed and medium integrity. It remains a
+stress/policy context: it can retain `TokenElevation=true` and prior same-user
+installer ACLs. It must not be labelled genuine ordinary-user installation.
+Version-2 installer observations distinguish actual token elevation, enabled
+administrator membership and integrity, correcting the earlier receipt's
+misnamed `token_elevated` membership field. Failed commands/logs are retained.
+Unittest discovery does not run this mutating harness.
 
 The x64 Windows Server runner rejects unmanaged, non-elevated MSI installation
 under its effective `DisableMSI=1` policy. CI passes
@@ -160,9 +169,9 @@ under its effective `DisableMSI=1` policy. CI passes
 observe error 1625, the specific policy denial and unchanged payload/ownership/
 PATH. That receipt is a verified refusal, not a successful per-user installation.
 No fixture changes the machine policy. The Windows 11 ARM64 client job builds its
-own MSI and requires the full restricted-user lifecycle without that exception.
+own MSI and requires the full fresh-standard-user lifecycle without that exception.
 Exact receipts govern the result; x64 client, fresh-account/UAC and broader host
-acceptance remain open even if the ARM64 restricted-token test passes.
+acceptance remain open even if the ARM64 standard-account test passes.
 
 ## Offline package-manager preparation
 

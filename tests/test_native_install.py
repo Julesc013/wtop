@@ -595,37 +595,155 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
         cleanup_preserving_failure(cleanup_fixture)
 
 
+def run_standard_account(candidate, manifest, observations):
+    """Stage exact inputs for an independent, temporary standard-user profile."""
+    sys.path.insert(0, str(ROOT / "packaging"))
+    from standard_user_process import standard_user_fixture
+    stage = Path(tempfile.mkdtemp(prefix="wtop-msi-standard-"))
+    diagnostics = {}
+    observations["standard_user_fixture"] = diagnostics
+    source_files = ("tests/test_native_install.py", "tools/package_candidate.py",
+                    "tools/inspect_pe.py", "tools/release_metadata.py",
+                    "spec/catalog/targets.json", "packaging/native_token.py")
+
+    def copy_exact(source, destination, bound):
+        require(source.is_file() and not source.is_symlink(), "staged input is not a regular file: " + str(source))
+        info = source.lstat()
+        require(not (getattr(info, "st_file_attributes", 0) & 0x400), "staged input is a reparse point: " + str(source))
+        require(info.st_size <= bound, "staged input exceeds its size bound: " + str(source))
+        with source.open("rb") as stream:
+            data = stream.read(bound + 1)
+        require(len(data) <= bound and len(data) == info.st_size,
+                "staged input changed size or exceeded its size bound: " + str(source))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)  # inherit the owned staging ACL; never copy a caller's ACL
+        require(destination.read_bytes() == data, "staged input bytes changed: " + str(source))
+        display_path = destination.relative_to(stage) if destination.is_relative_to(stage) else destination
+        return {"path": str(display_path), "size": len(data), "sha256": sha256(data)}
+
+    with standard_user_fixture(stage, diagnostics, disposable_host=True) as account:
+        require(account.user_sid != observations["token_context"]["user_sid"],
+                "standard-user fixture reused the elevated caller's account")
+        staged_root = stage / "repo"
+        staged_candidate = stage / "candidate"
+        diagnostics["staged_sources"] = [copy_exact(ROOT / name, staged_root / name, 1024 * 1024)
+                                         for name in source_files]
+        names = {"candidate.json", "payload.json", "SHA256SUMS", "LICENSE", "PORTABLE.txt", "wtop.conf.example"}
+        names.update(item["name"] for item in manifest["artifacts"])
+        if third_party_notices_required(manifest["payload"]["version"]):
+            names.add("THIRD-PARTY-NOTICES.md")
+        require(len(names) <= 32, "unexpected candidate staging inventory")
+        diagnostics["staged_candidate"] = [copy_exact(candidate / name, staged_candidate / name, 128 * 1024 * 1024)
+                                           for name in sorted(names)]
+        require(verify(staged_candidate) == manifest, "standard-user staging changed candidate provenance")
+        receipt_name = "native-install-observations-standard-user.json"
+        log_name = "native-install-logs-standard-user"
+
+        def collect_evidence():
+            captured = False
+            try:
+                receipt = staged_candidate / receipt_name
+                if receipt.exists():
+                    copy_exact(receipt, candidate / receipt_name, 4 * 1024 * 1024)
+                    ordinary = json.loads((candidate / receipt_name).read_text(encoding="utf-8"))
+                    require(isinstance(ordinary, dict) and ordinary.get("schema") == "wtop.install-observations/2",
+                            "standard-user child did not leave the expected completion receipt")
+                    observations["standard_user"] = ordinary
+                    captured = True
+                    if ordinary.get("cleanup_failure_traceback"):
+                        account.retain_for_diagnosis("child MSI cleanup did not complete; retain its profile and registration")
+            finally:
+                if not captured:
+                    account.retain_for_diagnosis("child completion receipt is absent or invalid; external MSI retirement is unproven")
+            log_directory = staged_candidate / log_name
+            if log_directory.exists():
+                require(log_directory.is_dir() and not log_directory.is_symlink() and
+                        not (getattr(log_directory.lstat(), "st_file_attributes", 0) & 0x400),
+                        "standard-user log directory is not an ordinary owned directory")
+                logs = sorted(log_directory.glob("*.log"))
+                require(len(logs) <= 32, "standard-user log inventory exceeds its bound")
+                for log in logs:
+                    copy_exact(log, candidate / log_name / log.name, 16 * 1024 * 1024)
+
+        command = [sys.executable, str(staged_root / "tests/test_native_install.py"), str(staged_candidate),
+                   "--disposable-host", "--require-standard-token", "--expected-user-sid=" + account.user_sid,
+                   "--label=standard-user"]
+        try:
+            code = account.run(command, cwd=staged_root, timeout=900)
+            diagnostics["child_exit_code"] = code
+        finally:
+            cleanup_preserving_failure(collect_evidence)
+        ordinary = observations.get("standard_user", {})
+        token = ordinary.get("token_context", {})
+        require(code == 0 and not ordinary.get("failure") and
+                token.get("is_user_an_admin") is False and token.get("token_elevation") is False and
+                token.get("integrity_rid") == 8192 and token.get("user_sid") == account.user_sid and
+                token.get("token_has_restrictions") is False,
+                "fresh standard-user MSI fixture failed; retain its independent logs")
+        require(ordinary.get("execution_context") == "fresh_standard_local_account" and
+                any(row.get("scope") == "user" and row.get("passed") is True
+                    for row in ordinary.get("scope_results", [])),
+                "fresh standard user did not complete the full installation lifecycle")
+        require(ordinary.get("payload_sha256") == manifest["payload"]["executable"]["sha256"] and
+                ordinary.get("installer_sha256") == observations["installer_sha256"] and
+                ordinary.get("source_revision") == observations["source_revision"],
+                "fresh standard-user receipt is not bound to the exact candidate")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--disposable-host", action="store_true", required=True)
     parser.add_argument("--machine", action="store_true")
-    parser.add_argument("--restricted-user", action="store_true", help="also repeat per-user fixtures with a medium restricted token")
+    context = parser.add_mutually_exclusive_group()
+    context.add_argument("--restricted-user", action="store_true", help="verify Server policy in a same-user restricted stress token")
+    context.add_argument("--standard-user", action="store_true", help="repeat full per-user lifecycle in a fresh temporary standard account")
     parser.add_argument("--expect-restricted-user-policy-refusal", action="store_true",
                         help="Server-only: verify clean-install DisableMSI=1 refusal instead of claiming ordinary-user lifecycle acceptance")
     parser.add_argument("--require-ordinary-token", action="store_true")
-    parser.add_argument("--label", default="", choices=("", "restricted-user"))
+    parser.add_argument("--require-standard-token", action="store_true")
+    parser.add_argument("--expected-user-sid", default="")
+    parser.add_argument("--label", default="", choices=("", "restricted-user", "standard-user"))
     args = parser.parse_args(argv)
     if args.expect_restricted_user_policy_refusal and not (args.restricted_user or args.require_ordinary_token):
         parser.error("expected restricted-user policy refusal requires --restricted-user")
+    if args.restricted_user and not args.expect_restricted_user_policy_refusal:
+        parser.error("restricted-token MSI context is a Server policy stress probe; use --standard-user for client acceptance")
+    if args.require_standard_token and (not args.expected_user_sid or args.label != "standard-user"):
+        parser.error("standard-account child requires its expected SID and label")
     if os.name != "nt":
         parser.error("native installer execution requires Windows")
     candidate = args.candidate.resolve()
     suffix = "-" + args.label if args.label else ""
     logs = candidate / ("native-install-logs" + suffix)
     logs.mkdir(exist_ok=True)
-    observations = {"schema": "wtop.install-observations/1", "kernel": sys.getwindowsversion().build,
+    observations = {"schema": "wtop.install-observations/2", "kernel": sys.getwindowsversion().build,
                     "product_type": sys.getwindowsversion().product_type,
-                    "token_elevated": bool(ctypes.windll.shell32.IsUserAnAdmin()),
+                    "token_context": None,
                     "scope_results": [], "qualified": False,
                     "limits": ["hostile same-user preflight/deferred-recheck-to-mutation race",
                                "standard-user UAC boundary when runner elevated", "power loss/restart recovery",
                                "host matrix", "real prior-release application/version upgrade",
                                "optional owned PATH alias transaction", "same-profile scope coexistence"]}
     try:
+        sys.path.insert(0, str(ROOT / "packaging"))
+        from native_token import current_token_context
+        observations["token_context"] = token = current_token_context()
         if args.require_ordinary_token:
-            require(not observations["token_elevated"], "restricted child unexpectedly retains administrator membership")
-            observations["execution_context"] = "medium_restricted_token_same_user_not_human_UAC_review"
+            require(not token["is_user_an_admin"] and token["integrity_rid"] == 8192,
+                    "restricted stress child is not medium integrity without administrator membership")
+            observations["execution_context"] = "same_user_restricted_medium_token_stress"
+        if args.require_standard_token:
+            require(not token["is_user_an_admin"] and not token["token_elevation"] and
+                    token["integrity_rid"] == 8192 and token["user_sid"] == args.expected_user_sid and
+                    token["token_has_restrictions"] is False,
+                    "fresh-account child does not have the required genuine standard-user token")
+            user_profile = Path(os.environ["USERPROFILE"]).resolve()
+            require(Path(os.environ["APPDATA"]).resolve().is_relative_to(user_profile) and
+                    Path(os.environ["LOCALAPPDATA"]).resolve().is_relative_to(user_profile),
+                    "fresh-account child inherited another user's configuration environment")
+            observations["execution_context"] = "fresh_standard_local_account"
+            observations["user_profile"] = str(user_profile)
         manifest = verify(candidate)
         require(manifest["installer"].get("built"), "candidate has no MSI")
         observations["payload_sha256"] = manifest["payload"]["executable"]["sha256"]
@@ -640,10 +758,10 @@ def main(argv=None) -> int:
         else:
             observations["scope_results"].append(run_scope(candidate, manifest, "user", logs))
         if args.machine:
-            require(observations["token_elevated"], "machine fixture requires an elevated disposable runner")
+            require(token["is_user_an_admin"] and token["token_elevation"], "machine fixture requires an elevated disposable runner")
             observations["scope_results"].append(run_scope(candidate, manifest, "machine", logs))
         if args.restricted_user:
-            require(observations["token_elevated"], "restricted-token launcher requires the disposable elevated parent")
+            require(token["is_user_an_admin"] and token["token_elevation"], "restricted-token launcher requires the disposable elevated parent")
             sys.path.insert(0, str(ROOT / "packaging"))
             from restricted_process import run_restricted
             command = [sys.executable, str(Path(__file__).resolve()), str(candidate),
@@ -653,16 +771,17 @@ def main(argv=None) -> int:
             code = run_restricted(command, ROOT, timeout=900)
             ordinary = json.loads((candidate / "native-install-observations-restricted-user.json").read_text())
             observations["restricted_user"] = ordinary
-            require(code == 0 and not ordinary.get("failure") and ordinary.get("token_elevated") is False,
-                    "restricted ordinary-user MSI fixture failed; retain its independent logs")
+            require(code == 0 and not ordinary.get("failure") and
+                    ordinary.get("token_context", {}).get("is_user_an_admin") is False,
+                    "restricted-token Server policy fixture failed; retain its independent logs")
             if args.expect_restricted_user_policy_refusal:
                 require(ordinary.get("policy_refusal_verified") is True and not ordinary.get("scope_results"),
                         "Server child did not verify policy refusal separately from installation")
-            else:
-                require(any(row.get("scope") == "user" and row.get("passed") is True
-                            for row in ordinary.get("scope_results", [])),
-                        "client child did not complete ordinary-user lifecycle acceptance")
-    except (OSError, ValueError, AssertionError, subprocess.SubprocessError) as exc:
+        if args.standard_user:
+            require(token["is_user_an_admin"] and token["token_elevation"],
+                    "fresh-account fixture requires the disposable elevated parent")
+            run_standard_account(candidate, manifest, observations)
+    except (OSError, ValueError, AssertionError, RuntimeError, subprocess.SubprocessError) as exc:
         observations["failure"] = str(exc)
         observations["failure_traceback"] = traceback.format_exc()
         if hasattr(exc, "fixture_cleanup_failure"):

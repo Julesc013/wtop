@@ -334,8 +334,8 @@ scope. This agrees with
 [Microsoft's documented policy](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi).
 It is a host policy boundary, not evidence that ordinary-user installation passed.
 
-CI now verifies that Server refusal explicitly, without modifying policy, while
-requiring a separate full restricted-user lifecycle on the native Windows 11
+CI verifies that Server refusal explicitly, without modifying policy, while
+requiring a separate full standard-user lifecycle on the native Windows 11
 ARM64 client. These are different outcomes, each retained in its receipt; an
 unexpected refusal on the client remains a failing gate. MSI artifacts are named
 per profile and remain separate experimental candidates. The final exact-source
@@ -357,6 +357,20 @@ The oracle now requires actual preceding writes, old/new native registration
 states and absence of skipped failed rollback operations. That is a stronger
 restoration check; a later exact-source run must establish its result. This
 earlier registration failure is retained, not retroactively treated as a pass.
+
+Candidate `8ae413e5a2b01b37ee5a36d6e9f2b4a662ba1214` in
+[checks run 44272594615](https://github.com/Julesc013/wtop/actions/runs/44272594615)
+still failed the restricted-client rollback oracle under that normal deferred
+boundary. This rules out the extra execution phase as a sufficient explanation.
+`IsUserAnAdmin=false` alone does not establish an unelevated token: the synthetic
+token retained `TokenElevation=true`, and the same account had previous elevated
+installer state. The new client fixture therefore requires a fresh standard
+account/profile, actual non-elevated token and full lifecycle/cleanup evidence.
+It does not change machine policy or relax restoration assertions. Installer
+observations use schema 2 to separate enabled administrator membership, actual
+elevation and integrity. Server policy refusal and restricted resource stress
+coverage retain their distinct, explicit meanings. Native results must still
+qualify this corrected client context; no human desktop receipt is synthesized.
 
 ## Remaining work and recommended sequence
 

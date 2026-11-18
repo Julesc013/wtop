@@ -113,10 +113,10 @@ jobs:
         shell: pwsh
         run: |
           # Server's unmanaged-install policy is verified, never changed. The
-          # Windows 11 ARM64 client must pass the full restricted-user lifecycle.
-          $policyArgs = @()
-          if ('${{ matrix.arch }}' -eq 'x64') { $policyArgs = @('--expect-restricted-user-policy-refusal') }
-          python tests/test_native_install.py out/candidate --disposable-host --machine --restricted-user @policyArgs
+          # Windows 11 ARM64 client must pass under a fresh standard account.
+          $contextArgs = @('--standard-user')
+          if ('${{ matrix.arch }}' -eq 'x64') { $contextArgs = @('--restricted-user', '--expect-restricted-user-policy-refusal') }
+          python tests/test_native_install.py out/candidate --disposable-host --machine @contextArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify candidate cannot be promoted as a supported release
         shell: pwsh

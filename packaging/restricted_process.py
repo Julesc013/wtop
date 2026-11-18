@@ -132,8 +132,11 @@ def _owned_object_security(kernel, security, token, diagnostics):
 
 
 @contextmanager
-def _owned_desktop(kernel, security, token, diagnostics):
+def _owned_desktop(kernel, security, token, diagnostics, *, owner_sid=None):
     """Grant only this user/SYSTEM access to new session-local user objects.
+
+    A fresh-account fixture can also supply its parent's independently queried
+    SID; this grants the parent access only to these newly owned objects.
 
     CreateProcessAsUser(NULL lpDesktop) inherits the caller's user objects.
     Their ACL/integrity can reject the caller's restricted child before Python
@@ -180,7 +183,8 @@ def _owned_desktop(kernel, security, token, diagnostics):
         checked(security.ConvertSidToStringSidW(sid, ctypes.byref(sid_string)))
         # Explicit medium mandatory label is necessary too: these new objects
         # are created by an elevated parent but used by its medium child.
-        sddl = 'D:P(A;;GA;;;' + sid_string.value + ')(A;;GA;;;SY)S:(ML;;NW;;;ME)'
+        extra_owner = '' if not owner_sid or owner_sid == sid_string.value else '(A;;GA;;;' + owner_sid + ')'
+        sddl = 'D:P(A;;GA;;;' + sid_string.value + ')(A;;GA;;;SY)' + extra_owner + 'S:(ML;;NW;;;ME)'
         checked(security.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None))
         attributes = SECURITY_ATTRIBUTES(ctypes.sizeof(SECURITY_ATTRIBUTES), descriptor, False)
         station = checked(user.CreateWindowStationW(name, 1, 0x10000000, ctypes.byref(attributes)))
@@ -193,7 +197,7 @@ def _owned_desktop(kernel, security, token, diagnostics):
                 checked(user.SetThreadDesktop(original_desktop))
         if diagnostics is not None:
             diagnostics['desktop'] = {'isolation': 'owned_noninteractive_window_station',
-                'name': name + '\\Default', 'access': 'current_user_and_SYSTEM_only',
+                'name': name + '\\Default', 'access': 'target_user_parent_and_SYSTEM_only' if extra_owner else 'current_user_and_SYSTEM_only',
                 'integrity': 'medium', 'interactive_acl_modified': False,
                 'parent_window_station_restored': True}
         yield name + '\\Default'
