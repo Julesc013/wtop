@@ -154,7 +154,7 @@ static size_t NativeAscii(const TCHAR *Text, char *Output, size_t Capacity)
 
 static int NativeTextProfile(void)
 {
-    return Settings.character_set == WTOP_CHARSET_UNICODE ? (Screen.vt_enabled ? 2 : 1) : 0;
+    return Settings.character_set == WTOP_CHARSET_UNICODE ? (Screen.grapheme_enabled ? 2 : 1) : 0;
 }
 
 /* No format buffer: provider strings can be longer than a screen, and a
@@ -2383,12 +2383,12 @@ static void InspectionText(int *Line, const TCHAR *Text)
         size_t Cells = 0;
         unsigned Flags = 0;
         size_t Span = Length ? wtop_text_utf16_span((const unsigned short *)Text + Offset, Length - Offset,
-            (size_t)Limit, Settings.character_set == WTOP_CHARSET_UNICODE ? (Screen.vt_enabled ? 2 : 1) : 0,
+            (size_t)Limit, NativeTextProfile(),
             &Cells, &Flags) : 0;
         if(Length && !Span) {
             wtop_text_cluster Cluster;
             if(wtop_text_next_utf16((const unsigned short *)Text + Offset, Length - Offset,
-                Settings.character_set == WTOP_CHARSET_UNICODE ? (Screen.vt_enabled ? 2 : 1) : 0, &Cluster))
+                NativeTextProfile(), &Cluster))
                 Span = Cluster.input_units;
             else Span = 1;
             Flags |= WTOP_TEXT_LOSSY;
@@ -3562,7 +3562,8 @@ static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
         case 8: _stprintf_s(Text, Capacity, _T("Paint interval: %lu ms; input remains immediate"), Settings.frame_interval_ms); break;
         case 9: _stprintf_s(Text, Capacity, _T("Meter width: %d cells"), Settings.meter_width); break;
         case 10: _stprintf_s(Text, Capacity, _T("Meter style: %hs"), wtop_meter_style_name(Settings.meter_style)); break;
-        case 11: _stprintf_s(Text, Capacity, _T("Character set: %hs (host-qualified cluster rendering)"), wtop_character_set_name(Settings.character_set)); break;
+        case 11: _stprintf_s(Text, Capacity, _T("Character set: %hs (%s)"), wtop_character_set_name(Settings.character_set),
+            Screen.grapheme_enabled ? _T("host cluster-width probe passed") : _T("conservative host projection")); break;
         case 12: _stprintf_s(Text, Capacity, _T("Normal background: %hs (terminal default or explicit palette)"), wtop_background_mode_name(Settings.background_mode)); break;
         }
     } else if(SetupPage == 1 || SetupPage == 2) {

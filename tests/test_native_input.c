@@ -500,6 +500,7 @@ static void editor_grapheme_navigation(void)
         /* Prompt and body are separate grapheme streams. These assertions use
            the actual composed frame and Vi caret, not a duplicate renderer. */
         Screen.vt_enabled = 1;
+        Screen.grapheme_enabled = 1;
         compose();
         size_t row = (size_t)StatusRow * (size_t)Width;
         assert(Screen.cells.back[row].glyph == ':' && !Screen.cells.back[row].cluster_units);
@@ -509,10 +510,13 @@ static void editor_grapheme_navigation(void)
         key(VK_RIGHT, 0, 0); compose();
         assert(ViInputCursor() == 2 && (Screen.cells.back[row + 2].attribute & 255) == 0x30);
         key(VK_HOME, 0, 0);
-        Screen.vt_enabled = 0;
+        /* VT colours can remain available on a host that failed the native
+           cluster-width probe; rendering must still use the fallback. */
+        Screen.grapheme_enabled = 0;
         compose();
         assert(Screen.cells.back[row].glyph == ':' && Screen.cells.back[row + 1].glyph == '?');
         assert(Screen.cells.back[row + 2].glyph == 'Z' && (Screen.cells.back[row + 1].attribute & 255) == 0x30);
+        Screen.vt_enabled = 0;
         key('E', L'e', 0);
         assert(ViInputCursor() == 3); /* Newly joined e+accent, not an interior caret. */
         key(VK_BACK, 0, 0); assert(!wcscmp(CurrentInputStr, L":Z"));

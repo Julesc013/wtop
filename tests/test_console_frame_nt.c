@@ -109,6 +109,7 @@ int main(void)
     /* Legacy fallback inherits the invoking palette background and strips the
        semantic flags rather than leaking them into COMMON_LVB attributes. */
     assert(wtop_console_frame_configure(&host,output,0x57,0));
+    assert(!host.vt_enabled && !host.grapheme_enabled);
     assert(wtop_console_frame_begin(&host,output,width,height,before.srWindow.Left,before.srWindow.Top,
         7|WTOP_ATTR_DEFAULT_BACKGROUND));
     wtop_frame_put(&host.cells,1,0,'B',3|WTOP_ATTR_DEFAULT_BACKGROUND);
@@ -120,6 +121,8 @@ int main(void)
         assert(GetConsoleMode(output,&original));
         assert(wtop_console_frame_configure(&host,output,before.wAttributes,1));
         if(host.vt_enabled) {
+            printf("native cluster-width probe: %s (VT colours remain independent)\n",
+                host.grapheme_enabled ? "passed" : "conservative projection required");
             assert(wtop_console_frame_begin(&host,output,width,height,before.srWindow.Left,before.srWindow.Top,
                 7|WTOP_ATTR_DEFAULT_BACKGROUND));
             wtop_frame_put(&host.cells,1,0,'V',0x30|WTOP_ATTR_EXPLICIT_BACKGROUND);

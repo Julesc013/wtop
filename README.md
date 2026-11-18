@@ -119,7 +119,7 @@ collector; it is not a full runtime probe.
 | `--footer functions\|compact\|status\|hidden` | Choose the single footer style; default `functions`. |
 | `--status-position banner\|bottom\|hidden` | Place contextual status in the header by default; a second bottom row is explicit opt-in. |
 | `--frame-interval MILLISECONDS` | Bound ordinary painting cadence (16–1000 ms; default 50), independently of sampling; input may redraw immediately. |
-| `--character-set unicode\|ascii` | Unicode 17 grapheme projection on negotiated VT hosts; conservative glyph fallback on legacy hosts. ASCII remains available. |
+| `--character-set unicode\|ascii` | Unicode 17 grapheme editing; full projection requires VT and native width checks. Other hosts retain conservative glyph fallback. ASCII remains available. |
 | `-p`, `--pid PID,PID` | Filter process IDs. |
 | `-n`, `--name NAME,NAME` | Filter names by case-sensitive substring. |
 | `-u`, `--user USER` | Exact SID or resolved account name. Unresolved name filtering is explicitly partial. |

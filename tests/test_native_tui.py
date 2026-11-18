@@ -126,13 +126,17 @@ class Console:
         declarations = {
             "CreateFileW": ([W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p,
                              W.DWORD, W.DWORD, W.HANDLE], W.HANDLE),
+            "CreateConsoleScreenBuffer": ([W.DWORD, W.DWORD, C.c_void_p,
+                                            W.DWORD, C.c_void_p], W.HANDLE),
             "CloseHandle": ([W.HANDLE], W.BOOL),
             "SetHandleInformation": ([W.HANDLE, W.DWORD, W.DWORD], W.BOOL),
             "GetConsoleMode": ([W.HANDLE, C.POINTER(W.DWORD)], W.BOOL),
+            "SetConsoleMode": ([W.HANDLE, W.DWORD], W.BOOL),
             "SetStdHandle": ([W.DWORD, W.HANDLE], W.BOOL),
             "GetConsoleScreenBufferInfo": ([W.HANDLE, C.POINTER(ScreenInfo)], W.BOOL),
             "SetConsoleScreenBufferSize": ([W.HANDLE, Coord], W.BOOL),
             "SetConsoleWindowInfo": ([W.HANDLE, W.BOOL, C.POINTER(Rect)], W.BOOL),
+            "SetConsoleCursorPosition": ([W.HANDLE, Coord], W.BOOL),
             "ReadConsoleOutputCharacterW": ([W.HANDLE, W.LPWSTR, W.DWORD,
                                              Coord, C.POINTER(W.DWORD)], W.BOOL),
             "ReadConsoleOutputW": ([W.HANDLE, C.POINTER(CharInfo), Coord,
@@ -141,6 +145,8 @@ class Console:
                                             Coord, C.POINTER(W.DWORD)], W.BOOL),
             "WriteConsoleOutputCharacterW": ([W.HANDLE, W.LPCWSTR, W.DWORD,
                                               Coord, C.POINTER(W.DWORD)], W.BOOL),
+            "WriteConsoleW": ([W.HANDLE, W.LPCWSTR, W.DWORD,
+                                C.POINTER(W.DWORD), C.c_void_p], W.BOOL),
             "WriteConsoleInputW": ([W.HANDLE, C.POINTER(InputRecord), W.DWORD,
                                      C.POINTER(W.DWORD)], W.BOOL),
             "FlushConsoleInputBuffer": ([W.HANDLE], W.BOOL),
@@ -251,6 +257,40 @@ class Console:
                 matches = 0
             time.sleep(0.03)
         raise AssertionError(f"timeout waiting for {description}:\n" + "\n".join(self.last_frame["rows"]))
+
+    def cluster_widths(self):
+        """Independent host receipt, separate from Wtop's projected frame."""
+        handle = self.k.CreateConsoleScreenBuffer(0xC0000000, 3, None, 1, None)
+        if handle == C.c_void_p(-1).value:
+            return {"qualified": False, "error": C.get_last_error(), "widths": {}}
+        samples = {"combining": ("e\u0301", 1), "CJK": ("\u4e2d", 2),
+                   "supplementary": ("\U0001f600", 2),
+                   "ZWJ": ("\U0001f469\u200d\U0001f4bb", 2),
+                   "regional": ("\U0001f1e6\U0001f1fa", 2),
+                   "keycap": ("1\ufe0f\u20e3", 2),
+                   "leading_mark": ("\u25cc\u0301", 1)}
+        result = {"qualified": True, "widths": {}}
+        try:
+            mode = W.DWORD()
+            if not self.k.GetConsoleMode(handle, C.byref(mode)) or not self.k.SetConsoleMode(handle, (mode.value | 5) & ~2):
+                return {"qualified": False, "error": C.get_last_error(), "widths": {}}
+            for name, (sample, expected) in samples.items():
+                self.check(self.k.SetConsoleCursorPosition(handle, Coord(0, 0)))
+                # The trailing ASCII marker makes this an independent advance
+                # measurement rather than reading Wtop's capability variable.
+                text = sample + "Z"
+                count = len(text.encode("utf-16-le")) // 2
+                written = W.DWORD()
+                self.check(self.k.WriteConsoleW(handle, text, count, C.byref(written), None))
+                assert written.value == count
+                info = self.info(handle)
+                observed = info.cursor.X - 1
+                result["widths"][name] = {"observed": observed, "expected": expected}
+                if observed != expected or info.cursor.Y != 0:
+                    result["qualified"] = False
+            return result
+        finally:
+            self.check(self.k.CloseHandle(handle))
 
     def records(self, records):
         data = (InputRecord * len(records))(*records)
@@ -615,47 +655,66 @@ def unicode_layout_contract(console, exe, directory, pids, observations):
     config = directory / "unicode-layout.conf"
     new_config(exe, config)
     assert config_values(config)["CharacterSet"] == "unicode"
+    probe = console.cluster_widths()
+    observations["unicode_host_probe"] = probe
+    full = probe["qualified"]
     console.start(exe, config, pids, "--status-position", "bottom")
     console.wait(has_bar, "Unicode layout function bar")
     console.type(":e\u0301\u4e2d\U0001f600Z")
 
+    def editor(frame):
+        # The active editor shares the final function row even when idle
+        # status is configured as a separate bottom row.
+        return frame["rows"][-1], frame["attributes"][-1]
+
     def anchored(frame, column, caret):
-        row, colors = frame["rows"][-2], frame["attributes"][-2]
-        return row.startswith(":e") and row[column] == "Z" and (colors[caret] & 0xFF) == 0x30
+        row, colors = editor(frame)
+        return row.startswith(":e" if full else ":?") and row[column] == "Z" and (colors[caret] & 0xFF) == 0x30
+
+    def plain(frame):
+        row, colors = editor(frame)
+        return row.startswith(":Z") and (colors[1] & 0xFF) == 0x30
 
     # These are independent terminal-cell positions: prompt 1, e+accent 1,
     # CJK 2, emoji 2, Z 1. ReadConsoleOutputW cannot expose the full combining
     # text; raw preservation and cluster segmentation have separate fixtures.
-    frame = console.wait(lambda f: anchored(f, 6, 7), "Unicode cell widths and end caret")
-    assert frame["cell_units"][-2][2] == 0x4E2D, "CJK glyph lost in VT projection"
+    # On a host that fails the independent native probe, every unsupported
+    # cluster has one visible fallback cell. Do not pretend legacy conhost
+    # proved full shaping merely because it accepted ENABLE_VT_PROCESSING.
+    last, end, emoji = (6, 7, 4) if full else (4, 5, 3)
+    frame = console.wait(lambda f: anchored(f, last, end), "host-qualified Unicode cell widths and end caret")
+    if full:
+        assert frame["cell_units"][-1][2] == 0x4E2D, "CJK glyph lost in qualified VT projection"
+    else:
+        assert frame["rows"][-1].startswith(":???Z"), "unsupported clusters were not conservatively projected"
     assert has_bar(frame), "Unicode editor displaced the independent function bar"
+    assert function_slot(frame, 1)[0] == frame["width"] // 2, "Unicode width drift moved the function buttons"
     console.key(0x25)
-    console.wait(lambda f: anchored(f, 6, 6), "caret before final ASCII glyph")
+    console.wait(lambda f: anchored(f, last, last), "caret before final ASCII glyph")
     console.key(0x25)
-    console.wait(lambda f: anchored(f, 6, 4), "caret skips the complete supplementary grapheme")
+    console.wait(lambda f: anchored(f, last, emoji), "caret skips the complete supplementary grapheme")
     console.key(8, "\b")
-    console.wait(lambda f: anchored(f, 4, 2), "backspace removes the preceding whole CJK grapheme")
+    console.wait(lambda f: anchored(f, 4 if full else 3, 2), "backspace removes the preceding whole CJK grapheme")
     console.key(0x2E)
     console.wait(lambda f: anchored(f, 2, 2), "delete removes the complete supplementary grapheme")
     console.key(0x24)
     console.key(0x2E)
-    console.wait(lambda f: f["rows"][-2].startswith(":Z")
-                 and (f["attributes"][-2][1] & 0xFF) == 0x30,
+    console.wait(plain,
                  "delete removes base plus combining accent as one grapheme")
     console.key(ord("U"), "\x15", 8)
     console.type("\U0001f469\u200d\U0001f4bbZ")
-    console.wait(lambda f: f["rows"][-2][3] == "Z"
-                 and (f["attributes"][-2][4] & 0xFF) == 0x30,
-                 "ZWJ sequence occupies its two-cell layout allocation")
+    console.wait(lambda f: editor(f)[0][3 if full else 2] == "Z"
+                 and (editor(f)[1][4 if full else 3] & 0xFF) == 0x30,
+                 "ZWJ sequence occupies its qualified layout allocation")
     console.key(0x24)
     console.key(0x2E)
-    console.wait(lambda f: f["rows"][-2].startswith(":Z"), "delete removes the complete ZWJ sequence")
+    console.wait(plain, "delete removes the complete ZWJ sequence")
     console.key(27, "\x1b")
     console.wait(lambda f: is_main(f) and has_bar(f) and not editor_contains(f, ":Z"),
                  "Unicode editor cancellation returns to main")
     console.stop()
     observations["checks"].append(
-        "native Unicode cell anchors and caret positions for combining/CJK/supplementary/ZWJ text, whole-grapheme deletion, independent function bar")
+        "independently probed native Unicode projection, exact combining/CJK/supplementary/ZWJ cell anchors and caret positions, whole-grapheme deletion, fixed function-bar coordinates")
 
 
 def readonly_contract(console, exe, directory, pids, fixtures, observations):

@@ -16,8 +16,11 @@ universal historical Windows binary.
   or host palettes. Focus and selection colours are separately configurable;
   existing explicit background settings migrate.
 - **Unicode 17 graphemes:** pinned utf8proc 2.11.0, cluster-safe editing/wrapping/
-  clipping and retained wide-cell text. ASCII/legacy fallback remains. Terminal
-  font, shaping, bidi and width limitations remain explicit.
+  clipping and retained wide-cell text. Full projection requires a separate
+  bounded native cluster-width probe; VT colour support alone is insufficient.
+  Incompatible hosts keep conservative one-cell substitutions and VT colours,
+  with raw text and whole-cluster editing preserved. Terminal font, shaping,
+  bidi and width limitations remain explicit.
 - **Details and threads:** scrollable captured process details, full image path,
   command line, services and thread lifetime counters with status, age and manual
   F5 refresh. Optional reads run in bounded owned child providers outside input.

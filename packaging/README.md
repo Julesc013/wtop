@@ -41,7 +41,7 @@ MSVC and CMake:
 ```powershell
 dotnet tool install wix --tool-path out/wix --version 4.0.6
 $env:DOTNET_ROLL_FORWARD = 'Major'
-python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe --msi-version 0.0.2
+python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe
 ```
 
 The numeric MSI version uses the shared `wtop.version/1` ledger by default:
@@ -171,6 +171,15 @@ prerelease compatibility restriction. The receipt retains the original SemVer.
 Native client schema checks, public acquisition, upgrade/uninstall preservation,
 scope and alias collision review remain required before submission. Generated
 preparation is retained separately in CI, not uploaded into a community channel.
+
+On 18 November 2026 the generator's synthetic three-profile WinGet documents
+passed JSON Schema validation against Microsoft's `winget-cli` **1.12.0** schemas:
+installer blob `2f634646d9bd1b291616e317adcfb26ec8f7e2ed`, defaultLocale blob
+`5d96d684e80205ac83afc848e3b6fff581d647eb`, and version blob
+`2e4a2c86712a3c2345bcadb29822688939e150ad`. This is structural generator evidence;
+it does not validate a final release's downloads, execute the WinGet client, or
+qualify installation/uninstallation. Repeat validation on the exact generated
+preparation and retain the native acquisition/lifecycle gates.
 
 `acquire.ps1` accepts an exact GitHub release asset URL and independently supplied
 SHA256, stages it, verifies bytes, and optionally invokes that same MSI. It does

@@ -70,6 +70,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build out/beta-windows --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record and package the immutable application candidate
+        id: candidate
+        shell: pwsh
+        run: |
+          python packaging/record_build.py out/beta-windows out/beta-provenance.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py create --exe out/beta-windows/Release/wtop.exe --output out/beta-candidate --profile ${{ matrix.profile }} --provenance out/beta-provenance.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py verify out/beta-candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Execute final native and TUI tests on the declared host
         shell: pwsh
         run: |
@@ -78,10 +88,6 @@ jobs:
       - name: Record unchanged final bytes and native receipts
         shell: pwsh
         run: |
-          python packaging/record_build.py out/beta-windows out/beta-provenance.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/package_candidate.py create --exe out/beta-windows/Release/wtop.exe --output out/beta-candidate --profile ${{ matrix.profile }} --provenance out/beta-provenance.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item out/beta-windows/native-tests.xml out/beta-candidate/native-tests.xml
           python packaging/native_receipt.py out/beta-candidate --junit out/beta-candidate/native-tests.xml --output out/beta-candidate/native-receipt.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -90,7 +96,10 @@ jobs:
           python tools/package_candidate.py verify out/beta-candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build exact-payload experimental MSI and exercise its lifecycle
-        if: matrix.arch == 'x64'
+        # Exercise the independent installer boundary even when native runtime
+        # tests failed. A failed native/MSI step still fails this entire job;
+        # assembly and publication retain their successful-build dependency.
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' && matrix.arch == 'x64' }}
         shell: pwsh
         env:
           DOTNET_ROLL_FORWARD: Major

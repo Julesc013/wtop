@@ -142,7 +142,22 @@ is bounded to 128 UTF-16 units; front/back text arenas have a one-million-unit
 ceiling each. Raw model/settings/JSON text is preserved. Bidi overrides and
 terminal controls are inert visible substitutions.
 
-The legacy renderer keeps a conservative glyph repertoire. Fonts, shaping,
+VT colour support and grapheme width support are negotiated separately. An
+accepted VT output mode preserves terminal-default backgrounds but does not
+prove cluster shaping: the second native attempt found classic consoles advance
+two cells for `e` plus combining acute where the layout reserves one. Before
+selecting full projection, a bounded, never-activated private buffer measures
+combining, CJK, supplementary emoji, ZWJ, flag, keycap and dotted-circle advances.
+Any disagreement or probe failure selects the conservative glyph repertoire
+while retaining VT colours. Setup reports that projection. The probe closes its
+temporary handle and does not touch the caller's buffer, cursor or input queue.
+UAX29 editing and raw settings/provider text remain intact in either projection;
+an unsupported cluster becomes one explicit fallback cell, never split pieces.
+
+This small probe qualifies the tested width families, not all fonts or Unicode
+sequences. The external native fixture records its independent host measurements
+and checks exact application caret, text-anchor and function-button coordinates
+for the resulting projection. Fonts, shaping,
 bidirectional text, ambiguous-width terminal preferences, accessibility and
 Windows Terminal appearance require additional host/human review. Passing UAX29
 segmentation tests does not certify those independent properties.
@@ -227,6 +242,24 @@ production Git attributes; the production corresponding-source byte check is
 unchanged. The workflow's missing `beta3-changes.md` input was supplied. Corrected
 native results must come from the later exact-source workflow and final receipts;
 this failure record is retained rather than retroactively labelled successful.
+
+### Second native integration attempt
+
+Source `9c80c8bef5c76d55a8a21656cec9f65c5e1ae96f` was tested in
+[Windows checks run 44264564360](https://github.com/Julesc013/wtop/actions/runs/44264564360).
+All three profiles passed 23 of 25 entries. The moved-viewport presenter and
+explicit ASCII Setup contracts passed. The new full-Unicode anchor test exposed
+actual classic-console width drift: combining text shifted the next glyphs,
+caret and function buttons. This is a production capability-negotiation failure,
+not a reason to weaken expected cell positions. The repair separates VT colour
+support from the bounded native width probe described above and preserves
+conservative output on incompatible hosts.
+
+The restricted resource worker also failed before Python produced its receipt,
+with process status `0xC0000142` (DLL initialization failure). Those permissions/
+process-launch results remain separate from ordinary TUI and provider evidence.
+The later exact-source native run must qualify both repairs; this attempt is not
+release acceptance.
 
 ## Remaining work and recommended sequence
 

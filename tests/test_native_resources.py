@@ -351,9 +351,11 @@ def main():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging"))
     from restricted_process import run_restricted
     outer_context = context()
+    launch_diagnostics = {}
     try:
         code = run_restricted([sys.executable, str(Path(__file__).resolve()), exe,
-                              "--restricted-worker", str(output)], Path.cwd(), timeout=180)
+                              "--restricted-worker", str(output)], Path.cwd(), timeout=180,
+                              diagnostics=launch_diagnostics)
     except BaseException:
         receipt = {"schema": 1, "kind": "native-resource-observations", "human_review": False}
         if output.exists():
@@ -362,7 +364,8 @@ def main():
             except (ValueError, OSError):
                 receipt["partial_receipt"] = output.read_text(encoding="utf-8", errors="replace")
         receipt.update({"result": "failed", "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
-                        "outer_context": outer_context, "outer_failure": traceback.format_exc()})
+                        "outer_context": outer_context, "outer_failure": traceback.format_exc(),
+                        "launch": launch_diagnostics})
         stack = output.with_suffix(".stack.txt")
         if stack.exists():
             receipt["blocked_worker_stacks"] = stack.read_text(encoding="utf-8", errors="replace")
@@ -372,10 +375,12 @@ def main():
         write_receipt(output, {"schema": 1, "kind": "native-resource-observations", "result": "failed",
             "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
             "outer_context": outer_context, "restricted_exit_code": code,
-            "failure": "restricted child exited without a receipt", "human_review": False})
+            "failure": "restricted child exited without a receipt", "launch": launch_diagnostics,
+            "human_review": False})
         raise AssertionError(f"restricted fixture exit {code} produced no receipt")
     receipt = json.loads(output.read_text(encoding="utf-8"))
     receipt["outer_context"] = outer_context
+    receipt["launch"] = launch_diagnostics
     receipt["restricted_exit_code"] = code
     write_receipt(output, receipt)
     if code or receipt["result"] != "passed":

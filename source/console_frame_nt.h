@@ -14,13 +14,14 @@ typedef struct wtop_console_frame {
     HANDLE configured_output;
     DWORD original_output_mode;
     WORD inherited_attributes;
-    int vt_enabled, mode_changed;
+    int vt_enabled, grapheme_enabled, mode_changed;
     WCHAR *vt_buffer;
     size_t vt_capacity, vt_used;
 } wtop_console_frame;
 
-/* Select VT only after the host accepts it. Never change palette/opacity.
-   A legacy host retains the caller's background palette index. Call restore
+/* Select VT only after the host accepts it. Full cluster projection separately
+   requires a private-buffer native width probe; VT support alone is insufficient.
+   Never change palette/opacity. A legacy host inherits the palette background. Call restore
    before closing a borrowed output handle; dispose is otherwise sufficient. */
 int wtop_console_frame_configure(wtop_console_frame *host, HANDLE output,
                                   WORD inherited_attributes, int prefer_vt);

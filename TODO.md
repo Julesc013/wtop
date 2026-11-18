@@ -139,10 +139,11 @@ References: [governance](spec/foundation/governance.md),
   uncollected CPU subcategories or relabel commit as swap for visual similarity.
 - [ ] Verify confirmed termination and supported Windows priority-class actions
   against the exact displayed process lifetime, including denied rights and exits.
-- [ ] Add remaining htop-tier capabilities as distinct changes: thread/detail
-  views, supported affinity, branch collapse and richer meters. Pause is now
-  implemented; qualification remains scoped to its recorded fixtures.
-  Do not advertise them merely because corresponding keys exist in upstream htop.
+- [ ] Qualify Beta 3's captured detail/thread panels, confirmed single-group
+  affinity editing and lifetime-bound branch collapse. Add sampled thread CPU,
+  mixed process/thread sorting, CPU Sets/group-aware affinity and richer meters
+  as separate capabilities. Pause and these candidate panels still need the
+  broader host/human acceptance beyond their recorded fixtures.
 
 References: WT-AC-031-01 through WT-AC-031-07 in
 [acceptance](spec/catalog/acceptance.json), [TUI contract](spec/interfaces/tui.md).

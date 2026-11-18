@@ -7,6 +7,44 @@
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 
+static int probe_grapheme_widths(void)
+{
+    /* VT parsing and Unicode shaping are independent. In particular, classic
+       conhost accepts SGR49 but can advance two cells for e + combining acute.
+       Probe a separate, never-activated buffer: no caller content or cursor is
+       changed, and no terminal replies/input callbacks are required. Failure
+       retains VT colours while selecting the conservative glyph projection. */
+    static const WCHAR samples[7][6] = {
+        {'e',0x0301}, {0x4e2d}, {0xd83d,0xde00},
+        {0xd83d,0xdc69,0x200d,0xd83d,0xdcbb},
+        {0xd83c,0xdde6,0xd83c,0xddfa}, {'1',0xfe0f,0x20e3}, {0x25cc,0x0301}
+    };
+    static const DWORD units[7] = {2,1,2,5,4,3,2};
+    static const SHORT widths[7] = {1,2,2,2,2,2,1};
+    HANDLE probe;
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    COORD origin = {0,0};
+    DWORD mode, written;
+    int i, qualified = 0;
+    probe = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
+    if (probe == INVALID_HANDLE_VALUE) return 0;
+    if (!GetConsoleMode(probe, &mode) ||
+        !SetConsoleMode(probe, (mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING) &
+            ~ENABLE_WRAP_AT_EOL_OUTPUT) || !GetConsoleScreenBufferInfo(probe, &info) || info.dwSize.X < 8)
+        goto done;
+    for (i = 0; i < 7; ++i) {
+        if (!SetConsoleCursorPosition(probe, origin) ||
+            !WriteConsoleW(probe, samples[i], units[i], &written, NULL) || written != units[i] ||
+            !GetConsoleScreenBufferInfo(probe, &info) || info.dwCursorPosition.Y != 0 ||
+            info.dwCursorPosition.X != widths[i]) goto done;
+    }
+    qualified = 1;
+done:
+    CloseHandle(probe);
+    return qualified;
+}
+
 int wtop_console_frame_configure(wtop_console_frame *host, HANDLE output,
                                   WORD inherited_attributes, int prefer_vt)
 {
@@ -23,6 +61,7 @@ int wtop_console_frame_configure(wtop_console_frame *host, HANDLE output,
     if (prefer_vt && SetConsoleMode(output,
         (mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING) & ~ENABLE_WRAP_AT_EOL_OUTPUT)) {
         host->vt_enabled = 1; host->mode_changed = 1;
+        host->grapheme_enabled = probe_grapheme_widths();
     }
     wtop_frame_invalidate(&host->cells);
     return 1;
@@ -32,7 +71,7 @@ void wtop_console_frame_restore(wtop_console_frame *host)
     if (!host) return;
     if (host->mode_changed && host->configured_output)
         SetConsoleMode(host->configured_output, host->original_output_mode);
-    host->mode_changed = host->vt_enabled = 0;
+    host->mode_changed = host->vt_enabled = host->grapheme_enabled = 0;
     host->configured_output = NULL;
 }
 

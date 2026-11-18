@@ -138,8 +138,12 @@ consumed whole and replaced with explicit loss/capacity state. Controls/bidi
 overrides are inert. Front/back storage includes cluster payload and continuation
 cells, so changing only combining marks still causes a repaint.
 
-The legacy block-output profile retains a conservative glyph repertoire. Both
-profiles preserve raw model/configuration/JSON text. Unicode boundary conformance
+VT colour support alone does not establish grapheme widths. A bounded probe in
+a never-activated private console buffer checks representative cluster advances
+before enabling full projection. Probe failure selects the conservative glyph
+repertoire while keeping VT colours available. Legacy block output uses the same
+conservative repertoire. All projections retain whole-grapheme editing and raw
+model/configuration/JSON text. Unicode boundary conformance
 is independently tested; font shaping, bidirectional layout, terminal-specific
 width/appearance and accessibility require separate host/human evidence.
 `BackgroundMode terminal` emits SGR49 in VT mode and inherits the caller's palette
