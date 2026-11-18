@@ -487,7 +487,7 @@
         "Qualified release manifest",
         "Acquired-byte verification",
         "Honest support and channel documentation",
-        "Six-patch portable beta scope, fail-closed draft/publication pipeline and exact-client/human receipts; stable/historical acceptance remains independent"
+        "Exact-profile portable alpha/beta scope, fail-closed draft/publication pipeline and final-byte automated receipts; stable human and historical acceptance remain independent"
       ],
       "acceptance": [
         "WT-AC-063-01",

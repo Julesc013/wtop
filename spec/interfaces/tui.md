@@ -28,9 +28,20 @@ mouse input where available, thread view, priority/affinity controls where the
 kernel permits, and a process-detail view. Unsupported actions are visibly
 disabled with a reason. Windows priority classes are not relabeled as Unix nice.
 
+Startup has no selected process, tags or followed lifetime, even after restoring
+a display configuration. A selection exists only after explicit navigation, a
+search match or a process-row click. Escape cancels the current editor (restoring
+its prior live filter), closes a dialog or panel, then clears selection, tags and
+follow state on the main view. It does not reverse a completed process action or
+discard committed configuration changes. Ctrl+C quits from every context and
+keymap, including raw console key events and native console-control delivery.
+The existing bounded shutdown/fallback contract still applies to blocked OS calls.
+
 Selection and tags follow lifetime IDs, not row positions. Sorting is stable
 with a deterministic tie-breaker. A selected process that exits is retired;
 the next process reusing its PID is not automatically selected for an action.
+A process hidden by a filter or tab transition does not silently retarget selection
+to the row at its old index. Selection and action tags are never persisted.
 Tree building detects missing parents, cycles and depth/capacity limits.
 Filtering has a defined scope: parent context can remain visible but must not
 be counted as a match. Searching highlights without changing the collection set.
@@ -69,9 +80,11 @@ Function keys and the help screen provide a common recovery path.
 The bottom row is a function/control bar, shown by default. Its displayed actions
 and click regions derive from the same command context. The current candidate resolves function keys, labels, enabled reasons and mouse
 buttons from one context policy for process/help/setup/edit/sort/confirmation/results
-views. Native event-ordering and console behavior still need exact-host evidence. Live mode, sort, filter,
-selection, collection/error and unsaved-settings status belongs in the adjacent
-status area when space permits. Hiding the bar is a saved preference and gives
+views. Live mode, sort, filter, selection, collection/error and unsaved-settings
+status belongs in the header banner by default. `StatusPosition bottom` explicitly
+opts into a second bottom row; `hidden` suppresses ordinary status but cannot hide
+an active prompt or error. `FooterStyle` selects functions, compact or status.
+Native event ordering and console behavior require exact-host evidence. Hiding the bar is a saved preference and gives
 its row back to the process view; errors and active prompts remain visible.
 Narrow terminals reduce/shorten hints without moving invisible hitboxes offscreen.
 The user can always recover help/setup using the common keys.
@@ -104,12 +117,19 @@ htop parity remain separate work until implemented and qualified.
 
 ## Current renderer boundary
 
-The current renderer projects each non-ASCII Unicode scalar to one ASCII `?`
-cell, escapes control input and reports substitution. Decoding and clipping never
-split a surrogate/scalar; model/configuration/JSON retain their raw Unicode text.
-This is a qualified conservative algorithm, not full Unicode terminal-cell support.
-Changed-cell rendering, true wide/combining/emoji layout and accessibility across
-console hosts remain work. The minimum layout is 40 by 10 cells; below it the
+The composed front/back cell renderer writes only changed runs. An invalidated
+viewport is checked before the unchanged-frame shortcut; resize/movement forces
+retry without writes through old coordinates. Sampling and painting have separate
+intervals, and accepted input can request immediate painting. A new model must not
+replace the displayed model during a deferred-paint interval and make valid visible
+mouse targets disappear.
+
+The conservative Unicode mode retains printable single-cell characters and
+substitutes unsupported wide/combining/emoji scalars. ASCII mode substitutes every
+non-ASCII scalar. Controls are inert; decoding and clipping do not split a
+surrogate/scalar. Model/configuration/JSON retain raw Unicode. Full grapheme width
+and accessibility across console hosts remain separate work. Explicit pause freezes
+collection while age and the PAUSED indicator continue to describe the sample. The minimum layout is 40 by 10 cells; below it the
 resize/quit fallback replaces unsafe controls.
 
 ## Requirements and acceptance

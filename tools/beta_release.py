@@ -28,12 +28,13 @@ SHA = re.compile(r"[0-9a-f]{64}\Z")
 GIT = re.compile(r"[0-9a-f]{40}\Z")
 MAX_FILE = 64 * 1024 * 1024
 MAX_TOTAL = 256 * 1024 * 1024
-REQUIRED_TESTS = frozenset((
+LEGACY_REQUIRED_TESTS = frozenset((
     'portable_core','portable_settings','portable_ui','portable_text','portable_metrics',
     'portable_actions','portable_legacy_probe','native_settings_store','native_providers',
     'native_output','native_tree','cli_version','cli_capabilities','cli_gui_reserved',
     'cli_snapshot','native_cli_behavior','native_provider_behavior','native_tui_interaction',
 ))
+REQUIRED_TESTS = LEGACY_REQUIRED_TESTS | {'portable_frame', 'native_console_frame', 'native_input'}
 
 class BetaError(ValueError):
     pass
@@ -60,7 +61,7 @@ def load_json(path: Path) -> dict:
     return result
 
 
-def native_tests(path: Path) -> dict:
+def native_tests(path: Path, required=REQUIRED_TESTS) -> dict:
     """Read actual CTest JUnit. Missing/failed/skipped mandatory tests all block."""
     data = checked_file(path, 16 * 1024 * 1024)
     if b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():
@@ -68,7 +69,7 @@ def native_tests(path: Path) -> dict:
     root = ET.fromstring(data)
     cases = list(root.iter('testcase'))
     names = [case.get('name', '') for case in cases]
-    if len(names) != len(set(names)) or not REQUIRED_TESTS.issubset(names):
+    if len(names) != len(set(names)) or not required.issubset(names):
         raise BetaError('missing or duplicate mandatory native test')
     for case in cases:
         if any(case.find(tag) is not None for tag in ('failure', 'error', 'skipped')):
@@ -80,12 +81,13 @@ def native_tests(path: Path) -> dict:
 
 def validate_native(receipt: dict, payload: dict) -> None:
     exact = {'schema':'wtop.beta-native/1', 'result':'passed', 'version':payload['version'],
-             'profile':'win-nt-x64', 'source_revision':payload['source']['revision'],
+             'profile':payload['profile'], 'source_revision':payload['source']['revision'],
              'executable_sha256':payload['executable']['sha256']}
     if any(receipt.get(key) != value for key, value in exact.items()):
         raise BetaError('native receipt does not bind the exact beta payload')
     tests = receipt.get('tests', {})
-    if tests.get('status') != 'passed' or not REQUIRED_TESTS.issubset(tests.get('names', [])):
+    required = LEGACY_REQUIRED_TESTS if payload['version'] == '0.4.0-beta.1' else REQUIRED_TESTS
+    if tests.get('status') != 'passed' or not required.issubset(tests.get('names', [])):
         raise BetaError('native receipt does not cover required tests')
     if not SHA.fullmatch(str(tests.get('junit_sha256', ''))):
         raise BetaError('native receipt missing JUnit digest')
@@ -125,7 +127,19 @@ def desktop_blockers(receipt: dict | None, payload: dict) -> list[str]:
 
 
 def public_blockers(manifest: dict, desktop: dict | None, repository: dict) -> list[str]:
-    blockers = desktop_blockers(desktop, manifest['payload'])
+    # Old Beta 1 keeps its recorded human gate. Schema 2 records the user's
+    # channel-aware policy: alpha/beta optional human review, stable mandatory.
+    if manifest.get('schema') == 'wtop.beta/2':
+        from release_metadata import metadata
+        channel = metadata(manifest['version'])['channel']
+        blockers = [] if channel in ('alpha', 'beta') else desktop_blockers(desktop, manifest['payload'])
+        for profile in manifest.get('profiles', []):
+            if profile.get('security_scan', {}).get('status') != 'clean':
+                blockers.append('security_scan_not_clean:' + profile['payload']['profile'])
+        if desktop is not None:
+            blockers += desktop_blockers(desktop, manifest['payload'])
+    else:
+        blockers = desktop_blockers(desktop, manifest['payload'])
     if repository.get('full_name') != 'Julesc013/wtop' or repository.get('has_issues') is not True:
         blockers.append('live_public_issue_feedback_unavailable')
     if repository.get('private') is not False or repository.get('archived') is not False:
@@ -287,7 +301,8 @@ def verify(directory: Path) -> dict:
     if tree!=payload['source']['tree'] or entries.get('VERSION',b'').decode().strip()!=version or entries.get('LICENSE')!=data['LICENSE']:
         raise BetaError('corresponding source does not match')
     receipt=load_json(directory/'native-receipt.json');validate_native(receipt,payload)
-    if receipt['tests']!=native_tests(directory/'native-tests.xml') or manifest['signing']!=receipt['authenticode']:
+    required = LEGACY_REQUIRED_TESTS if version == '0.4.0-beta.1' else REQUIRED_TESTS
+    if receipt['tests']!=native_tests(directory/'native-tests.xml', required) or manifest['signing']!=receipt['authenticode']:
         raise BetaError('test or signing receipt mismatch')
     return manifest
 

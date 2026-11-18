@@ -37,25 +37,34 @@ jobs:
           ctest --test-dir out/host --output-on-failure
 
   windows:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        arch: [Win32, x64, ARM64]
+        include:
+          - arch: Win32
+            runner: windows-2025
+            python_arch: x64
+          - arch: x64
+            runner: windows-2025
+            python_arch: x64
+          - arch: ARM64
+            runner: windows-11-arm
+            python_arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
+          architecture: ${{ matrix.python_arch }}
       - name: Configure and build current Windows profile
         run: |
           cmake -S . -B out/windows -A ${{ matrix.arch }}
           cmake --build out/windows --config Release --parallel 2
       - name: Run native CLI, TUI and portable checks
-        if: matrix.arch != 'ARM64'
         run: |
           if ('${{ matrix.arch }}' -eq 'x64') {
             # Exercise the moved entrypoint from outside the checkout.
@@ -68,7 +77,7 @@ jobs:
             ctest --test-dir out/windows -C Release --output-on-failure
           }
       - name: Retain native console diagnostics
-        if: always() && matrix.arch != 'ARM64'
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wtop-native-checks-${{ matrix.arch }}-${{ github.sha }}
@@ -94,12 +103,9 @@ jobs:
         env:
           DOTNET_ROLL_FORWARD: Major
         run: |
-          if ([int]$env:GITHUB_RUN_NUMBER -lt 1 -or [int]$env:GITHUB_RUN_NUMBER -gt 65534) {
-            throw 'Candidate MSI version range exhausted; assign a reviewed mapping instead of truncating.'
-          }
           dotnet tool install wix --tool-path out/wix --version 4.0.6
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe --msi-version "0.0.$env:GITHUB_RUN_NUMBER"
+          python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Qualify direct MSI ownership and refusal fixtures
         if: matrix.arch == 'x64'

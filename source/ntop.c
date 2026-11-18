@@ -450,8 +450,12 @@ static BOOL IsProcessTagged(const process *Selected)
 static DWORD ProcessCount = 0;
 static DWORD RunningProcessCount = 0;
 static DWORD ProcessIndex = 0;
-static DWORD SelectedProcessIndex = 0;
-static DWORD SelectedViewIndex;
+/* Indices are only cached positions. The explicit selection owns a lifetime
+   identity and starts empty; saved presentation never restores an action target. */
+static DWORD SelectedProcessIndex = MAXDWORD;
+static DWORD SelectedViewIndex = MAXDWORD;
+static BOOL SelectionActive;
+static process_identity SelectedIdentity;
 static DWORD *ViewIndices;
 static DWORD ViewCount, ViewCapacity;
 static process_identity *RenderedRows;
@@ -464,6 +468,24 @@ static ULONGLONG DisplayedCreationTime;
 static BOOL FollowProcess = FALSE;
 static DWORD FollowProcessID = 0;
 static ULONGLONG FollowCreationTime;
+
+static void ClearSelection(void)
+{
+    SelectionActive = FALSE;
+    SelectedProcessIndex = SelectedViewIndex = MAXDWORD;
+    memset(&SelectedIdentity, 0, sizeof(SelectedIdentity));
+    DisplayedProcessID = 0; DisplayedCreationTime = 0;
+    FollowProcess = FALSE; FollowProcessID = 0; FollowCreationTime = 0;
+}
+
+static BOOL HasSelection(void)
+{
+    return SelectionActive && SelectedViewIndex < ViewCount &&
+        SelectedProcessIndex < ProcessCount &&
+        ViewIndices[SelectedViewIndex] == SelectedProcessIndex &&
+        ProcessList[SelectedProcessIndex].ID == SelectedIdentity.ID &&
+        ProcessList[SelectedProcessIndex].CreationTime == SelectedIdentity.CreationTime;
+}
 
 typedef enum sort_order {
 	ASCENDING,
@@ -755,21 +777,26 @@ static void RebuildView(void)
     for(DWORD i = 0; i < ProcessCount; ++i) {
         if(!ContainsInsensitive(ProcessList[i].ExeName, Filter)) continue;
         ViewIndices[ViewCount] = i;
-        if(i == SelectedProcessIndex) Found = ViewCount;
+        if(SelectionActive && ProcessList[i].ID == SelectedIdentity.ID &&
+            ProcessList[i].CreationTime == SelectedIdentity.CreationTime) Found = ViewCount;
         ++ViewCount;
     }
     free(Filter);
-    if(!ViewCount) { SelectedProcessIndex = SelectedViewIndex = ProcessIndex = 0; return; }
-    SelectedViewIndex = Found == MAXDWORD ? min(SelectedViewIndex, ViewCount - 1) : Found;
-    SelectedProcessIndex = ViewIndices[SelectedViewIndex];
+    if(!ViewCount) ProcessIndex = 0;
+    if(Found == MAXDWORD) { ClearSelection(); return; }
+    SelectedViewIndex = Found;
+    SelectedProcessIndex = ViewIndices[Found];
 }
 
 static void SelectView(DWORD Index)
 {
-    if(!ViewCount) { ProcessIndex = SelectedViewIndex = SelectedProcessIndex = 0; return; }
+    if(!ViewCount) { ProcessIndex = 0; ClearSelection(); return; }
     DWORD Visible = max(VisibleProcessCount, 1);
     SelectedViewIndex = min(Index, ViewCount - 1);
     SelectedProcessIndex = ViewIndices[SelectedViewIndex];
+    SelectedIdentity.ID = ProcessList[SelectedProcessIndex].ID;
+    SelectedIdentity.CreationTime = ProcessList[SelectedProcessIndex].CreationTime;
+    SelectionActive = TRUE;
     if(SelectedViewIndex < ProcessIndex) ProcessIndex = SelectedViewIndex;
     if(SelectedViewIndex - ProcessIndex >= Visible) ProcessIndex = SelectedViewIndex - Visible + 1;
 }
@@ -782,19 +809,10 @@ static void SelectProcess(DWORD Index)
 static void ReadjustCursor(void)
 {
     RebuildView();
-    if(!ViewCount) { FollowProcess = FALSE; return; }
+    if(!ViewCount) return;
     DWORD Visible = max(VisibleProcessCount, 1);
     ProcessIndex = min(ProcessIndex, ViewCount > Visible ? ViewCount - Visible : 0);
-    if(FollowProcess) {
-        BOOL Found = FALSE;
-        for(DWORD i = 0; i < ViewCount; ++i) {
-            const process *Process = &ProcessList[ViewIndices[i]];
-            if(Process->ID == FollowProcessID && Process->CreationTime == FollowCreationTime) {
-                SelectView(i); Found = TRUE; break;
-            }
-        }
-        if(!Found) FollowProcess = FALSE;
-    } else SelectView(SelectedViewIndex);
+    if(HasSelection()) SelectView(SelectedViewIndex);
 }
 
 void SetPresentationFilter(const TCHAR *Pattern)
@@ -806,7 +824,7 @@ void SetPresentationFilter(const TCHAR *Pattern)
     strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), Utf8);
     free(Utf8);
     MarkSettingsChanged();
-    ProcessIndex = SelectedViewIndex = 0;
+    ProcessIndex = 0;
     ReadjustCursor();
 }
 
@@ -865,8 +883,9 @@ static BOOLEAN SearchMatchesProcess(const process *Process)
 static void SearchNext(void)
 {
     if(!SearchActive || !ViewCount) return;
+    DWORD Start = HasSelection() ? SelectedViewIndex : ViewCount - 1;
     for(DWORD Step = 1; Step <= ViewCount; ++Step) {
-        DWORD View = (SelectedViewIndex + Step) % ViewCount;
+        DWORD View = (Start + Step) % ViewCount;
         if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { SelectView(View); return; }
     }
     SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
@@ -875,8 +894,9 @@ static void SearchNext(void)
 static void SearchPrevious(void)
 {
     if(!SearchActive || !ViewCount) return;
+    DWORD Start = HasSelection() ? SelectedViewIndex : 0;
     for(DWORD Step = 1; Step <= ViewCount; ++Step) {
-        DWORD View = (SelectedViewIndex + ViewCount - Step) % ViewCount;
+        DWORD View = (Start + ViewCount - Step) % ViewCount;
         if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { SelectView(View); return; }
     }
     SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
@@ -1269,8 +1289,9 @@ static BOOL AdoptPendingSample(void)
     PendingSample = NULL;
     LeaveCriticalSection(&SyncLock);
     if(!Sample) return FALSE;
-    DWORD SelectedId = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].ID : 0;
-    ULONGLONG SelectedCreated = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
+    /* A PID without a known lifetime is display-only within this observation.
+       It cannot be safely carried across samples or upgraded to a new target. */
+    if(SelectionActive && !SelectedIdentity.CreationTime) ClearSelection();
     free(ProcessList);
     ProcessList = Sample->rows; Sample->rows = NULL;
     ProcessCount = Sample->count;
@@ -1292,15 +1313,18 @@ static BOOL AdoptPendingSample(void)
     free(Sample);
     SortProcessList();
     ReadjustCursor();
-    if(!FollowProcess && SelectedId) {
-        for(DWORD i = 0; i < ProcessCount; ++i) {
-            if(ProcessList[i].ID == SelectedId && ProcessList[i].CreationTime == SelectedCreated) {
-                SelectProcess(i); break;
-            }
-        }
-    }
     RenderInvalidated = TRUE;
     return TRUE;
+}
+
+/* Keep the displayed model authoritative for input until this UI turn can
+   publish its replacement frame. No pending storage is unbounded or copied. */
+static BOOL AdoptFrameSamples(BOOL FrameDue)
+{
+    if(!FrameDue || Paused) return FALSE;
+    BOOL Changed = AdoptPendingSample();
+    if(AdoptPendingCore()) Changed = TRUE;
+    return Changed;
 }
 
 static void DisableCursor(void)
@@ -1590,6 +1614,13 @@ static void DoScroll(scroll_type Type, BOOL *Redraw)
     if(!ViewCount) return;
     FollowProcess = FALSE;
     DWORD Page = max(VisibleProcessCount, 1);
+    if(!HasSelection()) {
+        /* The first navigation gesture selects a visible row, without silently
+           advancing past it. PageDown starts at the bottom of this page. */
+        DWORD Initial = min(ProcessIndex, ViewCount - 1);
+        if(Type == SCROLL_PAGE_DOWN) Initial += min(Page - 1, ViewCount - 1 - Initial);
+        SelectView(Initial); *Redraw = TRUE; return;
+    }
     DWORD Index = SelectedViewIndex;
     if(Type == SCROLL_UP && Index) --Index;
     if(Type == SCROLL_DOWN && Index + 1 < ViewCount) ++Index;
@@ -1652,14 +1683,10 @@ int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest)
 
 static void ApplyActiveTab(void)
 {
-    DWORD Id = ViewCount ? ProcessList[SelectedProcessIndex].ID : 0;
-    ULONGLONG Created = ViewCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
     ProcessSortType = ActiveTab()->tree ? SORT_BY_TREE : (process_sort_type)ActiveTab()->sort_column;
     SortOrder = ActiveTab()->descending ? DESCENDING : ASCENDING;
     SortProcessList();
     ReadjustCursor();
-    if(Id) for(DWORD i = 0; i < ProcessCount; ++i)
-        if(ProcessList[i].ID == Id && ProcessList[i].CreationTime == Created) { SelectProcess(i); break; }
     RenderInvalidated = TRUE;
 }
 
@@ -1896,11 +1923,15 @@ static void ResetCaret(void)
 
 static BOOL SelectionMatchesDisplay(void)
 {
-    if(ViewCount && !ProcessList[SelectedProcessIndex].CreationTime) {
+    if(!HasSelection()) {
+        SetViMessage(VI_NOTICE, _T("No process selected; use navigation or click a process row"));
+        return FALSE;
+    }
+    if(!ProcessList[SelectedProcessIndex].CreationTime) {
         SetViMessage(VI_ERROR, _T("Cannot act on this selection: creation identity is unavailable"));
         return FALSE;
     }
-    if(ViewCount && ProcessList[SelectedProcessIndex].ID == DisplayedProcessID &&
+    if(ProcessList[SelectedProcessIndex].ID == DisplayedProcessID &&
        ProcessList[SelectedProcessIndex].CreationTime == DisplayedCreationTime) return TRUE;
     SetViMessage(VI_ERROR, _T("Process selection changed; review the refreshed row before acting"));
     return FALSE;
@@ -1932,8 +1963,8 @@ static wtop_ui_context_options CurrentUiContext(void)
     else if(Overlay == OVERLAY_RESULTS) Kind = WTOP_CONTEXT_RESULTS;
     wtop_ui_context_defaults(&Context, Kind);
     Context.readonly = ReadOnlyMode;
-    Context.has_selection = TaggedProcessListCount || ViewCount;
-    Context.identity_known = TaggedProcessListCount || (ViewCount && ProcessList[SelectedProcessIndex].CreationTime);
+    Context.has_selection = TaggedProcessListCount || HasSelection();
+    Context.identity_known = TaggedProcessListCount || (HasSelection() && SelectedIdentity.CreationTime);
     Context.kill_supported = Context.priority_supported = 1;
     Context.save_available = !ConfigStore.disabled && ConfigStore.write_path[0];
     Context.setup_tabs = Overlay == OVERLAY_SETUP && SetupPage == 3;
@@ -2121,6 +2152,8 @@ static void EditSetupTab(wtop_ui_action Action)
     else SetViMessage(VI_ERROR, _T("View unchanged: %hs"), Error ? Error : "operation unavailable");
 }
 
+static int HelpLineCount(void);
+
 static BOOL NavigateOverlay(wtop_ui_action Action)
 {
     if(Overlay != OVERLAY_HELP && Overlay != OVERLAY_RESULTS &&
@@ -2128,7 +2161,7 @@ static BOOL NavigateOverlay(wtop_ui_action Action)
     int *Position = Overlay == OVERLAY_SETUP ? &SetupIndex : Overlay == OVERLAY_SORT ? &SortChoice : &OverlayTop;
     int Maximum = Overlay == OVERLAY_SETUP ? SetupCount() - 1 :
         Overlay == OVERLAY_SORT ? WTOP_MAX_COLUMNS - 1 :
-        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 : 18;
+        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 : HelpLineCount() - 1;
     Maximum = max(0, Maximum);
     switch(Action) {
     case WTOP_UI_UP: --*Position; break;
@@ -2209,7 +2242,11 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
     case WTOP_UI_BAR: Settings.show_function_bar = !Settings.show_function_bar; MarkSettingsChanged(); break;
     case WTOP_UI_CANCEL:
         if(Overlay == OVERLAY_TAB_DELETE) { CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = 3; PendingDeleteTabId = 0; }
-        else if(!WasEditing) CloseOverlay();
+        else if(!WasEditing && Overlay != OVERLAY_NONE) CloseOverlay();
+        else if(!WasEditing && !EmacsPrefix) {
+            ClearSelection(); TaggedProcessListCount = 0;
+            SearchActive = FALSE; SearchPattern[0] = 0;
+        }
         ClearViMessage(); EmacsPrefix = FALSE; break;
     case WTOP_UI_SORT_CPU: ChangeProcessSortType(SORT_BY_PROCESSOR_TIME); break;
     case WTOP_UI_SORT_MEMORY: ChangeProcessSortType(SORT_BY_USED_MEMORY); break;
@@ -2438,6 +2475,52 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
     }
 }
 
+/* UI-thread-only dispatch; native events and deterministic fixtures use the
+   same recovery path. This borrows the event only for the synchronous call. */
+static void HandleKeyEvent(KEY_EVENT_RECORD *Event, BOOL *Redraw)
+{
+    if(!Event->bKeyDown || ShouldStop()) return;
+    unsigned Modifiers = 0;
+    if(Event->dwControlKeyState & SHIFT_PRESSED) Modifiers |= WTOP_MOD_SHIFT;
+    if(Event->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) Modifiers |= WTOP_MOD_CTRL;
+    if(Event->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) Modifiers |= WTOP_MOD_ALT;
+    int Key = NativeKey(Event);
+    /* Processed console Ctrl-C uses CtrlHandler. Raw/remote/injected ETX
+       must also close from every editor, overlay, keymap and prefix state. */
+    if(wtop_ui_interrupt_key(Key, Modifiers)) {
+        DispatchAction(WTOP_UI_QUIT, Redraw); return;
+    }
+    if(Key == 27 || (InInputMode && (Modifiers & WTOP_MOD_CTRL) &&
+            (Key == 7 || Key == 'g' || Key == 'G'))) {
+        DispatchAction(WTOP_UI_CANCEL, Redraw); return;
+    }
+    if(Key >= WTOP_KEY_F1 && Key <= WTOP_KEY_F10) {
+        DispatchFunction(Key - WTOP_KEY_F1, Redraw); return;
+    }
+    if(InInputMode) {
+        if(Key == '\r') { AcceptEditor(); *Redraw = TRUE; return; }
+        ClearViMessage();
+        if(ViHandleInputKey(Event)) {
+            if(InInputMode && CurrentInputStr[0] == _T('\\')) SetPresentationFilter(CurrentInputStr + 1);
+            if(!InInputMode) { EditingFilter = FALSE; EditingTabId = 0; }
+            *Redraw = TRUE; RenderInvalidated = TRUE;
+        }
+        return;
+    }
+    if(Overlay != OVERLAY_NONE) { HandleOverlayKey(Key, Modifiers, Redraw); return; }
+    if(EmacsPrefix) {
+        EmacsPrefix = FALSE;
+        if((Modifiers & WTOP_MOD_CTRL) && (Key == 3 || Key == 'c' || Key == 'C')) DispatchAction(WTOP_UI_QUIT, Redraw);
+        else if((Modifiers & WTOP_MOD_CTRL) && (Key == 19 || Key == 's' || Key == 'S')) DispatchAction(WTOP_UI_SAVE, Redraw);
+        else { ClearViMessage(); *Redraw = TRUE; }
+        return;
+    }
+    wtop_ui_context_options Context = CurrentUiContext();
+    wtop_ui_action Action = wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers);
+    unsigned Repeats = (Action == WTOP_UI_UP || Action == WTOP_UI_DOWN || Action == WTOP_UI_PAGE_UP || Action == WTOP_UI_PAGE_DOWN) ? min(Event->wRepeatCount, 32) : 1;
+    for(unsigned Repeat = 0; Repeat < Repeats; ++Repeat) DispatchAction(Action, Redraw);
+}
+
 static void ProcessInput(BOOL *Redraw)
 {
     DWORD Available = 0, Count = 0;
@@ -2449,42 +2532,8 @@ static void ProcessInput(BOOL *Redraw)
     for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
         if(Records[i].EventType == WINDOW_BUFFER_SIZE_EVENT) { RenderInvalidated = TRUE; *Redraw = TRUE; continue; }
         if(Records[i].EventType == MOUSE_EVENT) { if(PollConsoleInfo()) *Redraw = TRUE; HandleMouse(&Records[i].Event.MouseEvent, Redraw); continue; }
-        if(Records[i].EventType != KEY_EVENT || !Records[i].Event.KeyEvent.bKeyDown) continue;
-        KEY_EVENT_RECORD *Event = &Records[i].Event.KeyEvent;
-        unsigned Modifiers = 0;
-        if(Event->dwControlKeyState & SHIFT_PRESSED) Modifiers |= WTOP_MOD_SHIFT;
-        if(Event->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) Modifiers |= WTOP_MOD_CTRL;
-        if(Event->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) Modifiers |= WTOP_MOD_ALT;
-        int Key = NativeKey(Event);
-        if(Key >= WTOP_KEY_F1 && Key <= WTOP_KEY_F10) {
-            DispatchFunction(Key - WTOP_KEY_F1, Redraw); continue;
-        }
-        if(InInputMode) {
-            if(Key == '\r') { AcceptEditor(); *Redraw = TRUE; continue; }
-            BOOL Cancel = Key == 27 || ((Modifiers & WTOP_MOD_CTRL) && (Key == 7 || Key == 'g' || Key == 'G'));
-            ClearViMessage();
-            if(ViHandleInputKey(Event)) {
-                if(EditingFilter && Cancel) {
-                    strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), EditingOriginalFilter);
-                    ConfigDirty = EditingWasDirty; ReadjustCursor();
-                } else if(InInputMode && CurrentInputStr[0] == _T('\\')) SetPresentationFilter(CurrentInputStr + 1);
-                if(!InInputMode) { EditingFilter = FALSE; EditingTabId = 0; }
-                *Redraw = TRUE; RenderInvalidated = TRUE;
-            }
-            continue;
-        }
-        if(Overlay != OVERLAY_NONE) { HandleOverlayKey(Key, Modifiers, Redraw); continue; }
-        if(EmacsPrefix) {
-            EmacsPrefix = FALSE;
-            if((Modifiers & WTOP_MOD_CTRL) && (Key == 3 || Key == 'c' || Key == 'C')) DispatchAction(WTOP_UI_QUIT, Redraw);
-            else if((Modifiers & WTOP_MOD_CTRL) && (Key == 19 || Key == 's' || Key == 'S')) DispatchAction(WTOP_UI_SAVE, Redraw);
-            else { ClearViMessage(); *Redraw = TRUE; }
-            continue;
-        }
-        wtop_ui_context_options Context = CurrentUiContext();
-        wtop_ui_action Action = wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers);
-        unsigned Repeats = (Action == WTOP_UI_UP || Action == WTOP_UI_DOWN || Action == WTOP_UI_PAGE_UP || Action == WTOP_UI_PAGE_DOWN) ? min(Event->wRepeatCount, 32) : 1;
-        for(unsigned Repeat = 0; Repeat < Repeats; ++Repeat) DispatchAction(Action, Redraw);
+        if(Records[i].EventType == KEY_EVENT)
+            HandleKeyEvent(&Records[i].Event.KeyEvent, Redraw);
     }
 }
 
@@ -2872,13 +2921,16 @@ static const TCHAR *HelpLines[] = {
     _T("F1 Help   F2 Setup   F3 Search   F4 Filter   F5 Tree"),
     _T("F6 Sort   F7 Prio+   F8 Prio-   F9 Kill    F10 Quit"),
     _T("Arrows/PgUp/PgDn/Home/End navigate. Tab/Shift+Tab changes views."),
+    _T("Start with no process selected. Navigate, click or search to select one."),
     _T("Space tags a lifetime-identified process; U clears tags; F follows."),
     _T("Z pauses/resumes; I reverses sort; P sorts CPU; M sorts memory; B hides/shows the bar."),
     _T("htop: k opens Kill; N sorts PID; h/? helps; S/C opens Setup."),
     _T("vi: j/k move, g/G top/bottom, n/N search next/previous, K Kill."),
     _T("Emacs: C-n/C-p move, C-v/M-v page, M-</M-> top/bottom."),
     _T("Emacs: C-s search, C-r previous match, C-g cancel, M-x commands."),
-    _T("Emacs: C-x C-s saves. F10/q/Ctrl+C quit in every keymap."),
+    _T("Emacs: C-x C-s saves. F10/Ctrl+C quit from every view and editor."),
+    _T("Esc cancels the current editor/dialog; on the main view it clears selection/tags/follow."),
+    _T("q quits outside text editors. No selection or process target is saved."),
     _T("/: search, \\: live name filter, : commands. Enter accepts, Esc closes."),
     _T("Editor: Left/Right/Home/End; C-a/C-e, C-u clear, C-w word erase."),
     _T("Mouse: click a row/header/tab/button; wheel scrolls. Keyboard always works."),
@@ -2889,6 +2941,8 @@ static const TCHAR *HelpLines[] = {
     _T("? metrics are unavailable. I/O is process transfers; Cmt is commit."),
     _T("Config file: custom tab names/count/filter, columns, meters and all colors.")
 };
+
+static int HelpLineCount(void) { return (int)_countof(HelpLines); }
 
 static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
 {
@@ -3120,8 +3174,8 @@ static void ComposeFrame(void)
     VisibleProcessCount = (DWORD)max(0, EndRow - ProcessWindowPosY);
     ProcessWindowHeight = VisibleProcessCount;
     ReadjustCursor();
-    DisplayedProcessID = ViewCount ? ProcessList[SelectedProcessIndex].ID : 0;
-    DisplayedCreationTime = ViewCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
+    DisplayedProcessID = HasSelection() ? SelectedIdentity.ID : 0;
+    DisplayedCreationTime = HasSelection() ? SelectedIdentity.CreationTime : 0;
     if(VisibleProcessCount > RenderedRowCapacity) {
         process_identity *Larger = realloc(RenderedRows, (size_t)VisibleProcessCount * sizeof(*Larger));
         if(!Larger) { CollectorError = ERROR_NOT_ENOUGH_MEMORY; RequestShutdown(); return; }
@@ -3133,7 +3187,7 @@ static void ComposeFrame(void)
         if(Index >= ViewCount) break;
         const process *Process = &ProcessList[ViewIndices[Index]];
         SetConCursorPos(0, (SHORT)(ProcessWindowPosY + (int)i));
-        WriteProcessInfo(Process, Index == SelectedViewIndex);
+        WriteProcessInfo(Process, HasSelection() && Index == SelectedViewIndex);
         RenderedRows[RenderedRowCount].ID = Process->ID;
         RenderedRows[RenderedRowCount++].CreationTime = Process->CreationTime;
     }
@@ -3237,6 +3291,10 @@ int _tmain(int argc, TCHAR *argv[])
     if(!ShutdownEvent || !CleanupDoneEvent) { Result = 1; goto Cleanup; }
     if(!SetConsoleCtrlHandler(CtrlHandler, TRUE)) { Result = 1; goto Cleanup; }
     HandlerRegistered = TRUE;
+    /* Ignore-Ctrl-C is inherited independently of registered handlers. Opt
+       this monitor back in even when launched from an ignoring parent or a
+       CREATE_NEW_PROCESS_GROUP; this does not alter the parent's policy. */
+    if(!SetConsoleCtrlHandler(NULL, FALSE)) { Result = 1; goto Cleanup; }
     ProcessList = calloc(ProcessListSize, sizeof(*ProcessList));
     TaggedProcessList = calloc(TaggedProcessListSize, sizeof(*TaggedProcessList));
     ViMessage = calloc(DEFAULT_STR_SIZE, sizeof(*ViMessage));
@@ -3294,26 +3352,26 @@ int _tmain(int argc, TCHAR *argv[])
     ULONGLONG LastDraw = 0, LastSystemPoll = 0, LastAgeDraw = 0;
     BOOL Redraw = TRUE;
     while(!ShouldStop()) {
-        /* Consume input against the last displayed model. Adopting a sample
-           first invalidates that frame and can silently discard an otherwise
-           valid function-bar click. Geometry changes still invalidate hits;
-           native actions independently revalidate their captured lifetimes.
-           Publish the next front only after input, then paint it this turn. */
+        /* Consume input against the last displayed model. Sample adoption is
+           deferred until a frame can be presented below; adopting while the
+           cadence blocks painting leaves RenderInvalidated set and drops the
+           next click against the still-visible screen. The collector's bounded
+           pending slot continues to coalesce samples during that short wait. */
         if(PollConsoleInfo()) Redraw = TRUE;
         BOOL InputRedraw = FALSE;
         ProcessInput(&InputRedraw);
         if(InputRedraw) Redraw = TRUE;
         InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
         if(ShouldStop()) break;
-        if(!Paused && AdoptPendingSample()) Redraw = TRUE;
-        if(!Paused && AdoptPendingCore()) Redraw = TRUE;
         ULONGLONG Now = GetTickCount64();
+        BOOL FrameDue = InputRedraw || Now - LastDraw >= Settings.frame_interval_ms;
+        if(AdoptFrameSamples(FrameDue)) Redraw = TRUE;
         if(!Paused && Now - LastSystemPoll >= Settings.interval_ms) {
             PollSystemInfo(); LastSystemPoll = Now; Redraw = TRUE;
         }
         if(Now - LastAgeDraw >= 1000) { Redraw = TRUE; LastAgeDraw = Now; }
         if((Redraw || RedrawAtCursor || RenderInvalidated) &&
-           (InputRedraw || Now - LastDraw >= Settings.frame_interval_ms)) {
+           FrameDue) {
             DrawFrame(); LastDraw = Now; Redraw = RedrawAtCursor = FALSE;
         }
         WaitForSingleObject(ShutdownEvent, INPUT_LOOP_DELAY);

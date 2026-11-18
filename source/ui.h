@@ -85,6 +85,9 @@ size_t wtop_ui_status_format(const wtop_ui_status *status, int width,
                               char *output, size_t capacity, unsigned *flags);
 
 wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers);
+/* ETX or Ctrl-C is a global shutdown request, including text editors. Hosts
+   must check this before routing a key to any mode-specific editor. */
+int wtop_ui_interrupt_key(int key, unsigned modifiers);
 wtop_ui_action wtop_ui_function_action(int index);
 const char *wtop_ui_function_label(int index, int compact);
 int wtop_ui_bar_hit(int width, int x);

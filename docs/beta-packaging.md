@@ -1,36 +1,38 @@
-# Exact portable beta assembly
+# Exact portable prerelease assembly
 
-The beta version is compiled into `--version` and native Windows FileVersion /
-ProductVersion resources. Resource numeric components are not an MSI ordering
-scheme. The full beta string remains authoritative.
+`VERSION` is the product identity. `tools/release_metadata.py` supplies release
+title/tag, friendly asset labels, the four-field native version and a bounded
+MSI mapping. Native resources order dev, alpha, beta, rc and stable within a patch;
+MSI mapping is separate because its field widths differ. Out-of-range versions
+are refused, never truncated or derived from a CI run number. This defines
+identity only: it does not qualify MSI upgrades or installation.
 
-`packaging/record_build.py` records the SDK selected by the generated CMake/VS
-project, including observed sources; conflicting SDK values fail. An installed
-SDK or the newest SDK on the machine is not sufficient. Beta assembly rejects an
-unverified SDK and external-runtime dependency floor.
+`packaging/record_build.py` records the SDK selected by the actual generated
+CMake/VS project. A merely installed or newest SDK is not sufficient. Each modern
+profile is built with a static application runtime, inspected and executed in its
+own lane. x86-on-WoW64 and the actual ARM64 host are recorded explicitly.
 
-`tools/beta_release.py assemble` consumes an existing exact-byte candidate and an
-actual native receipt plus the exact CTest JUnit file. It never builds or signs.
-Mandatory tests cannot be missing, failed or skipped. The native receipt also
-checks the executed version, the Windows version resource and Authenticode
-status. Unsigned beta bytes may be staged and disclosed as `NotSigned`; an invalid
-signature blocks. This does not establish reputation or bypass SmartScreen.
+`tools/release_bundle.py assemble` consumes one to three exact candidate profiles,
+actual native receipts, required-test JUnit and final-byte security receipts. It
+never compiles, signs or uploads. All included profiles must bind the same clean
+source commit/tree/version/license. Mandatory tests cannot be failed, skipped or
+missing. Numeric resource metadata must match the shared ledger. An invalid
+signature or detected/failed security scan blocks; an unavailable scanner is an
+honest draft limitation and public-promotion blocker.
 
-The package includes identical standalone/portable executable bytes, a full
-source archive at the build revision, LICENSE, payload provenance, native receipt,
-test results, release notes and SHA256SUMS. Source verification reconstructs the
-Git tree from archive members without extracting their paths. The tree, VERSION
-and license must match the payload. No MSI, ARM64 or historical artifact enters
-the x64 beta inventory. Existing output is never overwritten.
+The bundle includes byte-identical standalone/ZIP executables per profile, the
+corresponding full source archive, LICENSE, payload/native/security receipts,
+JUnit, generated release notes and SHA256SUMS. Source verification reconstructs
+the Git tree without extracting untrusted paths. Verification checks architecture,
+resources, source/version/license, exact archive contents, hashes and inventory.
+Checksums alone are not authentication. No MSI, setup EXE, historical binary or
+community package listing is silently added to the portable beta inventory.
 
-Verification detects changed assets, wrong architecture, source mismatch, renamed
-development binaries, missing tests and inconsistent ZIPs. Checksums alone are
-not authentication: trust the repository/release provenance independently.
+The publisher checks draft/tag/source identity and acquires the uploaded bytes
+again. Public alpha/beta eligibility additionally checks live feedback and final
+security evidence. Human review is optional for these channels and remains a
+stable gate. An automated receipt cannot masquerade as human review.
 
-A valid staged package is **not yet publicly eligible**. `gate` additionally
-requires a matching ordinary-user Windows 11 x64 human review receipt and live
-public issue feedback. No fixture is a qualification receipt. A human attestation
-is reviewable evidence, not cryptographic proof of human behavior.
-
-The original candidate tool still refuses stable promotion. Beta policy is an
-explicit separate prerelease scope, not deletion of its original blockers.
+The original schema-1 Beta 1 verifier remains available. Candidate stable
+promotion is still refused. See [publication](beta-publication.md) for the channel
+boundary and [Beta 2 verification](beta2-verification.md) for test limitations.

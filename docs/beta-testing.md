@@ -1,6 +1,7 @@
 # Testing the portable beta
 
-Use a noncritical ordinary-user Windows 11 x64 session first. An initial read-only
+Use a noncritical ordinary-user session on a Windows version/architecture you
+intend to assess, with the matching portable binary. Record that exact context. An initial read-only
 run cannot change process state, launch commands or save configuration:
 
 ```powershell
@@ -17,6 +18,12 @@ optional source-side qualification/diagnostic tools.
 Exercise htop/vi/Emacs navigation and Help/Setup/search/filter/sort, mouse on/off,
 40x25/80x25/80x50, rapid resize and the tiny-window recovery screen. Confirm that
 old data is marked stale and placeholders are disclosed for unsupported glyphs.
+Start with no row selected. Select by navigation or click, then use Escape to
+clear selection/tags/follow. Exercise Escape from Help, Setup, search, live filter
+and confirmation; a cancelled filter must restore its prior value. Exercise
+Ctrl+C in each keymap and context, including command input. Confirm no saved
+process selection returns at restart and that ordinary exit makes no settings
+write. Pause with Z and confirm sample age remains visible.
 Keep raw Unicode outputs private if they expose user/process information.
 
 Save only into a disposable directory using an explicit configuration or portable

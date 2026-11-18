@@ -45,10 +45,16 @@ int wtop_ui_bar_hit(int width, int x)
     return -1;
 }
 
+int wtop_ui_interrupt_key(int key, unsigned modifiers)
+{
+    return key == 3 || ((modifiers & WTOP_MOD_CTRL) && (key == 'c' || key == 'C'));
+}
+
 wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers)
 {
     int ctrl = (modifiers & WTOP_MOD_CTRL) != 0;
     int alt = (modifiers & WTOP_MOD_ALT) != 0;
+    if(wtop_ui_interrupt_key(key, modifiers)) return WTOP_UI_QUIT;
     if(key >= WTOP_KEY_F1 && key <= WTOP_KEY_F10)
         return wtop_ui_function_action(key - WTOP_KEY_F1);
     if(key == 27) return WTOP_UI_CANCEL;
@@ -427,7 +433,7 @@ wtop_ui_action wtop_ui_context_key_action(const wtop_ui_context_options *options
     if (key == 27 || (keymap == WTOP_KEYMAP_EMACS &&
         (modifiers & WTOP_MOD_CTRL) && (key == 'g' || key == 'G' || key == 7)))
         action = WTOP_UI_CANCEL;
-    else if ((modifiers & WTOP_MOD_CTRL) && (key == 'c' || key == 'C' || key == 3))
+    else if (wtop_ui_interrupt_key(key, modifiers))
         action = WTOP_UI_QUIT;
     else if (options->context == WTOP_CONTEXT_CONFIRM) {
         if (!command_modifier && (key == 'y' || key == 'Y')) action = WTOP_UI_CONFIRM;

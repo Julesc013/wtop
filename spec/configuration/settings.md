@@ -160,7 +160,10 @@ Oversized preservation output also fails before filesystem mutation.
 The implemented presentation model includes htop/vi/Emacs keymaps, htop/NTop/
 monochrome built-in themes, color-role overrides, mouse/function-bar/tab-strip
 preferences, ordered visible header rows and named views with filters, ordered
-stable column IDs, sort direction and tree preference. The exact Setup exposure
+stable column IDs, sort direction and tree preference. The model also owns footer style, status placement, frame cadence, meter
+width/style and Unicode/ASCII presentation. These preferences have safe compiled
+defaults for older documents. Process selection, tags, follow identity and pause
+are session state and are never restored from configuration. The exact Setup exposure
 and bindings are specified by [the TUI contract](../interfaces/tui.md); settings
 storage is not a claim that every future UI feature is implemented.
 

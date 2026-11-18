@@ -2,7 +2,6 @@
 """Bind actual Windows test results and version resources to an exact candidate."""
 from __future__ import annotations
 import argparse
-import ctypes
 import datetime as dt
 import json
 import os
@@ -10,8 +9,10 @@ from pathlib import Path
 import subprocess
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
-from beta_release import checked_file, native_tests, sha256, validate_native, BetaError
+from beta_release import checked_file, native_tests, sha256, BetaError
 from package_candidate import verify
+from desktop_acceptance import host_identity
+from release_bundle import validate_execution
 
 # Windows PowerShell launched via Python under pwsh inherits PS7 module paths.
 # Resolve built-in Security/Utility only from this child host's own PSHOME.
@@ -20,6 +21,7 @@ METADATA_SCRIPT = (
     "$ErrorActionPreference='Stop'; $env:PSModulePath=$PSHOME+'\\Modules'; "
     "$p=$env:WTOP_RECEIPT_EXE; $v=[System.Diagnostics.FileVersionInfo]::GetVersionInfo($p); "
     "@{ file=$v.FileVersion; product=$v.ProductVersion; "
+    "numeric=@($v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart); "
     "authenticode=(Get-AuthenticodeSignature -LiteralPath $p).Status.ToString() } "
     "| ConvertTo-Json -Compress"
 )
@@ -41,15 +43,14 @@ def main():
         versions=read_windows_metadata(exe)
         result=subprocess.run([str(exe),'--no-config','--version'],capture_output=True,text=True,check=True,timeout=10)
         if payload['version'] not in result.stdout.strip().split():raise BetaError('version command did not report exact version')
-        osversion=sys.getwindowsversion()
         receipt={'schema':'wtop.beta-native/1','result':'passed','recorded_at':dt.datetime.now(dt.timezone.utc).isoformat(),
                  'version':payload['version'],'profile':payload['profile'],'source_revision':payload['source']['revision'],
                  'executable_sha256':sha256(checked_file(exe)),'version_command':payload['version'],
-                 'embedded_version':{'file':versions['file'],'product':versions['product']},'authenticode':versions['authenticode'],
-                 'host':{'system':'Windows','major':osversion.major,'minor':osversion.minor,'build':osversion.build,
-                         'product_type':osversion.product_type,'elevated':bool(ctypes.windll.shell32.IsUserAnAdmin())},
+                 'embedded_version':{'file':versions['file'],'product':versions['product']},
+                 'embedded_numeric_version':versions['numeric'],'authenticode':versions['authenticode'],
+                 'host':host_identity(),
                  'tests':native_tests(args.junit),'human_visual_acceptance':False}
-        validate_native(receipt,payload)
+        validate_execution(receipt,payload)
         with args.output.open('x',encoding='utf-8') as stream:json.dump(receipt,stream,indent=2);stream.write('\n')
         return 0
     except subprocess.CalledProcessError as error:

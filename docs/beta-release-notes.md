@@ -1,39 +1,43 @@
-# Wtop 0.4.0-beta.1 — modern Windows x64 portable preview
+# Wtop 0.4.0 Beta 2
 
-**Experimental prerelease, not stable 0.4.0 and not full htop parity.**
-When this page is attached to a **draft**, it is not a public release or proof that
-human/desktop qualification has completed. `native-receipt.json` identifies the
-actual automated test host; `desktop-receipt.json` is required before publication.
+Experimental modern Windows portable prerelease. This is not stable 0.4.0 or full
+htop parity. A draft remains private to repository collaborators until explicit
+public promotion. The release manifest and receipts define its exact profile set.
 
-## What is included
+## Changes
 
-A native htop-style process table, htop/vi/Emacs keymaps, mouse fallback, contextual
-controls and live freshness, configurable meters/columns/tabs/colors, explicit
-settings saves and version-2 migration. System commit and measured process CPU
-have defined semantics. PID-plus-creation identity protects process actions and
-per-target outcomes survive partial failure.
+Beta 2 keeps the dense htop-style process table, native Win32 implementation,
+htop/vi/Emacs maps, configurable columns/meters/tabs/colors and explicit settings
+operations. It adds complete offscreen frame composition, changed-run output,
+independent paint/sample timing, one footer by default and `Z` pause/resume.
 
-The CLI provides typed system/process snapshots, query/inspect, opt-in command
-line/service/per-core providers and finite foreground JSONL logging. No service,
-startup entry, updater or installer is created during ordinary operation.
+Startup selects no process. Saved views restore presentation preferences only.
+Escape cancels an editor or confirmation, closes Help/Setup, or clears selection,
+tags and follow state on the main screen. A cancelled live filter restores its
+previous value. Ctrl+C quits from every keymap and input context. Escape does not
+undo a process action that has already happened or revert committed settings.
 
-This beta hardens transactional metric calculation, validates complete action
-batches before dispatch, and corrects AGE sorting to use its own observation time.
-Native terminal fixtures now cover additional small/resized views. An explicit
-desktop review procedure and privacy-aware support reporter accompany the source.
+Selection follows PID plus process creation time. A process that exits, is hidden
+or has its PID reused cannot silently transfer the action target to a nearby row.
+The mouse event-ordering repair keeps the displayed model and its hit targets
+consistent when a new sample is waiting for the next paint.
 
-## Download and verify
+## Downloads and verification
 
-Choose the **win-nt-x64 portable ZIP**. It contains `wtop.exe`, LICENSE,
-`payload.json`, portable instructions and an inert example configuration. The
-standalone EXE is byte-identical. The full corresponding source archive contains
-the source, build scripts, tests and license at the exact recorded Git tree.
-`SHA256SUMS` and `beta-manifest.json` bind the assets. Compare hashes against this
-trusted release, not against a manifest received from an untrusted third party.
+Each included x86, x64 or ARM64 profile has a standalone EXE and portable ZIP
+containing identical executable bytes. The manifest identifies actual Windows
+host, token, compiler/SDK, PE imports, source tree, final-byte tests and security
+scan. x86-on-WoW64 is described as such. Native ARM64 tests must execute on ARM64.
+Do not infer a profile's presence or success from this list: inspect the draft's
+actual assets and `beta-manifest.json`.
 
-The candidate is unsigned unless the attached native receipt explicitly records
-`Valid`. A `NotSigned` receipt means unsigned: verify provenance and follow your
-organization's policy. No instruction here asks you to disable security controls.
+The source archive is the corresponding full Git tree. LICENSE, profile-specific
+payload/native/security receipts, JUnit results and SHA256SUMS accompany it. The
+release workflow reacquires uploaded assets and checks their bytes. Unsigned
+binaries are identified as `NotSigned`; hashes establish byte identity, not a
+trusted publisher or antivirus verdict. An unavailable security scan is recorded
+and blocks public promotion until resolved. Invalid signatures or detected
+threats block assembly. No security bypass is required or recommended.
 
 ```powershell
 .\wtop.exe --readonly --no-config
@@ -42,35 +46,40 @@ organization's policy. No instruction here asks you to disable security controls
 .\wtop.exe --portable
 ```
 
-Settings save only when explicitly requested; ordinary exit does not save. Portable
-mode uses its disclosed destination, not the current working directory. No PATH
-or registry installation is performed by these commands.
+Settings save only on explicit request. Normal startup and exit do not write
+configuration. The chosen configuration is disclosed by `--paths`; an explicit
+portable root owns its settings. Ordinary execution creates no service, scheduled
+task, startup entry, updater, installation registry record or PATH change.
 
-## Compatibility and known limits
+## Known limitations
 
-Only the x64 portable beta is distributed here. Read exact host/token/terminal
-observations in the receipts. Windows 11 client testing does not certify every
-Windows build. x86, ARM64, Windows RT, WinPE, ReactOS, legacy Windows, DOS, CE and
-OS/2 are not qualified by this release. There is no published Wtop WinGet package,
-MSI installer, native GUI, background daemon, or automatic upgrade mechanism.
+The compatibility statement is the actual native receipt, not every OS able to
+parse the PE header. Historical Windows, DOS, Win16, CE, OS/2, RT, ReactOS and
+WinPE remain independently unqualified. MSI lifecycle, setup EXE delivery and
+community WinGet/Scoop/Chocolatey acceptance are separate work. No installer or
+package-manager installation command is advertised as available by this release.
 
-Unicode text is preserved in JSON/configuration, but the conservative TUI displays
-unsupported non-ASCII scalars as one-cell placeholders. Thread rows, affinity,
-collapsible subtrees, pause, advanced handles/backtraces, GPU/sensors and full
-htop feature parity remain incomplete. Process I/O is not physical disk bandwidth.
-CPU is one logical CPU = 100% by default; `--cpu-normalization machine` is explicit.
-Optional providers can be denied/unavailable/stale. Some baseline OS and output
-calls cannot be guaranteed hard-deadline cancellable. Do not treat this beta as
-an unrestricted leak-free, crash-free or all-platform guarantee.
+Unicode mode keeps conservative single-cell characters. Unsupported wide,
+combining and emoji text falls back predictably; raw Unicode remains in JSON and
+configuration. Full grapheme layout, thread rows, affinity, branch collapse, a
+full TUI detail panel, GPU/sensor telemetry and full htop parity remain open.
+CLI command-line/service inspection and per-core collection are already available
+through bounded optional providers.
 
-## Reports and privacy
+CPU means one logical processor = 100% by default. Machine normalization is
+explicit. Commit is not swap residency, and process I/O is not physical disk
+bandwidth. Missing or denied metrics are not zeros. Some baseline Windows and
+output calls are not generally cancellable. Normal cleanup and emergency
+own-process termination have different restoration guarantees.
 
-Use the repository's issue templates once public feedback is enabled. Include the
-beta version, executable hash, Windows build, terminal, reproduction and observed
-result. Do not post credentials, full process snapshots, command arguments,
-environment values, usernames or screenshots containing private information.
-`tools/support_report.py` in the corresponding source creates an opt-in allowlisted
-build/host report; it never uploads. Read `docs/beta-testing.md` before testing.
+## Feedback
 
-NTop ancestry and GPL-3.0-only notices are retained. The source and release records
-separate inherited provenance, implemented changes and qualification limits.
+Use the repository's enabled feedback route and report only the version, digest,
+host/terminal, reproduction and observed result needed to investigate. Do not
+attach private process command lines, environment, usernames or full snapshots by
+default. The source-side support reporter is opt-in, allowlisted and never uploads.
+See [testing](beta-testing.md) and [release policy](beta-publication.md).
+
+NTop ancestry and GPL-3.0-only notices remain intact. Beta 1's release/tag/assets
+remain unchanged. Stable human desktop approval is retained; it is not fabricated
+from automated Beta 2 input tests.

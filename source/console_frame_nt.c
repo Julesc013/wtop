@@ -72,6 +72,9 @@ int wtop_console_frame_begin(wtop_console_frame *host, HANDLE output,
 int wtop_console_frame_present(wtop_console_frame *host)
 {
     int result;
+    /* A host can move/resize its viewport even when our cell model did not
+       change. Validate before the core's zero-write shortcut; the sink alone
+       cannot detect geometry changes on an unchanged frame. */
     if (!viewport_matches(host)) {
         wtop_frame_invalidate(&host->cells); ++host->retries; return -1;
     }

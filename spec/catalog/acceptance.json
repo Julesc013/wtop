@@ -528,7 +528,7 @@
         "WT-REQ-063-04"
       ],
       "method": "native",
-      "oracle": "Exact payload on ordinary-user Windows 11 x64 workstation plus explicit human terminal review; server, elevated-only and wrong-payload records cannot pass.",
+      "oracle": "Exact-byte automated alpha/beta receipts disclose actual host/architecture/token and cannot assert human review. Stable desktop qualification additionally requires ordinary-user client execution and explicit human terminal review; wrong-payload and fabricated evidence are rejected.",
       "status": "not_run",
       "evidence": []
     },

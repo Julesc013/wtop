@@ -19,6 +19,8 @@ static void keymaps(void)
         assert(wtop_ui_key_action(map, WTOP_KEY_UP, 0) == WTOP_UI_UP);
         assert(wtop_ui_key_action(map, '\t', WTOP_MOD_SHIFT) == WTOP_UI_PREVIOUS_TAB);
         assert(wtop_ui_key_action(map, 'B', 0) == WTOP_UI_BAR);
+        assert(wtop_ui_key_action(map, 3, 0) == WTOP_UI_QUIT);
+        assert(wtop_ui_key_action(map, 'c', WTOP_MOD_CTRL) == WTOP_UI_QUIT);
     }
     assert(wtop_ui_key_action(WTOP_KEYMAP_HTOP, 'k', 0) == WTOP_UI_KILL);
     assert(wtop_ui_key_action(WTOP_KEYMAP_VI, 'k', 0) == WTOP_UI_UP);
@@ -141,6 +143,9 @@ static void contexts(void)
             assert(wtop_ui_context_key_action(&options, map, WTOP_KEY_F1, 0) == WTOP_UI_HELP);
             assert(wtop_ui_context_key_action(&options, map, WTOP_KEY_F10, 0) == WTOP_UI_QUIT);
             assert(wtop_ui_context_key_action(&options, map, 27, 0) == WTOP_UI_CANCEL);
+            assert(wtop_ui_context_key_action(&options, map, 3, WTOP_MOD_CTRL) == WTOP_UI_QUIT);
+            assert(wtop_ui_context_key_action(&options, map, 'C', WTOP_MOD_CTRL) == WTOP_UI_QUIT);
+            assert(wtop_ui_context_key_action(&options, map, 3, 0) == WTOP_UI_QUIT);
         }
     }
     options.context = WTOP_CONTEXT_SETUP;
@@ -167,6 +172,10 @@ static void contexts(void)
     assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'q', 0) == WTOP_UI_NONE);
     assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, '\r', 0) == WTOP_UI_ACCEPT);
     assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_EMACS, 7, WTOP_MOD_CTRL) == WTOP_UI_CANCEL);
+    assert(wtop_ui_context_key_action(&options, WTOP_KEYMAP_HTOP, 'c', 0) == WTOP_UI_NONE);
+    assert(!wtop_ui_interrupt_key('c', 0));
+    assert(!wtop_ui_interrupt_key('C', WTOP_MOD_SHIFT));
+    assert(!wtop_ui_interrupt_key('x', WTOP_MOD_CTRL));
 }
 
 static void availability(void)
