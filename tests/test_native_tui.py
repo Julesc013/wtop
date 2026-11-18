@@ -824,10 +824,19 @@ def inspection_contract(console, exe, directory, pids, observations):
     console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {max(pids)} and not visible_pids(f, pids, True), "read-only inspection from focus")
     console.type("d")
     console.wait(lambda f: overlay_contains(f, "Process details"), "asynchronous detail panel opens")
-    console.wait(lambda f: text_contains(f, "Provider:"), "detail result is displayed with state")
-    assert function_ready(console.frame(), 7, "Affinity", False), "read-only detail exposed affinity mutation"
+    frame = console.wait(lambda f: any(row.startswith("Provider: ") for row in f["rows"])
+                         and function_ready(f, 7, "Affinity", False),
+                         "detail provider result and read-only function state are displayed")
+    assert_function(frame, 7, "Affinity", False)
     console.type("H")
-    frame = console.wait(lambda f: overlay_contains(f, "Thread rows") and text_contains(f, "Threads:"), "bounded thread rows from detail panel")
+    # The cached basic process section also says 'sampled threads: N'. It is
+    # visible while the optional provider is still collecting, so it cannot
+    # acknowledge thread observation completion. Match the returned/observed
+    # summary row, independently of the exact unit assertion that follows.
+    frame = console.wait(lambda f: overlay_contains(f, "Thread rows")
+                         and any(re.match(r"Threads: [0-9]+ returned / [0-9]+ observed;", row)
+                                 for row in f["rows"]),
+                         "bounded thread observation returned and rendered")
     assert text_contains(frame, "lifetime 100ns"), "thread counters were not labelled as lifetime values"
     console.key(0x23)  # End exposes later rows; it never changes the captured target.
     console.wait(lambda f: overlay_contains(f, "Thread rows") and text_contains(f, "TID "), "thread rows remain navigable")

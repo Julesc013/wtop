@@ -18,6 +18,119 @@ import uuid
 from ctypes import wintypes as w
 
 
+class SECURITY_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [('length', w.DWORD), ('descriptor', ctypes.c_void_p), ('inherit', w.BOOL)]
+
+
+class SECURITY_DESCRIPTOR(ctypes.Structure):
+    _fields_ = [('revision', ctypes.c_ubyte), ('reserved', ctypes.c_ubyte),
+                ('control', w.WORD), ('owner', ctypes.c_void_p), ('group', ctypes.c_void_p),
+                ('sacl', ctypes.c_void_p), ('dacl', ctypes.c_void_p)]
+
+
+@contextmanager
+def _owned_object_security(kernel, security, token, diagnostics):
+    """Keep the restricted user able to access its own new kernel objects.
+
+    Filtering an elevated token does not rewrite its owner/default DACL. An
+    Administrators-only grant cannot authorize the resulting deny-only SID.
+    Set defaults on this disposable token, never on the caller's token. The
+    explicit descriptor also protects the child process/thread at creation.
+    https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-token_default_dacl
+    https://learn.microsoft.com/windows/win32/secauthz/access-rights-for-access-token-objects
+    """
+    def checked(value):
+        if not value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return value
+
+    security.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
+    security.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.LPWSTR)]
+    security.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [w.LPCWSTR, w.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(w.DWORD)]
+    security.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [ctypes.c_void_p, w.DWORD, w.DWORD, ctypes.POINTER(w.LPWSTR), ctypes.POINTER(w.DWORD)]
+    security.InitializeSecurityDescriptor.argtypes = [ctypes.c_void_p, w.DWORD]
+    security.SetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, w.BOOL, ctypes.c_void_p, w.BOOL]
+    security.GetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.BOOL), ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(w.BOOL)]
+    security.GetKernelObjectSecurity.argtypes = [w.HANDLE, w.DWORD, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
+    security.SetKernelObjectSecurity.argtypes = [w.HANDLE, w.DWORD, ctypes.c_void_p]
+
+    def token_info(kind):
+        needed = w.DWORD()
+        security.GetTokenInformation(token, kind, None, 0, ctypes.byref(needed))
+        if not needed.value or needed.value > 65536:
+            raise RuntimeError('bounded token security query failed')
+        buffer = ctypes.create_string_buffer(needed.value)
+        checked(security.GetTokenInformation(token, kind, buffer, len(buffer), ctypes.byref(needed)))
+        return buffer
+
+    def sid_text(sid):
+        value = w.LPWSTR()
+        try:
+            checked(security.ConvertSidToStringSidW(sid, ctypes.byref(value)))
+            return value.value
+        finally:
+            if value:
+                kernel.LocalFree(ctypes.cast(value, ctypes.c_void_p))
+
+    def descriptor_text(descriptor, information):
+        value = w.LPWSTR()
+        try:
+            checked(security.ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor, 1, information, ctypes.byref(value), None))
+            return value.value
+        finally:
+            if value:
+                kernel.LocalFree(ctypes.cast(value, ctypes.c_void_p))
+
+    def kernel_security(handle):
+        needed = w.DWORD()
+        security.GetKernelObjectSecurity(handle, 5, None, 0, ctypes.byref(needed))  # owner + DACL
+        if not needed.value or needed.value > 65536:
+            raise RuntimeError('bounded kernel-object security query failed')
+        buffer = ctypes.create_string_buffer(needed.value)
+        checked(security.GetKernelObjectSecurity(handle, 5, buffer, len(buffer), ctypes.byref(needed)))
+        return descriptor_text(buffer, 5)
+
+    def token_security():
+        owner = token_info(4)
+        default = token_info(6)
+        descriptor = SECURITY_DESCRIPTOR()
+        checked(security.InitializeSecurityDescriptor(ctypes.byref(descriptor), 1))
+        checked(security.SetSecurityDescriptorDacl(ctypes.byref(descriptor), True,
+            ctypes.cast(default, ctypes.POINTER(ctypes.c_void_p))[0], False))
+        return {'owner': sid_text(ctypes.cast(owner, ctypes.POINTER(ctypes.c_void_p))[0]),
+                'default_dacl': descriptor_text(ctypes.byref(descriptor), 4),
+                'token_object_security': kernel_security(token)}
+
+    user = token_info(1)
+    sid = ctypes.cast(user, ctypes.POINTER(ctypes.c_void_p))[0]
+    user_sid = sid_text(sid)
+    descriptor = ctypes.c_void_p()
+    if diagnostics is not None:
+        diagnostics['object_security_before'] = token_security()
+    try:
+        sddl = 'O:' + user_sid + 'D:P(A;;GA;;;' + user_sid + ')(A;;GA;;;SY)S:(ML;;NW;;;ME)'
+        checked(security.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None))
+        present = w.BOOL(); defaulted = w.BOOL(); dacl = ctypes.c_void_p()
+        checked(security.GetSecurityDescriptorDacl(descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)))
+        if not present.value or not dacl:
+            raise RuntimeError('restricted fixture requires an explicit non-null DACL')
+        owner = ctypes.c_void_p(sid)
+        checked(security.SetTokenInformation(token, 4, ctypes.byref(owner), ctypes.sizeof(owner)))
+        checked(security.SetTokenInformation(token, 6, ctypes.byref(dacl), ctypes.sizeof(dacl)))
+        # The token's own object ACL is separate from its default object ACL.
+        # OpenProcessToken in the child must not depend on its disabled group.
+        checked(security.SetKernelObjectSecurity(token, 4, descriptor))
+        if diagnostics is not None:
+            diagnostics['object_security_after'] = token_security()
+            diagnostics['child_object_security'] = sddl
+        attributes = SECURITY_ATTRIBUTES(ctypes.sizeof(SECURITY_ATTRIBUTES), descriptor, False)
+        yield attributes, kernel_security
+    finally:
+        if descriptor:
+            kernel.LocalFree(descriptor)
+
+
 @contextmanager
 def _owned_desktop(kernel, security, token, diagnostics):
     """Grant only this user/SYSTEM access to new session-local user objects.
@@ -30,9 +143,6 @@ def _owned_desktop(kernel, security, token, diagnostics):
     https://learn.microsoft.com/windows/win32/secauthz/restricted-tokens
     """
     user = ctypes.WinDLL('user32', use_last_error=True)
-
-    class SECURITY_ATTRIBUTES(ctypes.Structure):
-        _fields_ = [('length', w.DWORD), ('descriptor', ctypes.c_void_p), ('inherit', w.BOOL)]
 
     security.GetTokenInformation.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.POINTER(w.DWORD)]
     security.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.LPWSTR)]
@@ -173,8 +283,10 @@ def run_restricted(arguments: list[str], cwd: Path, timeout: int = 600, *, diagn
             raise ctypes.WinError(ctypes.get_last_error())
 
     try:
-        # TOKEN_ASSIGN_PRIMARY | DUPLICATE | QUERY | ADJUST_DEFAULT.
-        checked(security.OpenProcessToken(kernel.GetCurrentProcess(), 0x8B, ctypes.byref(original)))
+        # TOKEN_ASSIGN_PRIMARY | DUPLICATE | QUERY | ADJUST_DEFAULT, plus
+        # READ_CONTROL | WRITE_DAC for the newly restricted token's own ACL.
+        # The original token is read/duplicated only; it is never modified.
+        checked(security.OpenProcessToken(kernel.GetCurrentProcess(), 0x6008B, ctypes.byref(original)))
         checked(security.ConvertStringSidToSidW('S-1-5-32-544', ctypes.byref(admin)))
         disabled = SID_AND_ATTRIBUTES(admin, 0)
         # DISABLE_MAX_PRIVILEGE; Administrators becomes deny-only.
@@ -184,7 +296,8 @@ def run_restricted(arguments: list[str], cwd: Path, timeout: int = 600, *, diagn
         integrity = SID_AND_ATTRIBUTES(medium, 0x20)  # SE_GROUP_INTEGRITY
         checked(security.SetTokenInformation(restricted, 25, ctypes.byref(integrity),
             ctypes.sizeof(integrity) + security.GetLengthSid(medium)))
-        with _owned_desktop(kernel, security, restricted, diagnostics) as desktop_name:
+        with _owned_object_security(kernel, security, restricted, diagnostics) as (attributes, describe_object), \
+                _owned_desktop(kernel, security, restricted, diagnostics) as desktop_name:
             startup = STARTUPINFO(); startup.cb = ctypes.sizeof(startup)
             startup.lpDesktop = desktop_name
             command = ctypes.create_unicode_buffer(subprocess.list2cmdline(arguments))
@@ -196,7 +309,8 @@ def run_restricted(arguments: list[str], cwd: Path, timeout: int = 600, *, diagn
             kernel.SetErrorMode(previous_error_mode | 0x0001 | 0x0002 | 0x8000)
             try:
                 checked(security.CreateProcessAsUserW(restricted, str(Path(arguments[0]).resolve()),
-                    command, None, None, False, 0x08000000 | 0x00000400, None,
+                    command, ctypes.byref(attributes), ctypes.byref(attributes), False,
+                    0x08000000 | 0x00000400, None,
                     str(cwd.resolve()), ctypes.byref(startup), ctypes.byref(process)))
             finally:
                 kernel.SetErrorMode(previous_error_mode)
@@ -217,6 +331,8 @@ def run_restricted(arguments: list[str], cwd: Path, timeout: int = 600, *, diagn
             if diagnostics is not None:
                 diagnostics['exit_code'] = code.value
                 diagnostics['exit_code_hex'] = f'0x{code.value:08x}'
+                diagnostics['process_security'] = describe_object(process.hProcess)
+                diagnostics['thread_security'] = describe_object(process.hThread)
             return code.value
     finally:
         for handle in (process.hThread, process.hProcess, restricted, original):

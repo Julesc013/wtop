@@ -95,6 +95,39 @@ def assert_restricted(value):
     assert value["integrity_rid"] == 8192, value  # SECURITY_MANDATORY_MEDIUM_RID
 
 
+def launch_probes(exe, launcher, output, receipt):
+    """Discriminate native-loader, Python-runtime and full-worker failures.
+
+    Only run after the workload child failed before producing its receipt.
+    The actual workload still fails; these bounded diagnostic children cannot
+    turn failed qualification into a pass or extend its 180-second bound.
+    """
+    kernel = C.WinDLL("kernel32", use_last_error=True)
+    kernel.GetSystemDirectoryW.argtypes = [W.LPWSTR, W.UINT]
+    kernel.GetSystemDirectoryW.restype = W.UINT
+    directory = C.create_unicode_buffer(32768)
+    count = kernel.GetSystemDirectoryW(directory, len(directory))
+    if not 0 < count < len(directory):
+        receipt["probe_setup_error"] = "bounded GetSystemDirectoryW failed"
+        write_receipt(output, receipt)
+        return
+    receipt["launch_probes"] = []
+    for name, arguments in (
+        ("system_cmd", [str(Path(directory.value) / "cmd.exe"), "/d", "/c", "exit", "0"]),
+        ("isolated_python", [sys.executable, "-I", "-S", "-c", "raise SystemExit(0)"]),
+        ("wtop_version", [exe, "--version"]),
+    ):
+        item = {"name": name, "expected_exit": 0, "timeout_s": 10, "launch": {}}
+        receipt["launch_probes"].append(item)
+        checkpoint(output, receipt, "launch_probe:" + name)
+        try:
+            item["exit_code"] = launcher(arguments, Path.cwd(), timeout=10,
+                                         diagnostics=item["launch"])
+        except BaseException:
+            item["failure"] = traceback.format_exc()
+        write_receipt(output, receipt)
+
+
 class ResourceReader:
     def __init__(self):
         self.k = C.WinDLL("kernel32", use_last_error=True)
@@ -372,11 +405,13 @@ def main():
         write_receipt(output, receipt)
         raise
     if not output.exists():
-        write_receipt(output, {"schema": 1, "kind": "native-resource-observations", "result": "failed",
+        receipt = {"schema": 1, "kind": "native-resource-observations", "result": "failed",
             "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
             "outer_context": outer_context, "restricted_exit_code": code,
             "failure": "restricted child exited without a receipt", "launch": launch_diagnostics,
-            "human_review": False})
+            "human_review": False}
+        write_receipt(output, receipt)
+        launch_probes(exe, run_restricted, output, receipt)
         raise AssertionError(f"restricted fixture exit {code} produced no receipt")
     receipt = json.loads(output.read_text(encoding="utf-8"))
     receipt["outer_context"] = outer_context
