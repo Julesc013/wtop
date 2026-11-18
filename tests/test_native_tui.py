@@ -441,6 +441,12 @@ def function_slot(frame, number):
         if int(match.group(1)) == number:
             start = match.start()
             end = matches[index + 1].start() if index + 1 < len(matches) else frame["width"]
+            # Standard bars reserve ten fixed spans even when a contextual
+            # binding is absent. F7 must not absorb blank F8/F9 cells merely
+            # because the next visible label is F10. Shared-editor/compact
+            # labels retain their observed adjacent bounds.
+            if start == (frame["width"] * (number - 1)) // 10:
+                end = min(end, (frame["width"] * number) // 10)
             return start, end, row[start:end], frame["attributes"][-1][start:end]
     return 0, 0, "", []
 
@@ -462,6 +468,19 @@ def function_ready(frame, number, label, enabled=True):
     if not shown.startswith(prefix) or not shown[len(prefix):].strip().startswith(label):
         return False
     return any(color != 8 for color in colors) if enabled else bool(colors) and all(color == 8 for color in colors)
+
+
+def footer_slot_contract():
+    row = list(" " * 120)
+    for start, label in ((0, "F1Help"), (72, "F7Affinity"), (108, "F10Quit")):
+        row[start:start + len(label)] = label
+    colors = [0] * 120
+    colors[72:84] = [8] * 12
+    frame = {"width": 120, "rows": ["".join(row)], "attributes": [colors]}
+    assert function_slot(frame, 7)[:2] == (72, 84)
+    assert function_ready(frame, 7, "Affinity", False)
+    colors[80] = 7
+    assert not function_ready(frame, 7, "Affinity", False), "disabled oracle ignored a wrongly enabled cell"
 
 
 def click_function(console, number, label, enabled=True):
@@ -961,6 +980,7 @@ def worker(exe, output):
     fixtures = []
     observations = {"checks": [], "human_visual_acceptance": False}
     try:
+        footer_slot_contract()
         console = Console()
         with tempfile.TemporaryDirectory(prefix="wtop-native-ui-") as temp:
             config = Path(temp) / "settings.conf"

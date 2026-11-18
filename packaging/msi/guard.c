@@ -13,7 +13,16 @@
 #include <aclapi.h>
 #include <sddl.h>
 #include <shlobj.h>
+#ifdef _MSC_VER
+/* Windows SDK restartmanager.h declares an anonymous union. Keep /W4 /WX
+   enabled for our C90 code; isolate this SDK-only extension at its include. */
+#pragma warning(push)
+#pragma warning(disable: 4201)
+#endif
 #include <restartmanager.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 #include <string.h>
 #include <wchar.h>
 
