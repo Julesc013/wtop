@@ -11,6 +11,7 @@ import argparse
 import ctypes
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,6 +91,25 @@ class InstallScopeArguments(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 verify_policy_refusal(bad, product)
 
+    def test_deferred_failure_oracle_requires_writes_and_rejects_rollback_errors(self):
+        product = "{01234567-89AB-CDEF-0123-456789ABCDEF}"
+        text = ("Executing op: FileCopy(SourceName=wtop.exe,DestName=wtop.exe,)\n"
+                f"Executing op: RegAddValue(Name=ProductCode,Value={product},)\n"
+                "Executing op: ProductRegister(UpgradeCode={fixture},VersionString=0.4.404,)\n"
+                "Executing op: CustomActionSchedule(Action=WtopFixtureFail,ActionType=1025,)\n"
+                "Missing deferred ownership context.\n"
+                "CustomAction WtopFixtureFail returned actual error code 1603\n"
+                "Executing op: Header(ScriptType=2,)\n"
+                "Executing op: End(Checksum=0,)\n"
+                "Error in rollback skipped. Return: 5\n")
+        verify_deferred_rollback_log(text, product)
+        for bad in (text.replace("SourceName=wtop.exe", "SourceName=other.exe"),
+                    text.replace(product, "{OTHER}"), text.replace("ScriptType=2", "ScriptType=1"),
+                    text.replace("Return: 5", "Return: 3"),
+                    text.replace("Executing op: End(Checksum=0,)", "Executing op: RegAddValue()")):
+            with self.assertRaises(AssertionError):
+                verify_deferred_rollback_log(bad, product)
+
 
 def msi_log_text(log):
     raw = log.read_bytes() if log.exists() else b""
@@ -98,12 +118,42 @@ def msi_log_text(log):
 
 
 def verify_policy_refusal(text, product):
-    require("Machine policy value 'DisableMsi' is 1" in text,
+    require(re.search(r"Machine policy value 'DisableMsi' is 1\s*$", text, re.MULTILINE),
             "refusal does not establish effective DisableMSI=1")
     require(f"Rejecting product '{product}': Non-assigned apps are disabled for non-admin users." in text,
             "refusal does not establish this product's unmanaged/non-admin policy denial")
     require("Doing action: InstallInitialize" not in text and ": InstallInitialize." not in text,
             "policy refusal unexpectedly entered the installation transaction")
+
+
+def verify_deferred_rollback_log(text, failed_product):
+    point = text.find("Executing op: CustomActionSchedule(Action=WtopFixtureFail,")
+    require(point >= 0, "injected failure was not executed inside the installer script")
+    before = text[:point]
+    require("Executing op: FileCopy(SourceName=wtop.exe," in before and
+            f"Executing op: RegAddValue(Name=ProductCode,Value={failed_product}," in before and
+            "Executing op: ProductRegister(" in before,
+            "injected deferred failure did not follow actual payload and registration writes")
+    require("Missing deferred ownership context." in text[point:] and
+            "CustomAction WtopFixtureFail returned actual error code 1603" in text[point:] and
+            "ScriptType=2" in text[point:], "expected deferred guard failure and rollback were not observed")
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if "Error in rollback skipped." in line:
+            result = re.search(r"Return:\s*(\d+)\s*$", line)
+            # MSI logs use 5 for success. Accept it only at a completed script
+            # End; failed actions (including access-denied Return3) are fatal.
+            # https://learn.microsoft.com/windows/win32/msi/logging-of-action-return-values
+            require(result and result.group(1) == "5" and index > 0 and
+                    "Executing op: End(" in lines[index - 1],
+                    "installer skipped a failed rollback action: " + line)
+
+
+def msi_product_state(product):
+    api = ctypes.WinDLL("msi", use_last_error=True)
+    api.MsiQueryProductStateW.argtypes = [ctypes.c_wchar_p]
+    api.MsiQueryProductStateW.restype = ctypes.c_int
+    return api.MsiQueryProductStateW(product)
 
 
 def msi_execute(arguments, log):
@@ -125,7 +175,7 @@ def msi_call(arguments, log: Path, expect_success=True, expected_reason=None, ex
     return code
 
 
-def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail_after_execute=False):
+def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail_during_execute=False):
     """Make a local test-only related MSI by changing its product/package IDs.
 
     Cabinet/application bytes are untouched. This is never uploaded as a
@@ -234,12 +284,14 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
                 if upgrade_view.value:
                     api.MsiViewClose(upgrade_view)
                     api.MsiCloseHandle(upgrade_view)
-        if fail_after_execute:
-            # Test-copy only. InstallExecute applies the generated transaction;
-            # the following type-19 action then requests failure/real rollback.
+        if fail_during_execute:
+            # Test-copy only: fail within the normal InstallFinalize script,
+            # after PublishProduct. No context is bound to this action, so the
+            # existing read-only guard must take its fail-closed path. Do not
+            # introduce an extra InstallExecute/immediate-action boundary which
+            # is absent from the production package.
             statements += [
-                "INSERT INTO `CustomAction` (`Action`,`Type`,`Target`) VALUES ('WtopFixtureFail',19,'Wtop fixture rollback after script execution')",
-                "INSERT INTO `InstallExecuteSequence` (`Action`,`Sequence`) VALUES ('InstallExecute',6500)",
+                "INSERT INTO `CustomAction` (`Action`,`Type`,`Source`,`Target`) VALUES ('WtopFixtureFail',1025,'Guard','WtopGuardDeferred')",
                 "INSERT INTO `InstallExecuteSequence` (`Action`,`Sequence`) VALUES ('WtopFixtureFail',6550)",
             ]
         for statement in statements:
@@ -312,10 +364,7 @@ def run_server_policy_probe(candidate, manifest, logs):
             pass
 
     product = manifest["installer"]["product_code"]
-    api = ctypes.WinDLL("msi", use_last_error=True)
-    api.MsiQueryProductStateW.argtypes = [ctypes.c_wchar_p]
-    api.MsiQueryProductStateW.restype = ctypes.c_int
-    product_state = api.MsiQueryProductStateW(product)
+    product_state = msi_product_state(product)
     require(product_state == -1, "policy probe requires an unregistered MSI product")
     require_absent_payload_and_owner()
     path_before = registry_path_values()
@@ -345,7 +394,7 @@ def run_server_policy_probe(candidate, manifest, logs):
         require(code == 1625, f"expected Server policy refusal 1625, received {code}; see {log}")
         verify_policy_refusal(msi_log_text(log), product)
         require_absent_payload_and_owner()
-        require(api.MsiQueryProductStateW(product) == product_state,
+        require(msi_product_state(product) == product_state,
                 "policy refusal changed MSI product registration")
         require(registry_path_values() == path_before, "policy refusal changed PATH")
         require(raw_policy() == policy_before, "policy refusal changed the raw installer policy")
@@ -447,6 +496,7 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
                 require(not (Path(unsafe) / "wtop.exe").exists(), "machine MSI wrote an untrusted destination")
         msi_call(["/i", str(msi), *scope_arguments], logs / f"{scope}-install.log")
         installed = True
+        require(msi_product_state(product) == 5, "fresh product is not fully installed")
         require(sha256((directory / "wtop.exe").read_bytes()) == manifest["payload"]["executable"]["sha256"], "installed EXE is not the exact portable payload")
         for name in payload_files:
             require((directory / name).read_bytes() == (candidate / name).read_bytes(), "installed legal/payload file differs: " + name)
@@ -464,10 +514,16 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
             upgrade_probe(msi, same_version, manifest["installer"]["msi_version"], delta=0)
             msi_call(["/i", str(same_version), *scope_arguments], logs / f"{scope}-same-version-refusal.log", False,
                      "ownership check refused")
-            upgrade_probe(msi, rollback, manifest["installer"]["msi_version"], fail_after_execute=True)
+            rollback_product = upgrade_probe(msi, rollback, manifest["installer"]["msi_version"], fail_during_execute=True)
             msi_call(["/i", str(rollback), *scope_arguments], logs / f"{scope}-rollback.log", False,
-                     "Wtop fixture rollback after script execution")
-            require((directory / "wtop.exe").read_bytes() == original, "rollback did not restore original payload")
+                     "Missing deferred ownership context.")
+            verify_deferred_rollback_log(msi_log_text(logs / f"{scope}-rollback.log"), rollback_product["product_code"])
+            require(msi_product_state(rollback_product["product_code"]) == -1,
+                    "rollback left the failed newer MSI product registered")
+            require(msi_product_state(product) == 5, "rollback did not restore the original MSI registration")
+            for name in payload_files:
+                require((directory / name).read_bytes() == (candidate / name).read_bytes(),
+                        "rollback did not restore original payload/legal file: " + name)
             with winreg.OpenKey(hive, registry, 0, winreg.KEY_READ | view) as key:
                 require(winreg.QueryValueEx(key, "ProductCode")[0] == product, "rollback did not restore original owner")
             # Missing owned bytes may be repaired; modified bytes may not.
@@ -528,6 +584,8 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
                 "install_directory": str(directory), "modified_repair_refused": True,
                 "modified_uninstall_refused": True, "major_upgrade_same_payload_fixture": True,
                 "downgrade_refused": True, "rollback_after_script_execution_restored_owner": True,
+                "rollback_restored_msi_registration": True, "rollback_no_failed_actions_skipped": True,
+                "rollback_injection": "checked_deferred_guard_after_publish",
                 "missing_file_repair_exact": True, "running_payload_refused_without_termination": True,
                 "unowned_path_integration_refused": True, "both_registry_path_values_unchanged": True,
                 "same_version_different_product_refused": True, "rollback_disabled_refused": True,

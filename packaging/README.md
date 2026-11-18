@@ -132,15 +132,20 @@ python tests/test_native_install.py out/candidate --disposable-host --machine --
 This harness exercises both scopes, exact application/legal-file hashes,
 registration, rollback-disabled refusal, protected machine destinations,
 missing-file repair, changed-payload repair/removal refusal, running-image refusal,
-major upgrade, downgrade/same-version refusal, rollback after actual script
-execution, foreign-file/registry retention, fresh collision refusal and user-data
+major upgrade, downgrade/same-version refusal, rollback after actual payload and
+registration writes, foreign-file/registry retention, fresh collision refusal and user-data
 retention. It checks both raw user/machine PATH values remain byte-for-byte unchanged.
 
 Upgrade and rollback probes are explicitly marked local MSI copies with changed
 product/version identities and unchanged application bytes; they are never
 uploaded. They isolate wrapper transaction behavior, and cannot stand in for a
 real Beta 2-to-Beta 3 file-version/OS matrix. Failure injection is authored only
-into the disposable copy, never into the distributable MSI.
+into the disposable copy, never into the distributable MSI. A checked deferred
+guard failure executes after `PublishProduct` within normal `InstallFinalize`;
+the fixture does not add another `InstallExecute` phase. Its oracle requires
+preceding actual file/registry writes, the failed new product to be unregistered,
+the original product fully registered, exact restored payload/legal bytes and
+no skipped failed rollback operations.
 
 `--restricted-user` repeats the per-user lifecycle under a medium-integrity
 primary token with Administrators disabled and privileges removed. The child
@@ -191,6 +196,13 @@ installer blob `2f634646d9bd1b291616e317adcfb26ec8f7e2ed`, defaultLocale blob
 it does not validate a final release's downloads, execute the WinGet client, or
 qualify installation/uninstallation. Repeat validation on the exact generated
 preparation and retain the native acquisition/lifecycle gates.
+
+The synthetic Scoop manifest also passed the official Draft-7 schema (blob
+`9457c391e7f418231ef8187fc12af663a42a4da5`). The Chocolatey nuspec passed the
+client's NuGet XSD (blob `e6f11e7023c6bc00dc20e7e0a8c0ea5ac3d487ea`) after the
+client's missing-namespace normalization, reviewed at manifest-reader blob
+`f0f1e0badffe9b8b6b289cabb59b83d73470505f`. These are likewise structural
+preparation checks, not native installation or community acceptance.
 
 `acquire.ps1` accepts an exact GitHub release asset URL and independently supplied
 SHA256, stages it, verifies bytes, and optionally invokes that same MSI. It does

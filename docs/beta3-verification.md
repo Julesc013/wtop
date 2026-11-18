@@ -181,8 +181,10 @@ MSI work now exercises per-user/system ownership, repair, major upgrades,
 downgrade/refusal, rollback and running images in disposable automation. Upgrade
 probes change MSI identities while retaining identical application bytes; actual
 prior-release application/file-version upgrades remain a separate gate. The
-fixture injects failure only into a disposable MSI after its script has executed,
-then checks restoration of the old product owner and payload. The actual recorded
+fixture injects a checked deferred failure only into a disposable MSI, after
+actual payload and product-registration writes within the normal installation
+script. It checks restoration of the old product owner, payload and native MSI
+registration, and absence of the failed new registration. The actual recorded
 fixture outcomes govern its status.
 
 MSI leaves both user and machine PATH values unchanged and explicitly refuses
@@ -340,6 +342,21 @@ per profile and remain separate experimental candidates. The final exact-source
 receipts must establish the outcome of those newly separated host checks. Real
 x64 client/fresh-account/UAC, prior-release file-version upgrades and hostile or
 interrupted filesystem transactions remain unqualified.
+
+Candidate `4e7ca9ff94a019ae9b7093b8d6ab0c3af6a0ea55` in
+[release run 44271054646](https://github.com/Julesc013/wtop/actions/runs/44271054646)
+passed the Server policy probe and the elevated ARM64 per-user/machine sequences.
+The ARM64 restricted client then exposed a stronger rollback requirement: payload
+and Wtop-owner restoration alone was insufficient, because the failed newer MSI
+product remained registered. Its log retained access-denied rollback errors.
+The initial test injection had added an extra `InstallExecute` and an immediate
+failure, a boundary absent from the production package. The revised fixture
+instead schedules the existing guard's fail-closed missing-context path as a
+checked deferred action after `PublishProduct`, inside normal `InstallFinalize`.
+The oracle now requires actual preceding writes, old/new native registration
+states and absence of skipped failed rollback operations. That is a stronger
+restoration check; a later exact-source run must establish its result. This
+earlier registration failure is retained, not retroactively treated as a pass.
 
 ## Remaining work and recommended sequence
 
