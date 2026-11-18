@@ -353,6 +353,66 @@ static void diagnostic_keeps_controls(void)
     for(int i = 0; i < 10; ++i) assert(!FooterWidths[i]);
 }
 
+static void overlays_keep_live_status(void)
+{
+    char line[121];
+    reset(); Width = 120;
+    ObservedProcessCount = 7;
+    SampleSequence = 1;
+    LastSampleObservedTick = GetTickCount64();
+    LastSampleInterval = 1000;
+    for(int kind = OVERLAY_HELP; kind <= OVERLAY_RESULTS; ++kind) {
+        Overlay = (overlay_type)kind;
+        compose();
+        assert(Chrome.banner_status && StatusRow == -1 && FunctionBarRow == Height - 1);
+        assert(Chrome.content_end == Height - 1);
+        frame_text(2, line, sizeof(line));
+        assert(strstr(line, "age ") && strstr(line, "view Main") && strstr(line, "rows 3/7"));
+    }
+
+    CloseOverlay(); SelectView(0); compose(); BeginKill();
+    assert(Overlay == OVERLAY_KILL && PendingKillCount == 1 && PendingKills[0].ID == 10);
+    PendingSample = calloc(1, sizeof(*PendingSample));
+    assert(PendingSample);
+    PendingSample->rows = calloc(2, sizeof(*PendingSample->rows));
+    assert(PendingSample->rows);
+    memcpy(PendingSample->rows, ProcessList + 1, 2 * sizeof(*ProcessList));
+    PendingSample->count = 2;
+    PendingSample->observed_count = 6;
+    PendingSample->complete = TRUE;
+    PendingSample->sequence = 2;
+    PendingSample->observed = GetTickCount64();
+    PendingSample->interval = 1000;
+    assert(AdoptFrameSamples(TRUE));
+    compose();
+    assert(Overlay == OVERLAY_KILL && !HasSelection());
+    assert(PendingKillCount == 1 && PendingKills[0].ID == 10 && PendingKills[0].CreationTime == 100);
+    frame_text(2, line, sizeof(line));
+    assert(strstr(line, "rows 2/6"));
+    frame_text(3, line, sizeof(line));
+    assert(strstr(line, "PID 10  creation 100"));
+    assert(!FooterWidths[8] && FooterWidths[9]); /* Repeated F9 cannot confirm. */
+
+    /* Banner telemetry follows the saved placement. Explicit diagnostics may
+       still occupy the reserved row, but do not leak hidden ordinary status. */
+    Settings.status_position = WTOP_STATUS_HIDDEN;
+    compose();
+    frame_text(2, line, sizeof(line));
+    assert(strspn(line, " ") == (size_t)Width);
+    SetViMessage(VI_ERROR, _T("Captured action needs review"));
+    compose();
+    frame_text(2, line, sizeof(line));
+    assert(strstr(line, "Captured action needs review") && !strstr(line, "rows "));
+    ClearViMessage();
+    Settings.status_position = WTOP_STATUS_BOTTOM;
+    compose();
+    assert(StatusRow == Height - 2 && FunctionBarRow == Height - 1);
+    frame_text(2, line, sizeof(line));
+    assert(strspn(line, " ") == (size_t)Width);
+    frame_text(StatusRow, line, sizeof(line));
+    assert(strstr(line, "rows 2/6"));
+}
+
 static void interrupt_every_context(void)
 {
     for(int map = WTOP_KEYMAP_HTOP; map <= WTOP_KEYMAP_EMACS; ++map) {
@@ -394,6 +454,7 @@ int main(void)
     pending_samples_do_not_drop_hits();
     pending_sample_selection();
     diagnostic_keeps_controls();
+    overlays_keep_live_status();
     interrupt_every_context();
     CancelEditor(); CloseOverlay();
     ViDestroy();

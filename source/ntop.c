@@ -3060,9 +3060,10 @@ static void DrawOverlay(void)
     }
     StatusRow = Chrome.prompt >= 0 ? Chrome.prompt : Chrome.status;
     /* Row 2 is reserved between the overlay description and its content.
-       Persistent diagnostics belong here when the configured footer contains
-       controls; replacing that footer would hide recovery and disabled reasons. */
-    if(StatusRow < 0 && ViMessageActive()) { ClearRow(2); WriteStatusAt(2, 0); }
+       The configured banner remains live in overlays, including confirmations:
+       sample age/counts must not freeze while the captured target is retained.
+       The status formatter gives diagnostics priority over ordinary telemetry. */
+    if(StatusRow < 0 && (Chrome.banner_status || ViMessageActive())) { ClearRow(2); WriteStatusAt(2, 0); }
     else if(StatusRow < 0 && (DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID))) { SetConCursorPos(0, 2); ConPrintf(_T("glyph substitution; raw text preserved")); }
     if(StatusRow >= 0) { ClearRow(StatusRow); if(InInputMode) DrawEditorStatus(); else WriteVi(); }
     DrawFunctionBar();

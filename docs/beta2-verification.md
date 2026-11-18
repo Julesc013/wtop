@@ -31,6 +31,13 @@ diagnostics to the existing banner/status area or reserved overlay row. Dedicate
 native cases cover hidden titles/status, compact/hidden/status-only footers,
 read-only Save hit regions and tiny windows; the external assertion is retained.
 
+The `189dffa95187a92efef69b51e033f998aa73a942` follow-up passed that regression
+and again reached 20/21 native suites. The later confirmation/churn check exposed
+missing live banner status on overlays after the one-footer change. The next
+correction restores that projection in the existing reserved overlay row; it
+retains the check that a confirmation keeps its captured identity while new
+process observations arrive.
+
 ## Changes and independent oracles
 
 | Area | Intended behavior | Regression oracle |
