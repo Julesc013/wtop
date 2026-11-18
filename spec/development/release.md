@@ -91,20 +91,30 @@ Published support and installation commands MUST reflect actually observed relea
 
 Acceptance: WT-AC-063-02 — Compare release metadata and package identity against the real published artifact; planned channels remain unavailable.
 
-## Public beta boundary
+## Prerelease and stable boundaries
 
-The authorized first public beta is **0.4.0-beta.1**, a portable x64 Windows NT
-TUI and explicit CLI monitor, not the complete stable 0.4.0 or historical 1.0
-scope. The target remains `WT-TGT-WIN64-MODERN`; no new duplicate target is
-created. x86/ARM64 can remain CI candidates and are not public beta assets until
-their own evidence is admitted. MSI, WinGet, self-install and GUI are excluded
-from this beta's published assets. Existing stable install goals remain open.
+Beta 1 is the historical x64 portable release. Its published bytes and schema-1
+records remain immutable. The user-authorized Beta 2 plan extends portable drafts
+to independently admitted modern NT x86, x64 and ARM64 profiles. An omitted
+architecture is disclosed rather than inferred from a neighbouring test lane.
+The existing target identities remain authoritative; no duplicate target or full
+historical support claim is created. MSI, community package publication and GUI
+remain outside the Beta 2 assets until separately qualified.
 
-A draft may hold verified, visibly unqualified candidates while native client
-or human evidence is absent. Public publication requires all beta gates below.
-Server CI is not Windows 11 desktop evidence; injected input is not human visual
-review. Missing credentials, a disabled issue tracker, unavailable hardware or a
-failed gate produces a blocked result, never a fabricated pass or waived gate.
+The supplied [Beta 2 plan](../../docs/beta2-plan.md) explicitly permits automated
+alpha/beta publication after automatic gates. Human desktop review is valuable
+but is not a mandatory alpha/beta prerequisite. Stable publication still requires
+ordinary-user desktop evidence, human interaction review and final-byte approval.
+This change is an authorized channel policy, not an automatically synthesized
+human receipt. The present task requests a **draft**; no automatic master push
+may publicly publish it.
+
+A draft may record a missing optional observation or unavailable security scanner
+truthfully. Failed required tests, changed payloads, invalid signatures or a
+detected threat block assembly. Public prerelease promotion additionally needs
+live feedback, completed final-byte security scanning and exact-source acquisition
+checks. Server CI is not Windows desktop evidence; injected input is not human
+visual review. Each receipt states the actual host, token and method.
 
 Candidate construction, native execution, draft staging, public promotion and
 post-publication acquisition are separate operations. A release cannot verify
@@ -119,7 +129,7 @@ Historical audit documents retain their original revision and are not rewritten.
 
 ### WT-REQ-063-03
 
-A public beta MUST bind its version, source revision and portable x64 payload to
+A public beta MUST bind its version, source revision and included portable profile payloads to
 passing automated tests, observed build/SDK provenance and same-byte source/license
 and archive verification; it MUST exclude unqualified install/profile artifacts.
 
@@ -129,13 +139,16 @@ unexpected artifacts; retain exact successful candidate hashes.
 
 ### WT-REQ-063-04
 
-A public beta MUST have a receipt for the exact executable on Windows 11 x64
-workstation under an ordinary user token and an explicit human review of its
-console interaction/restoration, with host and terminal identities recorded.
+A stable release MUST have a receipt for each advertised desktop executable
+under an ordinary user token and explicit human review of console interaction
+and restoration, with host and terminal identities recorded. Automated alpha/beta
+receipts MUST disclose their actual OS, CPU, elevation and synthetic-input method;
+they MUST NOT assert human review or a different client host.
 
-Acceptance: WT-AC-063-04 — Run the exact candidate on a named Windows 11 desktop;
-review keymaps, mouse fallback, small/resize layouts, prompts, settings and exit.
-Reject server, elevated-only, wrong-payload and automatically asserted human evidence.
+Acceptance: WT-AC-063-04 — Reject wrong-payload and falsely asserted host/human
+evidence in every channel. Admit alpha/beta only with their declared automated
+profile checks. For stable desktop qualification, reject server/elevated-only
+substitutes and require actual ordinary-user interaction/restoration review.
 
 ### WT-REQ-063-05
 

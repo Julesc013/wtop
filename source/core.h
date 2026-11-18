@@ -42,6 +42,10 @@ typedef struct wtop_options {
     const char *keymap_name;
     const char *theme_name;
     const char *write_config_path;
+    const char *footer_style;
+    const char *status_position;
+    const char *character_set;
+    unsigned long frame_interval_ms;
     int mouse_mode; /* -1 means no command-line override. */
     int show_function_bar; /* -1 means no command-line override. */
 } wtop_options;

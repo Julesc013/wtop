@@ -1,40 +1,59 @@
 # Draft staging and deliberate public promotion
 
-The dedicated `Wtop portable beta` workflow builds x64, runs actual tests, records
-native resources/version/SDK and assembles one exact portable beta. Work branches
-and pull requests build and test but never stage or publish. On canonical `master`,
-a passing package may be staged as a **draft prerelease**. This does not assert
-that the public beta gates passed. The release script verifies uploaded bytes by
-acquiring the draft assets again, and reports remaining gates.
+The supplied [Beta 2 plan](beta2-plan.md) authorizes automatic alpha/beta gates and
+retains human approval for stable releases. This task requests a **draft**, so the
+master-push path creates only a draft prerelease. Public publication always needs
+an explicit dispatch operation. Stable versions are refused by prerelease tooling.
 
-A version is not overwritten. A pre-existing public release or different draft
-source is refused. A retry may supply missing assets only after existing bytes
-match. No `--clobber`, silent signing, tag move, rebuild or replacement is used.
+## Build and draft
 
-Public promotion requires a maintainer to obtain the exact draft portable package,
-run the [desktop acceptance procedure](desktop-acceptance.md), review the resulting
-receipt and attach it to the draft as `desktop-receipt.json`. Do not synthesize
-answers. The executable hash/version/source, Windows 11 workstation x64 ordinary
-user, all human questions, and terminal identity must match. Enable GitHub Issues
-through repository administration; adding templates does not change this setting.
-No admin token is installed in Actions and the workflow does not change protections.
+The dedicated workflow builds x86/x64 on the named Windows Server runner and
+ARM64 on `windows-11-arm`. Every included executable runs the required native
+suite and produces exact-byte source/compiler/SDK/version/test/security receipts.
+Work branches and pull requests cannot stage or publish. The canonical master
+job verifies the aggregate, uploads it as a draft, then reacquires and hashes the
+actual assets. The release title, asset labels and numeric resources derive from
+one version model.
 
-Then explicitly run `Wtop portable beta` from master with operation `publish` and
-the existing beta tag. No build occurs in that path. It checks live feedback and
-all exact-payload evidence, keeps prerelease status, does not set Latest, then
-acquires unauthenticated public download URLs and verifies all bytes again.
-A publication/acquisition failure is an incident, not permission to replace assets
-under the same version. Investigate/revoke as appropriate and issue a new version.
+A version is never overwritten. An existing public release or different-source
+draft is refused. A retry can add a missing asset only after every existing asset
+matches. There is no `--clobber`, silent signing, tag move, rebuild or replacement.
+Beta 1's schema-1 evidence and published bytes remain readable and immutable.
 
-The script accepts only the fixed repository and branch. Tokens are scoped by
-job: builds read content, draft/publication jobs write content, artifact download
-only additionally reads Actions. No pull-request-target or privileged workflow-run
-path consumes arbitrary fork code. Action references are pinned.
+Alpha/beta human visual review is optional. Automated receipts explicitly say
+that they are automated, identify the actual OS/architecture/token and never
+assert a human observation. Missing required tests, invalid signatures, source
+mismatches, altered bytes and detected security threats block assembly. An
+unavailable scanner may be reported in a draft but blocks public promotion.
+MSI and historical profiles remain omitted while their independent gates are open.
 
-Primary implementation references:
-- https://cli.github.com/manual/gh_release_create
-- https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository
-- https://docs.github.com/en/actions/concepts/security/github_token
+## Public alpha/beta promotion
 
-A draft may be staged while desktop/human/feedback gates are blocked. That is the
-maximum authorized publication state until those real conditions are satisfied.
+Verify the final-byte security scan, exact source and asset inventory, live
+feedback route and truthful limitations. Then explicitly dispatch the prerelease
+workflow from master with operation `publish` and the existing draft tag. This
+path does not rebuild. It refuses stable versions, verifies every gate and asset,
+keeps prerelease status, does not set Latest, then reacquires public URLs and
+checks the actual downloaded bytes. A failure after publication is a release
+incident, not permission to replace bytes under an existing version.
+
+GitHub Issues must actually be enabled; issue templates alone do not change the
+repository setting. No automatic workflow installs administrator credentials,
+changes protections or enables feedback on the maintainer's behalf.
+
+## Stable releases
+
+Stable publication remains outside this prerelease tool. It needs exact advertised
+OS/architecture/install-scope closure, real ordinary-user desktop execution,
+explicit human review of the final bytes and release approval. The existing
+[desktop procedure](desktop-acceptance.md) is available for those observations.
+Never synthesize PASS answers. A beta policy change does not close an installer,
+historical target or full product acceptance case.
+
+## Credential boundary
+
+Builds use read-only content permission. Only canonical master draft/publication
+jobs can write release contents; artifact acquisition additionally reads Actions.
+No pull-request-target or privileged workflow-run path executes arbitrary fork
+code with release credentials. Action references are pinned. Tokens remain in
+workflow environment, not release artifacts, source or reports.

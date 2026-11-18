@@ -39,6 +39,7 @@
 #include "actions.h"
 #include "providers_nt.h"
 #include "output_nt.h"
+#include "console_frame_nt.h"
 #include <io.h>
 #include <fcntl.h>
 #include "version.h"
@@ -59,7 +60,14 @@ static int Height;
 static int OldWidth;
 static int OldHeight;
 static int ConsoleOriginX, ConsoleOriginY;
-static int RenderColumn;
+static int RenderColumn, RenderRow;
+static WORD CurrentColor, ColorOverride;
+static wtop_settings Settings;
+static wtop_console_frame Screen;
+static wtop_ui_chrome Chrome;
+static volatile LONG CollectionPaused;
+static BOOL Paused;
+static int FooterStarts[10], FooterWidths[10];
 static int SizeX;
 static int SizeY;
 static int ProcessWindowPosY = 6;
@@ -143,48 +151,55 @@ static size_t NativeAscii(const TCHAR *Text, char *Output, size_t Capacity)
     return Rendered.cells;
 }
 
+static size_t NativeCells(const TCHAR *Text, TCHAR *Output, size_t Capacity)
+{
+    size_t input = 0, cells = 0;
+    if(!Capacity) return 0;
+    while(Text[input] && cells + 1 < Capacity) {
+        unsigned long Scalar = (unsigned short)Text[input++];
+#ifdef UNICODE
+        if(Scalar >= 0xd800 && Scalar <= 0xdbff && Text[input] >= 0xdc00 && Text[input] <= 0xdfff)
+            Scalar = 0x10000UL + ((Scalar - 0xd800UL) << 10) + ((unsigned short)Text[input++] - 0xdc00UL);
+#endif
+        Output[cells++] = (TCHAR)wtop_text_cell_glyph(Scalar, Settings.character_set == WTOP_CHARSET_UNICODE, &DisplayTextFlags);
+    }
+    Output[cells] = 0;
+    if(Text[input]) DisplayTextFlags |= WTOP_TEXT_CLIPPED;
+    return cells;
+}
+
 static int ConPrintf(const TCHAR *Fmt, ...)
 {
-    TCHAR Buffer[4096];
-    va_list VaList;
-    va_start(VaList, Fmt);
-    int CharsWritten = _vsntprintf_s(Buffer, _countof(Buffer), _TRUNCATE, Fmt, VaList);
-    va_end(VaList);
-    if(CharsWritten < 0) CharsWritten = (int)_tcslen(Buffer);
-    if(InteractiveMode) {
-        BOOL NeedsProjection = FALSE;
-        for(int i = 0; i < CharsWritten; ++i)
-            if(Buffer[i] < 32 || Buffer[i] > 126) { NeedsProjection = TRUE; break; }
-        if(NeedsProjection) {
-            char Cells[4096];
-            CharsWritten = (int)NativeAscii(Buffer, Cells, sizeof(Cells));
-            for(int i = 0; i <= CharsWritten; ++i) Buffer[i] = TCharFromAscii(Cells[i]);
-        }
+    TCHAR Buffer[4096], Cells[4096];
+    va_list Args;
+    va_start(Args, Fmt);
+    int Written = _vsntprintf_s(Buffer, _countof(Buffer), _TRUNCATE, Fmt, Args);
+    va_end(Args);
+    if(Written < 0) Written = (int)_tcslen(Buffer);
+    if(!InteractiveMode) {
+        if(!WriteTText(ConsoleHandle, Buffer, (size_t)Written)) RequestShutdown();
+        return Written;
     }
-    if(InteractiveMode && Width > 0) {
-        CharsWritten = min(CharsWritten, max(0, Width - RenderColumn));
-#ifdef UNICODE
-        if(CharsWritten && Buffer[CharsWritten - 1] >= 0xd800 && Buffer[CharsWritten - 1] <= 0xdbff) --CharsWritten;
-#endif
-        RenderColumn += CharsWritten;
-    }
-    if(!WriteTText(ConsoleHandle, Buffer, (size_t)CharsWritten)) RequestShutdown();
-    return CharsWritten;
+    Written = (int)NativeCells(Buffer, Cells, _countof(Cells));
+    Written = min(Written, max(0, Width - RenderColumn));
+    for(int i = 0; i < Written; ++i)
+        wtop_frame_put(&Screen.cells, RenderColumn + i, RenderRow, (unsigned short)Cells[i], CurrentColor);
+    RenderColumn += Written;
+    return Written;
 }
 
 static void DrawPaddedText(const TCHAR *Text, int Cells)
 {
-    char Display[4096];
-    NativeAscii(Text, Display, sizeof(Display));
-    ConPrintf(_T("%-*.*hs"), Cells, Cells, Display);
+    TCHAR Display[4096];
+    NativeCells(Text, Display, _countof(Display));
+    ConPrintf(_T("%-*.*s"), Cells, Cells, Display);
 }
 
 static void ConPutc(TCHAR c)
 {
-    if(InteractiveMode && Width > 0 && RenderColumn >= Width) return;
-    ++RenderColumn;
-    if(c < 32 || c > 126) { c = _T('?'); DisplayTextFlags |= WTOP_TEXT_LOSSY; }
-    if(!WriteTText(ConsoleHandle, &c, 1)) RequestShutdown();
+    if(RenderColumn >= Width) return;
+    wtop_frame_put(&Screen.cells, RenderColumn++, RenderRow,
+        wtop_text_cell_glyph((unsigned short)c, Settings.character_set == WTOP_CHARSET_UNICODE, &DisplayTextFlags), CurrentColor);
 }
 
 #define FOREGROUND_WHITE (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
@@ -192,7 +207,6 @@ static void ConPutc(TCHAR c)
 #define BACKGROUND_WHITE (BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE)
 #define BACKGROUND_CYAN (BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_BLUE)
 
-static wtop_settings Settings;
 static wtop_config_document ConfigDocument;
 static wtop_settings_store ConfigStore;
 static unsigned long SettingsRevision = 1;
@@ -285,23 +299,18 @@ static BOOL ExportConfigFile(const char *Path, wtop_store_result *Result)
     return Ok;
 }
 
-static WORD CurrentColor;
-static WORD ColorOverride;
 
 static void SetColor(WORD Color)
 {
 	Color |= ColorOverride;
 	CurrentColor = Color;
-	SetConsoleTextAttribute(ConsoleHandle, Color);
+
 }
 
 static void SetConCursorPos(SHORT X, SHORT Y)
 {
-	COORD Coord;
-	Coord.X = (SHORT)(X + ConsoleOriginX);
-	Coord.Y = (SHORT)(Y + ConsoleOriginY);
-	SetConsoleCursorPosition(ConsoleHandle, Coord);
     RenderColumn = X;
+    RenderRow = Y;
 }
 
 typedef wtop_metric_state metric_state;
@@ -441,8 +450,12 @@ static BOOL IsProcessTagged(const process *Selected)
 static DWORD ProcessCount = 0;
 static DWORD RunningProcessCount = 0;
 static DWORD ProcessIndex = 0;
-static DWORD SelectedProcessIndex = 0;
-static DWORD SelectedViewIndex;
+/* Indices are only cached positions. The explicit selection owns a lifetime
+   identity and starts empty; saved presentation never restores an action target. */
+static DWORD SelectedProcessIndex = MAXDWORD;
+static DWORD SelectedViewIndex = MAXDWORD;
+static BOOL SelectionActive;
+static process_identity SelectedIdentity;
 static DWORD *ViewIndices;
 static DWORD ViewCount, ViewCapacity;
 static process_identity *RenderedRows;
@@ -455,6 +468,24 @@ static ULONGLONG DisplayedCreationTime;
 static BOOL FollowProcess = FALSE;
 static DWORD FollowProcessID = 0;
 static ULONGLONG FollowCreationTime;
+
+static void ClearSelection(void)
+{
+    SelectionActive = FALSE;
+    SelectedProcessIndex = SelectedViewIndex = MAXDWORD;
+    memset(&SelectedIdentity, 0, sizeof(SelectedIdentity));
+    DisplayedProcessID = 0; DisplayedCreationTime = 0;
+    FollowProcess = FALSE; FollowProcessID = 0; FollowCreationTime = 0;
+}
+
+static BOOL HasSelection(void)
+{
+    return SelectionActive && SelectedViewIndex < ViewCount &&
+        SelectedProcessIndex < ProcessCount &&
+        ViewIndices[SelectedViewIndex] == SelectedProcessIndex &&
+        ProcessList[SelectedProcessIndex].ID == SelectedIdentity.ID &&
+        ProcessList[SelectedProcessIndex].CreationTime == SelectedIdentity.CreationTime;
+}
 
 typedef enum sort_order {
 	ASCENDING,
@@ -746,21 +777,26 @@ static void RebuildView(void)
     for(DWORD i = 0; i < ProcessCount; ++i) {
         if(!ContainsInsensitive(ProcessList[i].ExeName, Filter)) continue;
         ViewIndices[ViewCount] = i;
-        if(i == SelectedProcessIndex) Found = ViewCount;
+        if(SelectionActive && ProcessList[i].ID == SelectedIdentity.ID &&
+            ProcessList[i].CreationTime == SelectedIdentity.CreationTime) Found = ViewCount;
         ++ViewCount;
     }
     free(Filter);
-    if(!ViewCount) { SelectedProcessIndex = SelectedViewIndex = ProcessIndex = 0; return; }
-    SelectedViewIndex = Found == MAXDWORD ? min(SelectedViewIndex, ViewCount - 1) : Found;
-    SelectedProcessIndex = ViewIndices[SelectedViewIndex];
+    if(!ViewCount) ProcessIndex = 0;
+    if(Found == MAXDWORD) { ClearSelection(); return; }
+    SelectedViewIndex = Found;
+    SelectedProcessIndex = ViewIndices[Found];
 }
 
 static void SelectView(DWORD Index)
 {
-    if(!ViewCount) { ProcessIndex = SelectedViewIndex = SelectedProcessIndex = 0; return; }
+    if(!ViewCount) { ProcessIndex = 0; ClearSelection(); return; }
     DWORD Visible = max(VisibleProcessCount, 1);
     SelectedViewIndex = min(Index, ViewCount - 1);
     SelectedProcessIndex = ViewIndices[SelectedViewIndex];
+    SelectedIdentity.ID = ProcessList[SelectedProcessIndex].ID;
+    SelectedIdentity.CreationTime = ProcessList[SelectedProcessIndex].CreationTime;
+    SelectionActive = TRUE;
     if(SelectedViewIndex < ProcessIndex) ProcessIndex = SelectedViewIndex;
     if(SelectedViewIndex - ProcessIndex >= Visible) ProcessIndex = SelectedViewIndex - Visible + 1;
 }
@@ -773,19 +809,10 @@ static void SelectProcess(DWORD Index)
 static void ReadjustCursor(void)
 {
     RebuildView();
-    if(!ViewCount) { FollowProcess = FALSE; return; }
+    if(!ViewCount) return;
     DWORD Visible = max(VisibleProcessCount, 1);
     ProcessIndex = min(ProcessIndex, ViewCount > Visible ? ViewCount - Visible : 0);
-    if(FollowProcess) {
-        BOOL Found = FALSE;
-        for(DWORD i = 0; i < ViewCount; ++i) {
-            const process *Process = &ProcessList[ViewIndices[i]];
-            if(Process->ID == FollowProcessID && Process->CreationTime == FollowCreationTime) {
-                SelectView(i); Found = TRUE; break;
-            }
-        }
-        if(!Found) FollowProcess = FALSE;
-    } else SelectView(SelectedViewIndex);
+    if(HasSelection()) SelectView(SelectedViewIndex);
 }
 
 void SetPresentationFilter(const TCHAR *Pattern)
@@ -797,7 +824,7 @@ void SetPresentationFilter(const TCHAR *Pattern)
     strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), Utf8);
     free(Utf8);
     MarkSettingsChanged();
-    ProcessIndex = SelectedViewIndex = 0;
+    ProcessIndex = 0;
     ReadjustCursor();
 }
 
@@ -856,8 +883,9 @@ static BOOLEAN SearchMatchesProcess(const process *Process)
 static void SearchNext(void)
 {
     if(!SearchActive || !ViewCount) return;
+    DWORD Start = HasSelection() ? SelectedViewIndex : ViewCount - 1;
     for(DWORD Step = 1; Step <= ViewCount; ++Step) {
-        DWORD View = (SelectedViewIndex + Step) % ViewCount;
+        DWORD View = (Start + Step) % ViewCount;
         if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { SelectView(View); return; }
     }
     SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
@@ -866,8 +894,9 @@ static void SearchNext(void)
 static void SearchPrevious(void)
 {
     if(!SearchActive || !ViewCount) return;
+    DWORD Start = HasSelection() ? SelectedViewIndex : 0;
     for(DWORD Step = 1; Step <= ViewCount; ++Step) {
-        DWORD View = (SelectedViewIndex + ViewCount - Step) % ViewCount;
+        DWORD View = (Start + ViewCount - Step) % ViewCount;
         if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { SelectView(View); return; }
     }
     SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
@@ -956,6 +985,7 @@ static DWORD WINAPI PollCoreThreadProc(LPVOID Context)
     UNREFERENCED_PARAMETER(Context);
     unsigned Failures = 0;
     while(!ShouldStop()) {
+        if(InterlockedCompareExchange(&CollectionPaused, 0, 0)) { WaitForSingleObject(ShutdownEvent, 50); continue; }
         DWORD Interval = (DWORD)InterlockedCompareExchange(&CollectorInterval, 0, 0);
         wtop_provider_result *Result = CollectCoreObservation(Interval);
         if(!Result) return ERROR_NOT_ENOUGH_MEMORY;
@@ -1259,8 +1289,9 @@ static BOOL AdoptPendingSample(void)
     PendingSample = NULL;
     LeaveCriticalSection(&SyncLock);
     if(!Sample) return FALSE;
-    DWORD SelectedId = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].ID : 0;
-    ULONGLONG SelectedCreated = ProcessCount && SelectedProcessIndex < ProcessCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
+    /* A PID without a known lifetime is display-only within this observation.
+       It cannot be safely carried across samples or upgraded to a new target. */
+    if(SelectionActive && !SelectedIdentity.CreationTime) ClearSelection();
     free(ProcessList);
     ProcessList = Sample->rows; Sample->rows = NULL;
     ProcessCount = Sample->count;
@@ -1282,15 +1313,18 @@ static BOOL AdoptPendingSample(void)
     free(Sample);
     SortProcessList();
     ReadjustCursor();
-    if(!FollowProcess && SelectedId) {
-        for(DWORD i = 0; i < ProcessCount; ++i) {
-            if(ProcessList[i].ID == SelectedId && ProcessList[i].CreationTime == SelectedCreated) {
-                SelectProcess(i); break;
-            }
-        }
-    }
     RenderInvalidated = TRUE;
     return TRUE;
+}
+
+/* Keep the displayed model authoritative for input until this UI turn can
+   publish its replacement frame. No pending storage is unbounded or copied. */
+static BOOL AdoptFrameSamples(BOOL FrameDue)
+{
+    if(!FrameDue || Paused) return FALSE;
+    BOOL Changed = AdoptPendingSample();
+    if(AdoptPendingCore()) Changed = TRUE;
+    return Changed;
 }
 
 static void DisableCursor(void)
@@ -1316,7 +1350,7 @@ static BOOL PollConsoleInfo(void)
         ConsoleOriginX != Csbi.srWindow.Left || ConsoleOriginY != Csbi.srWindow.Top;
     ConsoleOriginX = Csbi.srWindow.Left;
     ConsoleOriginY = Csbi.srWindow.Top;
-    if(Changed) { DisableCursor(); OldWidth = Width; OldHeight = Height; RenderInvalidated = TRUE; }
+    if(Changed) { DisableCursor(); OldWidth = Width; OldHeight = Height; RenderInvalidated = TRUE; wtop_frame_invalidate(&Screen.cells); }
     SizeX = Csbi.dwSize.X; SizeY = Csbi.dwSize.Y;
     if(!SavedAttributes) SavedAttributes = Csbi.wAttributes;
     return Changed;
@@ -1406,6 +1440,7 @@ DWORD WINAPI PollProcessListThreadProc(LPVOID lpParam)
 	UNREFERENCED_PARAMETER(lpParam);
 
 	while(!ShouldStop()) {
+        if(InterlockedCompareExchange(&CollectionPaused, 0, 0)) { WaitForSingleObject(ShutdownEvent, 50); continue; }
         DWORD Interval = (DWORD)InterlockedCompareExchange(&CollectorInterval, 0, 0);
         if(!PollProcessList(Interval)) {
             RequestShutdown();
@@ -1451,6 +1486,7 @@ static BOOL WINAPI CtrlHandler(DWORD Signal)
 static void DrawProcessListHeader(void)
 {
     wtop_tab *Tab = ActiveTab();
+    wtop_frame_fill(&Screen.cells, 0, ProcessHeaderRow, Width, ' ', (WORD)Settings.colors[WTOP_COLOR_HEADER]);
     RenderedColumnCount = wtop_ui_columns(Width, Tab->columns, Tab->column_count, RenderedColumns);
     for(int i = 0; i < RenderedColumnCount; ++i) {
         wtop_ui_column_span *Span = &RenderedColumns[i];
@@ -1475,17 +1511,18 @@ static int DrawPercentageBar(TCHAR *Name, double Percentage, WORD Color)
 
 	BOOL Known = Percentage >= 0;
     if(Known) Percentage = min(1.0, Percentage);
-    int Bars = Known ? (int)((double)BAR_WIDTH * Percentage) : 0;
+    int BarWidth = Settings.meter_style == WTOP_METER_TEXT ? 0 : min(Settings.meter_width, max(8, Width - 15));
+    int Bars = Known ? (int)((double)BarWidth * Percentage) : 0;
 	SetColor(Color);
 	for(int i = 0; i < Bars; i++) {
-		ConPutc(_T('|'));
+		ConPutc(Settings.meter_style == WTOP_METER_BLOCKS ? (Settings.character_set == WTOP_CHARSET_UNICODE ? (TCHAR)0x2588 : _T('#')) : _T('|'));
 	}
 	CharsWritten+= Bars;
 	SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
-	for(int i = 0; i < BAR_WIDTH - Bars; i++) {
+	for(int i = 0; i < BarWidth - Bars; i++) {
 		ConPutc(_T(' '));
 	}
-	CharsWritten += BAR_WIDTH - Bars;
+	CharsWritten += BarWidth - Bars;
 	SetColor((WORD)Settings.colors[WTOP_COLOR_FG_HIGHLIGHT]);
 	CharsWritten += Known ? ConPrintf(_T("%04.1f%%"), 100.0 * Percentage) : ConPrintf(_T("    ?"));
 	SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
@@ -1505,18 +1542,13 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
     metric_state Cpu = FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now);
     metric_state Memory = FreshMetricState(Process->MemoryState, Process->ObservedTick, Now);
     metric_state Io = FreshMetricState(Process->IoState, Process->ObservedTick, Now);
-    metric_state Age = FreshMetricState(Process->AgeState, Process->CpuObservedTick, Now);
+    metric_state Age = FreshMetricState(Process->AgeState, Process->ObservedTick, Now);
     WORD Color = (WORD)Settings.colors[WTOP_COLOR_FG];
     if(IsProcessTagged(Process)) Color = (WORD)Settings.colors[WTOP_COLOR_TAG];
     if(Highlighted) Color = (WORD)Settings.colors[FollowProcess ? WTOP_COLOR_FOLLOW : WTOP_COLOR_BG_HIGHLIGHT];
     SetColor(Color);
-    int Row;
-    CONSOLE_SCREEN_BUFFER_INFO Info;
-    if(!GetConsoleScreenBufferInfo(ConsoleHandle, &Info)) return;
-    Row = Info.dwCursorPosition.Y - ConsoleOriginY;
-    COORD RowStart = { (SHORT)ConsoleOriginX, Info.dwCursorPosition.Y };
-    DWORD Painted;
-    FillConsoleOutputAttribute(ConsoleHandle, Color, (DWORD)Width, RowStart, &Painted);
+    int Row = RenderRow;
+    wtop_frame_fill(&Screen.cells, 0, Row, Width, ' ', Color);
     for(int i = 0; i < RenderedColumnCount; ++i) {
         const wtop_ui_column_span *Span = &RenderedColumns[i];
         TCHAR Text[512];
@@ -1582,6 +1614,13 @@ static void DoScroll(scroll_type Type, BOOL *Redraw)
     if(!ViewCount) return;
     FollowProcess = FALSE;
     DWORD Page = max(VisibleProcessCount, 1);
+    if(!HasSelection()) {
+        /* The first navigation gesture selects a visible row, without silently
+           advancing past it. PageDown starts at the bottom of this page. */
+        DWORD Initial = min(ProcessIndex, ViewCount - 1);
+        if(Type == SCROLL_PAGE_DOWN) Initial += min(Page - 1, ViewCount - 1 - Initial);
+        SelectView(Initial); *Redraw = TRUE; return;
+    }
     DWORD Index = SelectedViewIndex;
     if(Type == SCROLL_UP && Index) --Index;
     if(Type == SCROLL_DOWN && Index + 1 < ViewCount) ++Index;
@@ -1644,14 +1683,10 @@ int GetProcessSortTypeFromName(const TCHAR *Name, process_sort_type *Dest)
 
 static void ApplyActiveTab(void)
 {
-    DWORD Id = ViewCount ? ProcessList[SelectedProcessIndex].ID : 0;
-    ULONGLONG Created = ViewCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
     ProcessSortType = ActiveTab()->tree ? SORT_BY_TREE : (process_sort_type)ActiveTab()->sort_column;
     SortOrder = ActiveTab()->descending ? DESCENDING : ASCENDING;
     SortProcessList();
     ReadjustCursor();
-    if(Id) for(DWORD i = 0; i < ProcessCount; ++i)
-        if(ProcessList[i].ID == Id && ProcessList[i].CreationTime == Created) { SelectProcess(i); break; }
     RenderInvalidated = TRUE;
 }
 
@@ -1687,10 +1722,10 @@ static BOOL ViMessageActive(void)
     return ViMessage[0] != 0;
 }
 
-static void WriteVi(void)
+static void WriteStatusAt(int Row, int Column)
 {
-    if(StatusRow < 0) return;
-    SetConCursorPos(0, (SHORT)StatusRow);
+    if(Row < 0 || Column >= Width) return;
+    SetConCursorPos((SHORT)Column, (SHORT)Row);
     wtop_ui_status Status;
     memset(&Status, 0, sizeof(Status));
     char *Prompt = ViMessageActive() ? ToUtf8(ViMessage) : NULL;
@@ -1708,18 +1743,21 @@ static void WriteVi(void)
     Status.partial = CollectorError != 0 || !SampleComplete || UnresolvedOwnerFilterCount != 0;
     char ProviderNotice[128];
     _snprintf_s(ProviderNotice, sizeof(ProviderNotice), _TRUNCATE, "%s%s%s",
-        DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID) ? "ASCII substitution; " : "",
+        DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID) ? "glyph substitution; " : "",
         ReadOnlyMode ? "read-only; " : "",
         ProcessSortType == SORT_BY_TREE && TreeUnresolvedParentCount ? "unverified parents shown as roots" : "");
     Status.provider_notice = ProviderNotice[0] ? ProviderNotice : NULL;
     Status.observed_rows = ObservedProcessCount;
     Status.selected_rows = ViewCount;
     char Text[4096]; unsigned Flags;
-    wtop_ui_status_format(&Status, Width, Text, sizeof(Text), &Flags);
+    wtop_ui_status_format(&Status, Width - Column, Text, sizeof(Text), &Flags);
     SetColor((WORD)Settings.colors[(Prompt && CurrentViMessageType == VI_ERROR) || Status.stale ? WTOP_COLOR_ERROR : WTOP_COLOR_FG]);
+    if(Paused) ConPrintf(_T("PAUSED "));
     ConPrintf(_T("%hs"), Text);
     free(Prompt);
 }
+
+static void WriteVi(void) { WriteStatusAt(StatusRow, 0); }
 
 void ClearViMessage(void)
 {
@@ -1885,11 +1923,15 @@ static void ResetCaret(void)
 
 static BOOL SelectionMatchesDisplay(void)
 {
-    if(ViewCount && !ProcessList[SelectedProcessIndex].CreationTime) {
+    if(!HasSelection()) {
+        SetViMessage(VI_NOTICE, _T("No process selected; use navigation or click a process row"));
+        return FALSE;
+    }
+    if(!ProcessList[SelectedProcessIndex].CreationTime) {
         SetViMessage(VI_ERROR, _T("Cannot act on this selection: creation identity is unavailable"));
         return FALSE;
     }
-    if(ViewCount && ProcessList[SelectedProcessIndex].ID == DisplayedProcessID &&
+    if(ProcessList[SelectedProcessIndex].ID == DisplayedProcessID &&
        ProcessList[SelectedProcessIndex].CreationTime == DisplayedCreationTime) return TRUE;
     SetViMessage(VI_ERROR, _T("Process selection changed; review the refreshed row before acting"));
     return FALSE;
@@ -1921,8 +1963,8 @@ static wtop_ui_context_options CurrentUiContext(void)
     else if(Overlay == OVERLAY_RESULTS) Kind = WTOP_CONTEXT_RESULTS;
     wtop_ui_context_defaults(&Context, Kind);
     Context.readonly = ReadOnlyMode;
-    Context.has_selection = TaggedProcessListCount || ViewCount;
-    Context.identity_known = TaggedProcessListCount || (ViewCount && ProcessList[SelectedProcessIndex].CreationTime);
+    Context.has_selection = TaggedProcessListCount || HasSelection();
+    Context.identity_known = TaggedProcessListCount || (HasSelection() && SelectedIdentity.CreationTime);
     Context.kill_supported = Context.priority_supported = 1;
     Context.save_available = !ConfigStore.disabled && ConfigStore.write_path[0];
     Context.setup_tabs = Overlay == OVERLAY_SETUP && SetupPage == 3;
@@ -2110,6 +2152,8 @@ static void EditSetupTab(wtop_ui_action Action)
     else SetViMessage(VI_ERROR, _T("View unchanged: %hs"), Error ? Error : "operation unavailable");
 }
 
+static int HelpLineCount(void);
+
 static BOOL NavigateOverlay(wtop_ui_action Action)
 {
     if(Overlay != OVERLAY_HELP && Overlay != OVERLAY_RESULTS &&
@@ -2117,7 +2161,7 @@ static BOOL NavigateOverlay(wtop_ui_action Action)
     int *Position = Overlay == OVERLAY_SETUP ? &SetupIndex : Overlay == OVERLAY_SORT ? &SortChoice : &OverlayTop;
     int Maximum = Overlay == OVERLAY_SETUP ? SetupCount() - 1 :
         Overlay == OVERLAY_SORT ? WTOP_MAX_COLUMNS - 1 :
-        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 : 18;
+        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 : HelpLineCount() - 1;
     Maximum = max(0, Maximum);
     switch(Action) {
     case WTOP_UI_UP: --*Position; break;
@@ -2193,10 +2237,16 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
     case WTOP_UI_SEARCH_PREVIOUS: SearchPrevious(); break;
     case WTOP_UI_NEXT_TAB: ChangeTab(1); break;
     case WTOP_UI_PREVIOUS_TAB: ChangeTab(-1); break;
+    case WTOP_UI_PAUSE:
+        Paused = !Paused; InterlockedExchange(&CollectionPaused, Paused); break;
     case WTOP_UI_BAR: Settings.show_function_bar = !Settings.show_function_bar; MarkSettingsChanged(); break;
     case WTOP_UI_CANCEL:
         if(Overlay == OVERLAY_TAB_DELETE) { CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = 3; PendingDeleteTabId = 0; }
-        else if(!WasEditing) CloseOverlay();
+        else if(!WasEditing && Overlay != OVERLAY_NONE) CloseOverlay();
+        else if(!WasEditing && !EmacsPrefix) {
+            ClearSelection(); TaggedProcessListCount = 0;
+            SearchActive = FALSE; SearchPattern[0] = 0;
+        }
         ClearViMessage(); EmacsPrefix = FALSE; break;
     case WTOP_UI_SORT_CPU: ChangeProcessSortType(SORT_BY_PROCESSOR_TIME); break;
     case WTOP_UI_SORT_MEMORY: ChangeProcessSortType(SORT_BY_USED_MEMORY); break;
@@ -2269,7 +2319,7 @@ static void ToggleOrderedItem(int *Items, int *Count, int Selected, int Maximum,
 static int SetupCount(void)
 {
     switch(SetupPage) {
-    case 0: return 6;
+    case 0: return 12;
     case 1: return WTOP_HEADER_ROWS;
     case 2: return WTOP_MAX_COLUMNS;
     case 3: return Settings.tab_count;
@@ -2290,6 +2340,12 @@ static void SetupAdjust(int Direction, BOOL Activate)
             if(Direction > 0) Settings.interval_ms = min(60000, Settings.interval_ms + 100);
             else Settings.interval_ms = Settings.interval_ms > 150 ? Settings.interval_ms - 100 : 50;
             break;
+        case 6: Settings.footer_style = (wtop_footer_style)((Settings.footer_style + 3 + Direction) % 3); break;
+        case 7: Settings.status_position = (wtop_status_position)((Settings.status_position + 3 + Direction) % 3); break;
+        case 8: Settings.frame_interval_ms = (unsigned long)max(16, min(1000, (int)Settings.frame_interval_ms + 10 * Direction)); break;
+        case 9: Settings.meter_width = max(8, min(80, Settings.meter_width + Direction)); break;
+        case 10: Settings.meter_style = (wtop_meter_style)((Settings.meter_style + 3 + Direction) % 3); break;
+        case 11: Settings.character_set = (wtop_character_set)(1 - Settings.character_set); break;
         }
     } else if(SetupPage == 1 || SetupPage == 2) {
         int *Items = SetupPage == 1 ? Settings.header_rows : ActiveTab()->columns;
@@ -2378,7 +2434,12 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
         *Redraw = TRUE; return;
     }
     if(!Click || X < 0 || X >= Width || Y < 0 || Y >= Height) return;
-    if(Y == FunctionBarRow) { DispatchFunction(wtop_ui_bar_hit(Width, X), Redraw); return; }
+    if(Y == FunctionBarRow) {
+        for(int i = 0; i < 10; ++i) if(FooterWidths[i] && X >= FooterStarts[i] && X - FooterStarts[i] < FooterWidths[i]) {
+            DispatchFunction(i, Redraw); break;
+        }
+        return;
+    }
     if(Overlay == OVERLAY_SETUP && Y >= 3) {
         int Index = OverlayTop + Y - 3;
         if(Index < SetupCount() && Y < Height - 2) { SetupIndex = Index; SetupAdjust(1, TRUE); *Redraw = TRUE; }
@@ -2414,6 +2475,52 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
     }
 }
 
+/* UI-thread-only dispatch; native events and deterministic fixtures use the
+   same recovery path. This borrows the event only for the synchronous call. */
+static void HandleKeyEvent(KEY_EVENT_RECORD *Event, BOOL *Redraw)
+{
+    if(!Event->bKeyDown || ShouldStop()) return;
+    unsigned Modifiers = 0;
+    if(Event->dwControlKeyState & SHIFT_PRESSED) Modifiers |= WTOP_MOD_SHIFT;
+    if(Event->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) Modifiers |= WTOP_MOD_CTRL;
+    if(Event->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) Modifiers |= WTOP_MOD_ALT;
+    int Key = NativeKey(Event);
+    /* Processed console Ctrl-C uses CtrlHandler. Raw/remote/injected ETX
+       must also close from every editor, overlay, keymap and prefix state. */
+    if(wtop_ui_interrupt_key(Key, Modifiers)) {
+        DispatchAction(WTOP_UI_QUIT, Redraw); return;
+    }
+    if(Key == 27 || (InInputMode && (Modifiers & WTOP_MOD_CTRL) &&
+            (Key == 7 || Key == 'g' || Key == 'G'))) {
+        DispatchAction(WTOP_UI_CANCEL, Redraw); return;
+    }
+    if(Key >= WTOP_KEY_F1 && Key <= WTOP_KEY_F10) {
+        DispatchFunction(Key - WTOP_KEY_F1, Redraw); return;
+    }
+    if(InInputMode) {
+        if(Key == '\r') { AcceptEditor(); *Redraw = TRUE; return; }
+        ClearViMessage();
+        if(ViHandleInputKey(Event)) {
+            if(InInputMode && CurrentInputStr[0] == _T('\\')) SetPresentationFilter(CurrentInputStr + 1);
+            if(!InInputMode) { EditingFilter = FALSE; EditingTabId = 0; }
+            *Redraw = TRUE; RenderInvalidated = TRUE;
+        }
+        return;
+    }
+    if(Overlay != OVERLAY_NONE) { HandleOverlayKey(Key, Modifiers, Redraw); return; }
+    if(EmacsPrefix) {
+        EmacsPrefix = FALSE;
+        if((Modifiers & WTOP_MOD_CTRL) && (Key == 3 || Key == 'c' || Key == 'C')) DispatchAction(WTOP_UI_QUIT, Redraw);
+        else if((Modifiers & WTOP_MOD_CTRL) && (Key == 19 || Key == 's' || Key == 'S')) DispatchAction(WTOP_UI_SAVE, Redraw);
+        else { ClearViMessage(); *Redraw = TRUE; }
+        return;
+    }
+    wtop_ui_context_options Context = CurrentUiContext();
+    wtop_ui_action Action = wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers);
+    unsigned Repeats = (Action == WTOP_UI_UP || Action == WTOP_UI_DOWN || Action == WTOP_UI_PAGE_UP || Action == WTOP_UI_PAGE_DOWN) ? min(Event->wRepeatCount, 32) : 1;
+    for(unsigned Repeat = 0; Repeat < Repeats; ++Repeat) DispatchAction(Action, Redraw);
+}
+
 static void ProcessInput(BOOL *Redraw)
 {
     DWORD Available = 0, Count = 0;
@@ -2425,42 +2532,8 @@ static void ProcessInput(BOOL *Redraw)
     for(DWORD i = 0; i < Count && !ShouldStop(); ++i) {
         if(Records[i].EventType == WINDOW_BUFFER_SIZE_EVENT) { RenderInvalidated = TRUE; *Redraw = TRUE; continue; }
         if(Records[i].EventType == MOUSE_EVENT) { if(PollConsoleInfo()) *Redraw = TRUE; HandleMouse(&Records[i].Event.MouseEvent, Redraw); continue; }
-        if(Records[i].EventType != KEY_EVENT || !Records[i].Event.KeyEvent.bKeyDown) continue;
-        KEY_EVENT_RECORD *Event = &Records[i].Event.KeyEvent;
-        unsigned Modifiers = 0;
-        if(Event->dwControlKeyState & SHIFT_PRESSED) Modifiers |= WTOP_MOD_SHIFT;
-        if(Event->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) Modifiers |= WTOP_MOD_CTRL;
-        if(Event->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) Modifiers |= WTOP_MOD_ALT;
-        int Key = NativeKey(Event);
-        if(Key >= WTOP_KEY_F1 && Key <= WTOP_KEY_F10) {
-            DispatchFunction(Key - WTOP_KEY_F1, Redraw); continue;
-        }
-        if(InInputMode) {
-            if(Key == '\r') { AcceptEditor(); *Redraw = TRUE; continue; }
-            BOOL Cancel = Key == 27 || ((Modifiers & WTOP_MOD_CTRL) && (Key == 7 || Key == 'g' || Key == 'G'));
-            ClearViMessage();
-            if(ViHandleInputKey(Event)) {
-                if(EditingFilter && Cancel) {
-                    strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), EditingOriginalFilter);
-                    ConfigDirty = EditingWasDirty; ReadjustCursor();
-                } else if(InInputMode && CurrentInputStr[0] == _T('\\')) SetPresentationFilter(CurrentInputStr + 1);
-                if(!InInputMode) { EditingFilter = FALSE; EditingTabId = 0; }
-                *Redraw = TRUE; RenderInvalidated = TRUE;
-            }
-            continue;
-        }
-        if(Overlay != OVERLAY_NONE) { HandleOverlayKey(Key, Modifiers, Redraw); continue; }
-        if(EmacsPrefix) {
-            EmacsPrefix = FALSE;
-            if((Modifiers & WTOP_MOD_CTRL) && (Key == 3 || Key == 'c' || Key == 'C')) DispatchAction(WTOP_UI_QUIT, Redraw);
-            else if((Modifiers & WTOP_MOD_CTRL) && (Key == 19 || Key == 's' || Key == 'S')) DispatchAction(WTOP_UI_SAVE, Redraw);
-            else { ClearViMessage(); *Redraw = TRUE; }
-            continue;
-        }
-        wtop_ui_context_options Context = CurrentUiContext();
-        wtop_ui_action Action = wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers);
-        unsigned Repeats = (Action == WTOP_UI_UP || Action == WTOP_UI_DOWN || Action == WTOP_UI_PAGE_UP || Action == WTOP_UI_PAGE_DOWN) ? min(Event->wRepeatCount, 32) : 1;
-        for(unsigned Repeat = 0; Repeat < Repeats; ++Repeat) DispatchAction(Action, Redraw);
+        if(Records[i].EventType == KEY_EVENT)
+            HandleKeyEvent(&Records[i].Event.KeyEvent, Redraw);
     }
 }
 
@@ -2699,7 +2772,7 @@ static int WriteSnapshot(FILE *Output, const wtop_options *Options)
             JsonMetricDouble(Output, "cpu_percent", FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now), Process->PercentProcessorTime, "percent");
             JsonMetricInteger(Output, "working_set_bytes", FreshMetricState(Process->MemoryState, Process->ObservedTick, Now), Process->UsedMemory, "bytes");
             JsonMetricDouble(Output, "io_read_write_bytes_per_second", FreshMetricState(Process->IoState, Process->ObservedTick, Now), Process->DiskUsage, "bytes/second");
-            JsonMetricInteger(Output, "age_ms", FreshMetricState(Process->AgeState, Process->CpuObservedTick, Now), Process->UpTime, "milliseconds");
+            JsonMetricInteger(Output, "age_ms", FreshMetricState(Process->AgeState, Process->ObservedTick, Now), Process->UpTime, "milliseconds");
             fputc('}', Output);
         }
         fputs("],\"providers\":{", Output);
@@ -2721,7 +2794,7 @@ static int WriteSnapshot(FILE *Output, const wtop_options *Options)
             metric_state Cpu = FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now);
             metric_state Memory = FreshMetricState(Process->MemoryState, Process->ObservedTick, Now);
             metric_state Io = FreshMetricState(Process->IoState, Process->ObservedTick, Now);
-            metric_state ProcessAge = FreshMetricState(Process->AgeState, Process->CpuObservedTick, Now);
+            metric_state ProcessAge = FreshMetricState(Process->AgeState, Process->ObservedTick, Now);
             char Name[1024], Owner[1024];
             NativeAscii(Process->ExeName, Name, sizeof(Name));
             NativeAscii(Process->UserName, Owner, sizeof(Owner));
@@ -2794,18 +2867,18 @@ static int RunLog(const wtop_options *Options)
 
 static void ClearRow(int Row)
 {
-    COORD Position = { (SHORT)ConsoleOriginX, (SHORT)(Row + ConsoleOriginY) };
-    DWORD Written;
-    FillConsoleOutputCharacter(ConsoleHandle, _T(' '), (DWORD)Width, Position, &Written);
-    FillConsoleOutputAttribute(ConsoleHandle, (WORD)Settings.colors[WTOP_COLOR_BG], (DWORD)Width, Position, &Written);
+    wtop_frame_fill(&Screen.cells, 0, Row, Width, ' ', (WORD)Settings.colors[WTOP_COLOR_BG]);
     SetConCursorPos(0, (SHORT)Row);
     SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
 }
 
 static void DrawFunctionBar(void)
 {
+    memset(FooterWidths, 0, sizeof(FooterWidths));
     if(FunctionBarRow < 0) return;
-    ClearRow(FunctionBarRow);
+    BOOL SharedEditor = InInputMode && FunctionBarRow == StatusRow;
+    if(!SharedEditor) ClearRow(FunctionBarRow);
+    int CompactStart = 0;
     wtop_ui_context_options Context = CurrentUiContext();
     for(int i = 0; i < 10; ++i) {
         wtop_ui_binding Binding;
@@ -2813,6 +2886,21 @@ static void DrawFunctionBar(void)
         if(Binding.action == WTOP_UI_NONE) continue;
         int Start, Length;
         wtop_ui_bar_span(Width, i, &Start, &Length);
+        if(Settings.footer_style == WTOP_FOOTER_COMPACT) {
+            Start = CompactStart;
+            Length = min((i == 9 ? 3 : 2) + (int)strlen(Binding.label) + 1, Width - Start);
+            CompactStart += max(0, Length);
+        }
+        if(SharedEditor) {
+            static const int Indices[] = { 0, 1, 3, 8, 9 };
+            int Slot = -1;
+            for(int j = 0; j < 5; ++j) if(Indices[j] == i) Slot = j;
+            if(Slot < 0) continue;
+            int Available = Width / 2;
+            Start = Width - Available + (Available * Slot) / 5;
+            Length = Width - Available + (Available * (Slot + 1)) / 5 - Start;
+        }
+        FooterStarts[i] = Start; FooterWidths[i] = Length;
         if(!Length) continue;
         SetConCursorPos((SHORT)Start, (SHORT)FunctionBarRow);
         SetColor((WORD)(Binding.enabled ? Settings.colors[WTOP_COLOR_FUNCTION_KEY] : FOREGROUND_INTENSITY));
@@ -2833,13 +2921,16 @@ static const TCHAR *HelpLines[] = {
     _T("F1 Help   F2 Setup   F3 Search   F4 Filter   F5 Tree"),
     _T("F6 Sort   F7 Prio+   F8 Prio-   F9 Kill    F10 Quit"),
     _T("Arrows/PgUp/PgDn/Home/End navigate. Tab/Shift+Tab changes views."),
+    _T("Start with no process selected. Navigate, click or search to select one."),
     _T("Space tags a lifetime-identified process; U clears tags; F follows."),
-    _T("I reverses sort; P sorts CPU; M sorts memory; B hides/shows the bar."),
+    _T("Z pauses/resumes; I reverses sort; P sorts CPU; M sorts memory; B hides/shows the bar."),
     _T("htop: k opens Kill; N sorts PID; h/? helps; S/C opens Setup."),
     _T("vi: j/k move, g/G top/bottom, n/N search next/previous, K Kill."),
     _T("Emacs: C-n/C-p move, C-v/M-v page, M-</M-> top/bottom."),
     _T("Emacs: C-s search, C-r previous match, C-g cancel, M-x commands."),
-    _T("Emacs: C-x C-s saves. F10/q/Ctrl+C quit in every keymap."),
+    _T("Emacs: C-x C-s saves. F10/Ctrl+C quit from every view and editor."),
+    _T("Esc cancels the current editor/dialog; on the main view it clears selection/tags/follow."),
+    _T("q quits outside text editors. No selection or process target is saved."),
     _T("/: search, \\: live name filter, : commands. Enter accepts, Esc closes."),
     _T("Editor: Left/Right/Home/End; C-a/C-e, C-u clear, C-w word erase."),
     _T("Mouse: click a row/header/tab/button; wheel scrolls. Keyboard always works."),
@@ -2851,6 +2942,8 @@ static const TCHAR *HelpLines[] = {
     _T("Config file: custom tab names/count/filter, columns, meters and all colors.")
 };
 
+static int HelpLineCount(void) { return (int)_countof(HelpLines); }
+
 static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
 {
     if(SetupPage == 0) {
@@ -2861,6 +2954,12 @@ static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
         case 3: _stprintf_s(Text, Capacity, _T("[%c] Last-row function bar"), Settings.show_function_bar ? 'x' : ' '); break;
         case 4: _stprintf_s(Text, Capacity, _T("[%c] Tab strip"), Settings.show_tabs ? 'x' : ' '); break;
         case 5: _stprintf_s(Text, Capacity, _T("Sample interval: %lu ms (+/- 100 ms)"), Settings.interval_ms); break;
+        case 6: _stprintf_s(Text, Capacity, _T("Footer style: %hs"), wtop_footer_style_name(Settings.footer_style)); break;
+        case 7: _stprintf_s(Text, Capacity, _T("Live status: %hs (bottom explicitly adds a row)"), wtop_status_position_name(Settings.status_position)); break;
+        case 8: _stprintf_s(Text, Capacity, _T("Paint interval: %lu ms; input remains immediate"), Settings.frame_interval_ms); break;
+        case 9: _stprintf_s(Text, Capacity, _T("Meter width: %d cells"), Settings.meter_width); break;
+        case 10: _stprintf_s(Text, Capacity, _T("Meter style: %hs"), wtop_meter_style_name(Settings.meter_style)); break;
+        case 11: _stprintf_s(Text, Capacity, _T("Character set: %hs (complex glyphs retain safe fallback)"), wtop_character_set_name(Settings.character_set)); break;
         }
     } else if(SetupPage == 1 || SetupPage == 2) {
         int Items[WTOP_MAX_COLUMNS];
@@ -2878,12 +2977,13 @@ static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
 
 static void DrawEditorStatus(void)
 {
-    if(ViMessageActive() && CurrentViMessageType == VI_ERROR && StatusRow > 0) {
-        ClearRow(StatusRow - 1);
+    int EditorWidth = FunctionBarRow == StatusRow ? Width - Width / 2 : Width;
+    int Prefix = 0;
+    if(ViMessageActive() && CurrentViMessageType == VI_ERROR) {
         SetColor((WORD)Settings.colors[WTOP_COLOR_ERROR]);
-        ConPrintf(_T("%s"), ViMessage);
-        SetConCursorPos(0, (SHORT)StatusRow);
+        Prefix = ConPrintf(_T("%.*s | "), max(0, min(22, EditorWidth / 2)), ViMessage);
     }
+    EditorWidth = max(1, EditorWidth - Prefix);
     unsigned long Cursor = ViInputCursor();
     unsigned long CursorCells = 0;
     for(unsigned long i = 0; i < Cursor && CurrentInputStr[i]; ++i) {
@@ -2896,17 +2996,15 @@ static void DrawEditorStatus(void)
     char Text[DEFAULT_STR_SIZE];
     size_t Cells = NativeAscii(CurrentInputStr, Text, sizeof(Text));
     if(CursorCells > Cells) CursorCells = (unsigned long)Cells;
-    unsigned long Start = CursorCells >= (unsigned long)Width ? CursorCells - (unsigned long)Width + 1 : 0;
+    unsigned long Start = CursorCells >= (unsigned long)EditorWidth ? CursorCells - (unsigned long)EditorWidth + 1 : 0;
     SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
-    ConPrintf(_T("%hs"), Text + Start);
-    COORD Caret = { (SHORT)(ConsoleOriginX + CursorCells - Start), (SHORT)(ConsoleOriginY + StatusRow) };
-    DWORD Painted;
-    FillConsoleOutputAttribute(ConsoleHandle, (WORD)Settings.colors[WTOP_COLOR_BG_HIGHLIGHT], 1, Caret, &Painted);
+    ConPrintf(_T("%.*hs"), EditorWidth, Text + Start);
+    wtop_frame_attribute(&Screen.cells, Prefix + (int)(CursorCells - Start), StatusRow,
+        (WORD)Settings.colors[WTOP_COLOR_BG_HIGHLIGHT]);
 }
 
 static void DrawOverlay(void)
 {
-    for(int Row = 0; Row < Height; ++Row) ClearRow(Row);
     SetConCursorPos(0, 0);
     SetColor((WORD)Settings.colors[WTOP_COLOR_HEADER]);
     const TCHAR *Title = Overlay == OVERLAY_HELP ? _T("Help") : Overlay == OVERLAY_SETUP ? _T("Setup") : Overlay == OVERLAY_SORT ? _T("Sort") : Overlay == OVERLAY_RESULTS ? _T("Actions") : Overlay == OVERLAY_TAB_DELETE ? _T("Delete view") : _T("Terminate");
@@ -2960,7 +3058,13 @@ static void DrawOverlay(void)
             DrawPaddedText(Text, Width);
         }
     }
-    StatusRow = Height - (Settings.show_function_bar ? 2 : 1);
+    StatusRow = Chrome.prompt >= 0 ? Chrome.prompt : Chrome.status;
+    /* Row 2 is reserved between the overlay description and its content.
+       The configured banner remains live in overlays, including confirmations:
+       sample age/counts must not freeze while the captured target is retained.
+       The status formatter gives diagnostics priority over ordinary telemetry. */
+    if(StatusRow < 0 && (Chrome.banner_status || ViMessageActive())) { ClearRow(2); WriteStatusAt(2, 0); }
+    else if(StatusRow < 0 && (DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID))) { SetConCursorPos(0, 2); ConPrintf(_T("glyph substitution; raw text preserved")); }
     if(StatusRow >= 0) { ClearRow(StatusRow); if(InInputMode) DrawEditorStatus(); else WriteVi(); }
     DrawFunctionBar();
     RenderedRowCount = 0;
@@ -3029,22 +3133,39 @@ static int DrawCoreRows(int Row)
     return Row;
 }
 
-static void DrawFrame(void)
+static void ComposeFrame(void)
 {
     DisplayTextFlags = 0;
-    FunctionBarRow = Settings.show_function_bar ? Height - 1 : -1;
+    memset(FooterWidths, 0, sizeof(FooterWidths));
+    BOOL MessageActive = ViMessageActive();
+    BOOL HasFunctionBar = Settings.show_function_bar && Settings.footer_style != WTOP_FOOTER_STATUS;
+    /* Only a text editor shares/replaces visible controls. A non-editor
+       diagnostic uses the existing status/banner area (or reserved overlay
+       row), so a persistent error never removes the configured function bar.
+       Hidden/status-only bars still expose their sole transient prompt row. */
+    wtop_ui_chrome_layout(Height, Settings.show_function_bar, Settings.footer_style,
+        Settings.status_position, InInputMode || (MessageActive && !HasFunctionBar), &Chrome);
+    if(MessageActive && !InInputMode && HasFunctionBar && Settings.status_position != WTOP_STATUS_BOTTOM)
+        Chrome.banner_status = TRUE;
+    FunctionBarRow = Chrome.footer;
+    StatusRow = Chrome.prompt >= 0 ? Chrome.prompt : Chrome.status;
+    if(InInputMode && Settings.show_function_bar && Settings.footer_style != WTOP_FOOTER_STATUS)
+        FunctionBarRow = StatusRow;
     if(Width < 40 || Height < 10) {
         ClearRow(0); ConPrintf(_T("Resize to at least 40x10; F10 quits."));
+        if(MessageActive && Height > 1) { ClearRow(1); WriteStatusAt(1, 0); }
         VisibleProcessCount = RenderedRowCount = 0;
         DisplayedProcessID = 0; DisplayedCreationTime = 0;
         RenderInvalidated = TRUE; return;
     }
     if(Overlay != OVERLAY_NONE) { DrawOverlay(); return; }
-    for(int Row = 0; Row < Height; ++Row) ClearRow(Row);
     ReadjustCursor();
     int Row = 0;
-    int HeaderLimit = min(Settings.header_count, Height - 5);
+    int HeaderLimit = min(Settings.header_count, max(0, Chrome.content_end - 3));
     for(int i = 0; i < HeaderLimit; ++i) DrawHeaderRow(Row++, Settings.header_rows[i]);
+    int BannerRow = -1;
+    for(int i = 0; i < HeaderLimit; ++i) if(Settings.header_rows[i] == WTOP_ROW_TITLE) BannerRow = i;
+    if(Chrome.banner_status && BannerRow < 0 && Row < Chrome.content_end - 2) BannerRow = Row++;
     Row = DrawCoreRows(Row);
     TabsRow = -1;
     memset(RenderedTabWidth, 0, sizeof(RenderedTabWidth));
@@ -3063,13 +3184,13 @@ static void DrawFrame(void)
     ProcessHeaderRow = Row++;
     ClearRow(ProcessHeaderRow); DrawProcessListHeader();
     ProcessWindowPosY = Row;
-    StatusRow = Height - (Settings.show_function_bar ? 2 : 1);
-    int EndRow = StatusRow >= 0 ? StatusRow : Settings.show_function_bar ? Height - 1 : Height;
+    StatusRow = Chrome.prompt >= 0 ? Chrome.prompt : Chrome.status;
+    int EndRow = Chrome.content_end;
     VisibleProcessCount = (DWORD)max(0, EndRow - ProcessWindowPosY);
     ProcessWindowHeight = VisibleProcessCount;
     ReadjustCursor();
-    DisplayedProcessID = ViewCount ? ProcessList[SelectedProcessIndex].ID : 0;
-    DisplayedCreationTime = ViewCount ? ProcessList[SelectedProcessIndex].CreationTime : 0;
+    DisplayedProcessID = HasSelection() ? SelectedIdentity.ID : 0;
+    DisplayedCreationTime = HasSelection() ? SelectedIdentity.CreationTime : 0;
     if(VisibleProcessCount > RenderedRowCapacity) {
         process_identity *Larger = realloc(RenderedRows, (size_t)VisibleProcessCount * sizeof(*Larger));
         if(!Larger) { CollectorError = ERROR_NOT_ENOUGH_MEMORY; RequestShutdown(); return; }
@@ -3081,9 +3202,15 @@ static void DrawFrame(void)
         if(Index >= ViewCount) break;
         const process *Process = &ProcessList[ViewIndices[Index]];
         SetConCursorPos(0, (SHORT)(ProcessWindowPosY + (int)i));
-        WriteProcessInfo(Process, Index == SelectedViewIndex);
+        WriteProcessInfo(Process, HasSelection() && Index == SelectedViewIndex);
         RenderedRows[RenderedRowCount].ID = Process->ID;
         RenderedRows[RenderedRowCount++].CreationTime = Process->CreationTime;
+    }
+    if(Chrome.banner_status && BannerRow >= 0) {
+        ClearRow(BannerRow);
+        SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
+        ConPrintf(_T("Wtop %hs%hs | "), WTOP_VERSION_STRING, Paused ? " PAUSED" : "");
+        WriteStatusAt(BannerRow, RenderColumn);
     }
     if(StatusRow >= 0) {
         ClearRow(StatusRow);
@@ -3092,6 +3219,22 @@ static void DrawFrame(void)
     }
     DrawFunctionBar();
     RenderInvalidated = FALSE;
+}
+
+static void DrawFrame(void)
+{
+    if(!wtop_console_frame_begin(&Screen, ConsoleHandle, Width, Height,
+        ConsoleOriginX, ConsoleOriginY, (WORD)Settings.colors[WTOP_COLOR_BG])) {
+        CollectorError = Screen.error; RequestShutdown(); return;
+    }
+    RenderRow = RenderColumn = 0;
+    CurrentColor = (WORD)Settings.colors[WTOP_COLOR_FG];
+    ComposeFrame();
+    int Result = wtop_console_frame_present(&Screen);
+    if(Result < 0) {
+        RenderInvalidated = TRUE;
+        if(Screen.error != ERROR_RETRY) { CollectorError = Screen.error; RequestShutdown(); }
+    } else if(Width >= 40 && Height >= 10) RenderInvalidated = FALSE;
 }
 
 int _tmain(int argc, TCHAR *argv[])
@@ -3163,6 +3306,10 @@ int _tmain(int argc, TCHAR *argv[])
     if(!ShutdownEvent || !CleanupDoneEvent) { Result = 1; goto Cleanup; }
     if(!SetConsoleCtrlHandler(CtrlHandler, TRUE)) { Result = 1; goto Cleanup; }
     HandlerRegistered = TRUE;
+    /* Ignore-Ctrl-C is inherited independently of registered handlers. Opt
+       this monitor back in even when launched from an ignoring parent or a
+       CREATE_NEW_PROCESS_GROUP; this does not alter the parent's policy. */
+    if(!SetConsoleCtrlHandler(NULL, FALSE)) { Result = 1; goto Cleanup; }
     ProcessList = calloc(ProcessListSize, sizeof(*ProcessList));
     TaggedProcessList = calloc(TaggedProcessListSize, sizeof(*TaggedProcessList));
     ViMessage = calloc(DEFAULT_STR_SIZE, sizeof(*ViMessage));
@@ -3217,26 +3364,30 @@ int _tmain(int argc, TCHAR *argv[])
     InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
     ProcessListThread = CreateThread(NULL, 0, PollProcessListThreadProc, NULL, 0, NULL);
     if(!ProcessListThread) { Result = 1; goto Cleanup; }
-    ULONGLONG LastDraw = 0;
+    ULONGLONG LastDraw = 0, LastSystemPoll = 0, LastAgeDraw = 0;
     BOOL Redraw = TRUE;
     while(!ShouldStop()) {
-        /* Consume input against the last displayed model. Adopting a sample
-           first invalidates that frame and can silently discard an otherwise
-           valid function-bar click. Geometry changes still invalidate hits;
-           native actions independently revalidate their captured lifetimes.
-           Publish the next front only after input, then paint it this turn. */
+        /* Consume input against the last displayed model. Sample adoption is
+           deferred until a frame can be presented below; adopting while the
+           cadence blocks painting leaves RenderInvalidated set and drops the
+           next click against the still-visible screen. The collector's bounded
+           pending slot continues to coalesce samples during that short wait. */
         if(PollConsoleInfo()) Redraw = TRUE;
-        ProcessInput(&Redraw);
+        BOOL InputRedraw = FALSE;
+        ProcessInput(&InputRedraw);
+        if(InputRedraw) Redraw = TRUE;
         InterlockedExchange(&CollectorInterval, (LONG)Settings.interval_ms);
         if(ShouldStop()) break;
-        if(AdoptPendingSample()) Redraw = TRUE;
-        if(AdoptPendingCore()) Redraw = TRUE;
         ULONGLONG Now = GetTickCount64();
-        if(Redraw || RedrawAtCursor || Now - LastDraw >= Settings.interval_ms) {
-            PollSystemInfo();
-            DrawFrame();
-            LastDraw = Now;
-            Redraw = RedrawAtCursor = FALSE;
+        BOOL FrameDue = InputRedraw || Now - LastDraw >= Settings.frame_interval_ms;
+        if(AdoptFrameSamples(FrameDue)) Redraw = TRUE;
+        if(!Paused && Now - LastSystemPoll >= Settings.interval_ms) {
+            PollSystemInfo(); LastSystemPoll = Now; Redraw = TRUE;
+        }
+        if(Now - LastAgeDraw >= 1000) { Redraw = TRUE; LastAgeDraw = Now; }
+        if((Redraw || RedrawAtCursor || RenderInvalidated) &&
+           FrameDue) {
+            DrawFrame(); LastDraw = Now; Redraw = RedrawAtCursor = FALSE;
         }
         WaitForSingleObject(ShutdownEvent, INPUT_LOOP_DELAY);
     }
@@ -3279,6 +3430,7 @@ Cleanup:
     if(!wtop_provider_session_close(&InspectionProvider, 1000)) Result = EXIT_FORCED_SHUTDOWN;
     free(CommandObservation); CommandObservation = NULL;
     free(ServicesObservation); ServicesObservation = NULL;
+    wtop_console_frame_dispose(&Screen);
     ViDestroy();
     free(ViMessage); ViMessage = NULL;
     FreePendingSample(PendingSample); PendingSample = NULL;

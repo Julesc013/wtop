@@ -4,7 +4,8 @@
 Uses the caller's GitHub CLI authentication. Never requests broader permissions,
 changes repository policy, overwrites assets or publishes from a normal source
 edit. Only the dedicated workflow may stage on master; public promotion requires
-an explicit invocation and an actual exact-payload desktop review asset.
+an explicit invocation and the recorded channel's exact-payload gates. Alpha and
+beta human review is optional; this tool cannot publish a stable release.
 """
 from __future__ import annotations
 import argparse
@@ -16,7 +17,9 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-from beta_release import BetaError, VERSION, checked_file, load_json, public_blockers, sha256, verify
+from beta_release import BetaError, checked_file, load_json, public_blockers, sha256
+from release_bundle import verify
+from release_metadata import SEMVER, asset_label, metadata
 
 REPOSITORY='Julesc013/wtop'
 
@@ -43,6 +46,26 @@ def release_for(tag):
 def asset_inventory(directory, manifest):
     return sorted([x['name'] for x in manifest['assets']]+['beta-manifest.json','SHA256SUMS'])
 
+def asset_display_name(name, manifest):
+    version=manifest['version']
+    for entry in manifest.get('profiles',[]):
+        profile=entry['payload']['profile'];stem=f'wtop-{version}-{profile}'
+        if name==stem+'.exe':return asset_label(version,profile,'Executable')
+        if name==stem+'-portable.zip':return asset_label(version,profile,'Portable ZIP')
+    return name
+
+def tag_revision(tag):
+    refs=api(f'repos/{REPOSITORY}/git/matching-refs/tags/{tag}')
+    matches=[item for item in refs if item.get('ref')=='refs/tags/'+tag]
+    if not matches:return None
+    if len(matches)!=1:raise BetaError('ambiguous tag reference')
+    value=matches[0]['object']
+    for _ in range(4):
+        if value['type']=='commit':return value['sha']
+        if value['type']!='tag':raise BetaError('release tag does not identify a commit')
+        value=api(f'repos/{REPOSITORY}/git/tags/{value["sha"]}')['object']
+    raise BetaError('tag nesting exceeds explicit bound')
+
 def existing_draft(release, manifest):
     if release.get('draft') is not True or release.get('prerelease') is not True:
         raise BetaError('existing non-draft or non-prerelease version is immutable to this tool')
@@ -67,11 +90,14 @@ def stage(directory):
     manifest=verify(directory);tag=manifest['tag'];revision=manifest['payload']['source']['revision']
     head=api(f'repos/{REPOSITORY}/git/ref/heads/master')['object']['sha']
     if head!=revision:raise BetaError('master moved since candidate build; staging requires an exact master snapshot')
+    existing_tag=tag_revision(tag)
+    if existing_tag is not None and existing_tag!=revision:
+        raise BetaError('existing tag identifies different bytes; tags are never moved')
     release=release_for(tag)
     if release is None:
         notes=checked_file(directory/'RELEASE-NOTES.md',1024*1024).decode('utf-8')
         release=api(f'repos/{REPOSITORY}/releases','POST',
-                    {'tag_name':tag,'target_commitish':revision,'name':'Wtop '+manifest['version'],
+                    {'tag_name':tag,'target_commitish':revision,'name':metadata(manifest['version'])['title'],
                      'body':notes,'draft':True,'prerelease':True,'make_latest':'false'})
     existing_draft(release,manifest)
     expected=asset_inventory(directory,manifest)
@@ -87,7 +113,7 @@ def stage(directory):
                 if checked_file(Path(temporary)/name)!=checked_file(directory/name):
                     raise BetaError('draft bytes differ: '+name+'; no replacement under the same version')
     missing=[name for name in expected if name not in names]
-    if missing:gh('release','upload',tag,*[str(directory/name) for name in missing],'--repo',REPOSITORY)
+    if missing:gh('release','upload',tag,*[str(directory/name)+'#'+asset_display_name(name,manifest) for name in missing],'--repo',REPOSITORY)
     with tempfile.TemporaryDirectory(prefix='wtop-draft-acquire-') as temporary:
         download(tag,Path(temporary),expected)
         acquired=verify(Path(temporary))
@@ -95,10 +121,13 @@ def stage(directory):
     # Staging deliberately succeeds with missing public gates, and reports them.
     blockers=public_blockers(manifest,None,api(f'repos/{REPOSITORY}'))
     print(json.dumps({'state':'draft','url':release['html_url'],'version':manifest['version'],
-                      'source':revision,'public_eligible':False,'public_blockers':blockers},indent=2))
+                      'source':revision,'public_eligible':not blockers,'publication_requested':False,
+                      'public_blockers':blockers},indent=2))
 
 def publish(tag):
-    if not tag.startswith('v') or not VERSION.fullmatch(tag[1:]):raise BetaError('invalid beta tag')
+    if (not tag.startswith('v') or not SEMVER.fullmatch(tag[1:])
+            or metadata(tag[1:])['channel'] not in ('alpha','beta')):
+        raise BetaError('only explicit alpha/beta tags are accepted; stable requires its own human-reviewed release path')
     release=release_for(tag)
     if release is None:raise BetaError('no staged draft exists')
     with tempfile.TemporaryDirectory(prefix='wtop-promotion-') as temporary:
@@ -107,24 +136,31 @@ def publish(tag):
         manifest=verify(directory);existing_draft(release,manifest)
         source=manifest['payload']['source']['revision']
         subprocess.run(['git','merge-base','--is-ancestor',source,'HEAD'],check=True,capture_output=True)
-        expected=set(asset_inventory(directory,manifest))|{'desktop-receipt.json'}
+        expected=set(asset_inventory(directory,manifest))
+        if manifest.get('schema')=='wtop.beta/1' or (directory/'desktop-receipt.json').exists():
+            expected.add('desktop-receipt.json')
         assets=assets_for(release)
         if len(assets)!=len(expected) or {x['name'] for x in assets}!=expected:
-            raise BetaError('publication requires exact asset set including desktop-receipt.json')
+            raise BetaError('publication requires the exact asset set and channel-specific evidence')
         desktop=load_json(directory/'desktop-receipt.json') if (directory/'desktop-receipt.json').exists() else None
         blockers=public_blockers(manifest,desktop,api(f'repos/{REPOSITORY}'))
         if blockers:raise BetaError('public promotion blocked: '+', '.join(blockers))
-        # No rebuilding or resigning after the human receipt. Recheck the draft
+        # No rebuilding or resigning after the native/human receipts. Recheck the draft
         # immediately before changing visibility; this is a permission boundary,
         # not protection against a malicious repository administrator.
         current=api(f'repos/{REPOSITORY}/releases/{release["id"]}')
         existing_draft(current,manifest)
         if {(a['id'],a['name'],a.get('digest'),a['size']) for a in assets} != {(a['id'],a['name'],a.get('digest'),a['size']) for a in assets_for(current)}:
             raise BetaError('release assets changed during qualification')
+        current_tag=tag_revision(tag)
+        if current_tag is not None and current_tag!=source:
+            raise BetaError('release tag changed since staging; no public mutation is permitted')
         result=api(f'repos/{REPOSITORY}/releases/{release["id"]}','PATCH',
                    {'draft':False,'prerelease':True,'make_latest':'false'})
         if result.get('draft') is not False or result.get('prerelease') is not True:
             raise BetaError('GitHub did not confirm prerelease publication')
+        if tag_revision(tag)!=source:
+            raise BetaError('PUBLISHED RELEASE INCIDENT: tag does not resolve to the checked source; do not move the tag or replace assets, investigate and use a new version')
         # Fetch unauthenticated public download URLs, then independently recheck.
         public=assets_for(result)
         with tempfile.TemporaryDirectory(prefix='wtop-public-acquire-') as acquired:

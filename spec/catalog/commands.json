@@ -580,6 +580,62 @@
         "WT-AC-030-01"
       ],
       "evidence": []
+    },
+    {
+      "id": "WT-CMD-FOOTER",
+      "tokens": [
+        "--footer"
+      ],
+      "mode": "modifier",
+      "arguments": "functions|compact|status|hidden",
+      "status": "candidate",
+      "behavior": "Select a single footer; default functions. Prompts share its reserved row. Hiding recovers the row.",
+      "acceptance": [
+        "WT-AC-031-05"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-STATUS-POSITION",
+      "tokens": [
+        "--status-position"
+      ],
+      "mode": "modifier",
+      "arguments": "banner|bottom|hidden",
+      "status": "candidate",
+      "behavior": "Default banner telemetry; bottom explicitly requests another reserved row.",
+      "acceptance": [
+        "WT-AC-031-05"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-CHARACTER-SET",
+      "tokens": [
+        "--character-set"
+      ],
+      "mode": "modifier",
+      "arguments": "ascii|unicode",
+      "status": "candidate",
+      "behavior": "Single-cell native character repertoire; complex/wide glyphs retain explicit fallback and raw text.",
+      "acceptance": [
+        "WT-AC-031-05"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-FRAME-INTERVAL",
+      "tokens": [
+        "--frame-interval"
+      ],
+      "mode": "modifier",
+      "arguments": "integer milliseconds 16..1000",
+      "status": "candidate",
+      "behavior": "Maximum ordinary paint cadence, independent of collection interval; input redraws remain immediate.",
+      "acceptance": [
+        "WT-AC-031-05"
+      ],
+      "evidence": []
     }
   ]
 }

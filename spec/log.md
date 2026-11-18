@@ -3,6 +3,24 @@
 
 ## 2026-11-18
 
+### Beta 2 interaction and delivery revision
+
+- Preserved Beta 1 and the original eight implementation streams. Added composed
+  changed-cell rendering, explicit pause, independent paint/sample intervals,
+  conservative Unicode and one default footer with opt-in second status row.
+- Required empty startup selection, lifetime-bound selection retirement, contextual
+  Escape and Ctrl+C in every input context. Saved preferences never restore a
+  process action target. Retained action results are not an undo mechanism.
+- Added real viewport/attribute regressions, native input identity fixtures and an
+  ARM64 execution lane. A configured lane is not a passing receipt.
+- Applied the supplied Beta 2 plan's channel policy: automatic alpha/beta gates,
+  stable human desktop approval retained, draft-only staging for this task.
+  Added one bounded numeric-version ledger and profile-specific release receipts.
+- Historical support, MSI lifecycle, community package acceptance, human visual
+  review and broad formal acceptance remain separately qualified. No completed
+  work or native pass is inferred from this specification edit.
+
+
 ### Public beta six-patch checkpoint
 
 - Defined an explicit x64 portable 0.4.0-beta.1 subset and four additional release

@@ -137,10 +137,15 @@ class Console:
             "WriteConsoleInputW": ([W.HANDLE, C.POINTER(InputRecord), W.DWORD,
                                      C.POINTER(W.DWORD)], W.BOOL),
             "FlushConsoleInputBuffer": ([W.HANDLE], W.BOOL),
+            "SetConsoleCtrlHandler": ([C.c_void_p, W.BOOL], W.BOOL),
+            "GenerateConsoleCtrlEvent": ([W.DWORD, W.DWORD], W.BOOL),
         }
         for name, (args, result) in declarations.items():
             fn = getattr(self.k, name)
             fn.argtypes, fn.restype = args, result
+        # This helper owns the private test console. Its sleeper fixtures inherit
+        # ignore-Ctrl-C; Wtop must explicitly opt itself back in on startup.
+        self.check(self.k.SetConsoleCtrlHandler(None, True))
         self.input = self.open("CONIN$")
         self.original_output = self.open("CONOUT$")
         self.original_mode = self.mode()
@@ -320,7 +325,10 @@ class Console:
             try:
                 self.k.CloseHandle(self.input)
             finally:
-                self.k.CloseHandle(self.original_output)
+                try:
+                    self.k.CloseHandle(self.original_output)
+                finally:
+                    self.check(self.k.SetConsoleCtrlHandler(None, False))
 
 
 def text_contains(frame, text):
@@ -340,7 +348,7 @@ def is_main(frame):
 
 
 def editor_contains(frame, text):
-    return any(row.lstrip().startswith(text) for row in frame["rows"][-3:])
+    return any(text in row for row in frame["rows"][-3:])
 
 
 def tab_position(frame, name):
@@ -368,9 +376,14 @@ def visible_pids(frame, pids, selected_only=False):
 
 
 def function_slot(frame, number):
-    start = frame["width"] * (number - 1) // 10
-    end = frame["width"] * number // 10
-    return start, end, frame["rows"][-1][start:end], frame["attributes"][-1][start:end]
+    row = frame["rows"][-1]
+    matches = list(re.finditer(r"F(10|[1-9])(?=[A-Za-z?+\\-])", row))
+    for index, match in enumerate(matches):
+        if int(match.group(1)) == number:
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else frame["width"]
+            return start, end, row[start:end], frame["attributes"][-1][start:end]
+    return 0, 0, "", []
 
 
 def assert_function(frame, number, label, enabled=True):
@@ -447,7 +460,9 @@ def new_config(exe, path):
 def sampling_click_contract(console, exe, directory, pids, observations):
     config = directory / "sampling-clicks.conf"
     new_config(exe, config)
-    console.start(exe, config, pids, "--status-bar", interval=50)
+    # A slower frame cadence than sampling makes the previously unpainted
+    # adoption window deterministic; clicks are still injected exactly once.
+    console.start(exe, config, pids, "--status-bar", "--frame-interval", "200", interval=50)
     console.wait(lambda f: is_main(f) and has_bar(f), "50 ms sampling function bar")
     # A pending collector publication used to invalidate the visible frame
     # before input, silently dropping valid mouse presses. Every iteration
@@ -512,8 +527,8 @@ def setup_contract(console, exe, directory, pids, observations):
     bounded_ascii_frame(frame)
     click_function(console, 9, "Apply")
     frame = console.wait(lambda f: shown_name in setup_rows(f) and function_ready(f, 9, "Save")
-                         and text_contains(f, "ASCII substitution"), "renamed view remains in Setup")
-    assert text_contains(frame, "ASCII substitution"), "lossy display was not disclosed"
+                         and text_contains(f, "glyph substitution"), "renamed view remains in Setup")
+    assert text_contains(frame, "glyph substitution"), "lossy display was not disclosed"
     console.key(0x76)
     console.wait(lambda f: setup_rows(f) == ["Main", shown_name, expected_new, "I/O"], "F7 reorders selected stable view")
     click_function(console, 8, "Move+")
@@ -645,9 +660,69 @@ def churn_contract(console, exe, directory, pids, fixtures, observations):
     assert results[0][1] in ("already_exited", "identity_changed", "failed", "denied"), results
     assert all(child.poll() is None for child in fixtures if child is not victim), "churn redirected termination to another live process"
     console.key(13, "\r")
-    console.wait(lambda f: is_main(f) and has_bar(f), "result close after captured target exit")
+    console.wait(lambda f: is_main(f) and has_bar(f)
+                 and not visible_pids(f, targets, True)
+                 and function_ready(f, 9, "Kill", False),
+                 "exited selection retires without selecting a neighbour")
     console.stop()
     observations["checks"].append("process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case")
+
+
+def recovery_contract(console, exe, directory, pids, observations):
+    config = directory / "recovery.conf"
+    new_config(exe, config)
+    original = config.read_bytes()
+    console.start(exe, config, pids, "--keymap", "htop", "--status-bar", "-s", "ID")
+    frame = console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids)
+                         and not visible_pids(f, pids, True)
+                         and function_ready(f, 9, "Kill", False), "startup has no implicit target")
+    assert all(function_ready(frame, number, label, False)
+               for number, label in ((7, "Prio+"), (8, "Prio-"), (9, "Kill")))
+    console.key(0x28)  # Down selects the first row, not the second.
+    console.wait(lambda f: visible_pids(f, pids, True) == {max(pids)}, "first Down explicitly selects first process")
+    console.type(" ")
+    console.wait(lambda f: visible_pids(f, pids, True) == {sorted(pids, reverse=True)[1]}, "tag moves to next process")
+    console.type("F")
+    console.key(0x70)
+    console.wait(lambda f: overlay_contains(f, "Help"), "Help above a selection and tag")
+    console.key(27, "\x1b")
+    console.wait(lambda f: is_main(f) and function_ready(f, 9, "Kill"), "Escape closes Help without mutating captured selection")
+    console.key(27, "\x1b")
+    frame = console.wait(lambda f: is_main(f) and function_ready(f, 9, "Kill", False)
+                         and not visible_pids(f, pids, True), "main Escape clears selection, tags and follow")
+    for y, row in enumerate(frame["rows"]):
+        token = row.lstrip().split(None, 1)[0:1]
+        if token and token[0].isdigit() and int(token[0]) in pids:
+            assert frame["attributes"][y][0] == 0x07, "Escape retained a tag/follow/selected row attribute"
+    console.stop()
+    assert config.read_bytes() == original
+
+    # All 36 context/keymap combinations are checked in native_input using the
+    # actual dispatcher. Here representative raw-input paths qualify real
+    # screen/mode restoration; the signal case below uses the actual handler.
+    for keymap, context in (("htop", "command"), ("vi", "help"), ("emacs", "paused")):
+        console.start(exe, config, pids, "--keymap", keymap, "--status-bar")
+        if context == "command":
+            console.type(":unfinished")
+            console.wait(lambda f: editor_contains(f, ":unfinished"), "command before Ctrl-C")
+        elif context == "help":
+            console.key(0x70)
+            console.wait(lambda f: overlay_contains(f, "Help"), "Help before Ctrl-C")
+        else:
+            console.type("Z")
+            console.wait(lambda f: text_contains(f, "PAUSED"), "pause before Ctrl-C")
+        console.key(ord("C"), "\x03", 8)
+        console.stop(send_key=False)
+
+    # The helper owns a private console. Ignore Ctrl-C here and in owned fixture
+    # processes, then verify Wtop explicitly clears its inherited ignore flag.
+    console.start(exe, config, pids, "--status-bar")
+    console.key(0x71)
+    console.wait(lambda f: overlay_contains(f, "Setup"), "Setup before real inherited-ignore Ctrl-C")
+    console.check(console.k.GenerateConsoleCtrlEvent(0, 0))
+    console.stop(send_key=False)
+    assert config.read_bytes() == original
+    observations["checks"].append("no startup target; first navigation; layered Escape clears transient state; global raw Ctrl-C and real inherited-ignore Ctrl-C restore caller modes/buffer without saving")
 
 
 def viewport_matrix_contract(console, exe, directory, pids, observations):
@@ -693,6 +768,36 @@ def viewport_matrix_contract(console, exe, directory, pids, observations):
     observations["checks"].append("native viewport matrix, tiny fallback, keyboard recovery and unchanged settings")
 
 
+def retained_frame_contract(console, exe, directory, pids, observations):
+    config = directory / "retained-frame.conf"
+    new_config(exe, config)
+    for style in ("functions", "compact", "status"):
+        console.start(exe, config, pids, "--footer", style, "--status-position", "banner", interval=50)
+        frame = console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids), "buffered " + style)
+        assert not frame["rows"][-2].startswith("age "), "default leaked a second footer"
+        if style == "status":
+            assert "view " in frame["rows"][-1]
+        else:
+            assert has_bar(frame)
+        samples = 0
+        deadline = time.monotonic() + 0.8
+        while time.monotonic() < deadline:
+            actual = console.frame()
+            assert actual["rows"][0].startswith("Wtop "), "observed intermediate clear during steady refresh"
+            assert visible_pids(actual, pids) == set(pids), "process rows disappeared during steady refresh"
+            samples += 1
+        console.type("Z")
+        console.wait(lambda f: text_contains(f, "PAUSED"), "pause remains visible")
+        console.type("Z")
+        console.wait(lambda f: not text_contains(f, "PAUSED"), "resume")
+        console.stop()
+        observations.setdefault("buffered_frames", []).append({"style": style, "sampled_frames": samples})
+    console.start(exe, config, pids, "--footer", "functions", "--status-position", "bottom")
+    console.wait(lambda f: has_bar(f) and "view " in f["rows"][-2], "explicit two-row opt-in")
+    console.stop()
+    observations["checks"].append("one footer default, three styles, explicit dual-row opt-in, pause/resume and no observed intermediate blank refresh")
+
+
 def worker(exe, output):
     console = None
     fixtures = []
@@ -729,6 +834,10 @@ def worker(exe, output):
             observations["checks"].append("mouse function action and keyboard overlays")
 
             console.wait(lambda f: visible_pids(f, pids) == set(pids), "identity-bearing targets before confirmation")
+            assert not visible_pids(console.frame(), pids, True), "startup unexpectedly selected a process"
+            console.key(0x24)  # Explicitly select a process before requesting an action.
+            console.wait(lambda f: bool(visible_pids(f, pids, True))
+                         and function_ready(f, 9, "Kill"), "explicit target before confirmation")
             console.records(console.key_records(0x78, repeat=32))  # Held initiating F9.
             frame = console.wait(lambda f: overlay_contains(f, "Terminate")
                                  and function_ready(f, 10, "Quit"), "termination confirmation")
@@ -779,12 +888,12 @@ def worker(exe, output):
             observations["checks"].append("mouse actions cancel commands and preserve filter ownership across tabs")
 
             console.type("B")
-            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][-1]
-                         and "view " in f["rows"][-1], "hidden function bar retains a live status row")
+            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][0]
+                         and "view " in f["rows"][0], "hidden function bar retains banner telemetry without another footer")
             console.type("B")
             console.wait(lambda f: is_main(f) and has_bar(f), "keyboard recovery of hidden function bar")
             console.type("B")
-            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][-1], "live status retained after bar is hidden again")
+            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][0], "banner telemetry retained after bar is hidden again")
             console.key(0x71)  # F2
             console.wait(lambda f: overlay_contains(f, "Setup"), "setup before explicit save")
             before = config.read_bytes()
@@ -800,7 +909,9 @@ def worker(exe, output):
             console.wait(is_main, "setup close after save")
             console.stop()
             console.start(exe, config, pids)
-            assert not has_bar(console.frame()), "hidden bar was not restored from saved settings"
+            restored = console.frame()
+            assert not has_bar(restored), "hidden bar was not restored from saved settings"
+            assert not visible_pids(restored, pids, True), "restoring settings restored a process action target"
             console.stop()
             observations["checks"].append("explicit save, unknown/comment preservation, reload and console restoration")
 
@@ -860,10 +971,12 @@ def worker(exe, output):
             assert all(p.poll() is None for p in fixtures), "input after quit mutated an owned process"
             observations["checks"].append("queued actions after quit are discarded before mutation")
             viewport_matrix_contract(console, exe, Path(temp), pids, observations)
+            retained_frame_contract(console, exe, Path(temp), pids, observations)
             sampling_click_contract(console, exe, Path(temp), pids, observations)
             setup_contract(console, exe, Path(temp), pids, observations)
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
             churn_contract(console, exe, Path(temp), pids, fixtures, observations)
+            recovery_contract(console, exe, Path(temp), pids, observations)
         observations["result"] = "passed"
     except BaseException:
         observations["result"] = "failed"

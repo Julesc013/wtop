@@ -24,7 +24,7 @@ typedef enum wtop_ui_action {
     WTOP_UI_SETUP_PREVIOUS_PAGE, WTOP_UI_SETUP_NEXT_PAGE,
     WTOP_UI_ADJUST_DOWN, WTOP_UI_ADJUST_UP,
     WTOP_UI_TAB_NEW, WTOP_UI_TAB_DUPLICATE, WTOP_UI_TAB_RENAME,
-    WTOP_UI_TAB_DELETE, WTOP_UI_TAB_MOVE_LEFT, WTOP_UI_TAB_MOVE_RIGHT
+    WTOP_UI_TAB_DELETE, WTOP_UI_TAB_MOVE_LEFT, WTOP_UI_TAB_MOVE_RIGHT, WTOP_UI_PAUSE
 } wtop_ui_action;
 
 typedef enum wtop_ui_context {
@@ -85,6 +85,9 @@ size_t wtop_ui_status_format(const wtop_ui_status *status, int width,
                               char *output, size_t capacity, unsigned *flags);
 
 wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers);
+/* ETX or Ctrl-C is a global shutdown request, including text editors. Hosts
+   must check this before routing a key to any mode-specific editor. */
+int wtop_ui_interrupt_key(int key, unsigned modifiers);
 wtop_ui_action wtop_ui_function_action(int index);
 const char *wtop_ui_function_label(int index, int compact);
 int wtop_ui_bar_hit(int width, int x);
@@ -97,4 +100,12 @@ int wtop_ui_columns(int width, const int *columns, int count,
 /* Decimal byte units; compact elapsed units. Refuses unit-truncating output. */
 int wtop_ui_format_bytes(double bytes, int per_second, char *output, size_t capacity);
 int wtop_ui_format_age(double milliseconds, char *output, size_t capacity);
+typedef struct wtop_ui_chrome {
+    int footer, status, prompt, content_end, banner_status;
+} wtop_ui_chrome;
+/* Half-open content range [0, content_end). A second footer row exists only
+   when bottom status is explicitly requested. Transient prompts replace a
+   footer, never an unreserved process row. */
+void wtop_ui_chrome_layout(int height, int visible, int footer_style,
+                          int status_position, int prompting, wtop_ui_chrome *layout);
 #endif

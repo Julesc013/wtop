@@ -1,0 +1,10 @@
+- Starts with no process selected. Restoring a saved view restores its display preferences, not process selection, tags or follow state.
+- Escape cancels the current editor or confirmation, returns from panels, and clears selection, tags and follow state on the main screen. Cancelling a live filter restores its previous value.
+- Ctrl+C follows the quit path from every keymap and context, including command input and native console control events.
+- Binds selection to PID and creation time. A disappeared, hidden or reused process cannot silently retarget an action to its neighbouring row.
+- Composes complete terminal frames before presenting changed runs. Viewport changes invalidate cached geometry, including when the cell contents are otherwise unchanged.
+- Keeps one function footer by default and puts status in the header. Compact/status footers, an explicit second bottom status row, meter style/width and Unicode/ASCII presentation are configurable.
+- Adds explicit pause/resume with `Z`, retains sample-age reporting, and separates collection cadence from painting cadence.
+- Fixes the sample-adoption interval that could discard a mouse click on a still-visible command-editor footer.
+- Adds native input, actual viewport movement, color-attribute and control-exit regressions. Modern ARM64 has a native execution lane alongside x64 and x86-on-WoW64.
+- Uses one channel-aware version mapping and profile-specific native/provenance/security receipts. Each included portable ZIP contains the same executable bytes as its standalone download.

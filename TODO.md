@@ -1,6 +1,8 @@
 # Wtop TODO
 
-Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+Beta 2 work: [implementation and verification](docs/beta2-verification.md),
+[supplied plan](docs/beta2-plan.md), and [release policy](docs/beta-publication.md).
+Automated prerelease gates and stable human qualification are separate.
 
 This is the contributor checklist for the complete currently agreed product scope.
 The [work registry](spec/work/units.json) owns work-unit status; the
@@ -19,7 +21,7 @@ criteria; some already have candidate code and need evidence rather than rewriti
 
 ## 0. Current implementation and first-release gates
 
-The current application is **0.4.0-beta.1 (unpublished candidate)**. The earlier
+The current application is **0.4.0-beta.2 (prerelease candidate)**. The earlier
 [17 November source audit](docs/wtop-release-readiness-2026-11-17.md) describes
 `1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`; the
 [current implementation record](docs/implementation-verification-2026-11-17.md)
@@ -33,7 +35,7 @@ acceptance or a supported release.
 - [x] **WT-W030:** retained per-target action outcomes, lifetime revalidation,
   sample timestamps/freshness, private collection and single-slot publication.
 - [x] **WT-W040:** htop defaults, vi/Emacs alternatives, contextual visible/hidden
-  function bar, adjacent live status, graceful mouse and scalar-safe ASCII fallback.
+  single-row function bar, header status, graceful mouse and conservative Unicode/ASCII fallback.
 - [x] **WT-W040/050:** Setup tab create/duplicate/rename/confirmed-delete/reorder,
   stable IDs and bounded saved columns/rows/filters/sort/colors.
 - [x] **WT-W050:** version-2 settings, explicit owner/path resolution, byte-baseline
@@ -47,12 +49,19 @@ acceptance or a supported release.
 - [x] **WT-W080/090:** shared historical probe/report code, DOS1 COM and DOS2+ MZ
   artifacts, NT probe and Win16/OS2 entrypoints. These are not full monitor ports.
 
+Beta 2 adds composed changed-cell frames, a single default footer, pause/resume,
+explicit empty startup selection, process-lifetime selection and contextual
+Escape/global Ctrl+C. [The Beta 2 record](docs/beta2-verification.md) owns their
+exact evidence. The following broader stable and platform gates remain open:
+
 Remaining first-release blockers and evidence work:
 
 - [x] Close the observed native CI regressions and record exact passing
   source/artifact scope in the implementation record (run 44069558700).
 - [ ] Qualify advertised Windows OS/architecture/console/token combinations;
-  native ARM64, stock RT, WinPE, ReactOS and historical guests remain unverified.
+  native ARM64 now has a dedicated execution lane; stock RT, WinPE, ReactOS and
+  historical guests still need independent evidence. Check the latest receipts
+  before describing any particular architecture as tested.
 - [ ] Qualify real CPU groups/hotplug, protected processes, Unicode/console hosts,
   hostile filesystem/path races, actual blocked work and resource/performance bounds.
 - [ ] Close MSI preflight-to-operation races, upgrades/rollback/interruption,
@@ -126,7 +135,8 @@ References: [governance](spec/foundation/governance.md),
 - [ ] Verify confirmed termination and supported Windows priority-class actions
   against the exact displayed process lifetime, including denied rights and exits.
 - [ ] Add remaining htop-tier capabilities as distinct changes: thread/detail
-  views, supported affinity, branch collapse, richer meters and explicit pause.
+  views, supported affinity, branch collapse and richer meters. Pause is now
+  implemented; qualification remains scoped to its recorded fixtures.
   Do not advertise them merely because corresponding keys exist in upstream htop.
 
 References: WT-AC-031-01 through WT-AC-031-07 in

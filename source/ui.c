@@ -45,10 +45,16 @@ int wtop_ui_bar_hit(int width, int x)
     return -1;
 }
 
+int wtop_ui_interrupt_key(int key, unsigned modifiers)
+{
+    return key == 3 || ((modifiers & WTOP_MOD_CTRL) && (key == 'c' || key == 'C'));
+}
+
 wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers)
 {
     int ctrl = (modifiers & WTOP_MOD_CTRL) != 0;
     int alt = (modifiers & WTOP_MOD_ALT) != 0;
+    if(wtop_ui_interrupt_key(key, modifiers)) return WTOP_UI_QUIT;
     if(key >= WTOP_KEY_F1 && key <= WTOP_KEY_F10)
         return wtop_ui_function_action(key - WTOP_KEY_F1);
     if(key == 27) return WTOP_UI_CANCEL;
@@ -93,6 +99,7 @@ wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers)
     if(key == ':' ) return WTOP_UI_COMMAND;
     if(key == 'q') return WTOP_UI_QUIT;
     if(key == '?' || key == 'h') return WTOP_UI_HELP;
+    if(key == 'Z') return WTOP_UI_PAUSE;
     if(key == 'B') return WTOP_UI_BAR;
     if(key == 't') return WTOP_UI_TREE;
     if(keymap == WTOP_KEYMAP_VI) {
@@ -234,6 +241,7 @@ static void action_labels(wtop_ui_binding *binding)
     case WTOP_UI_SEARCH_PREVIOUS: label = "Previous match"; compact = "N"; break;
     case WTOP_UI_NEXT_TAB: label = "Next view"; compact = ">"; break;
     case WTOP_UI_PREVIOUS_TAB: label = "Previous view"; compact = "<"; break;
+    case WTOP_UI_PAUSE: label = "Pause/resume"; compact = "Z"; break;
     case WTOP_UI_BAR: label = "Controls"; compact = "B"; break;
     case WTOP_UI_COMMAND: label = "Command"; compact = ":"; break;
     case WTOP_UI_CANCEL: label = "Back"; compact = "Esc"; break;
@@ -273,7 +281,7 @@ static int process_only_action(wtop_ui_action action)
     case WTOP_UI_SEARCH_PREVIOUS: case WTOP_UI_NEXT_TAB:
     case WTOP_UI_PREVIOUS_TAB: case WTOP_UI_COMMAND: case WTOP_UI_SORT_CPU:
     case WTOP_UI_SORT_MEMORY: case WTOP_UI_SORT_PID: case WTOP_UI_SORT_LEFT:
-    case WTOP_UI_SORT_RIGHT:
+    case WTOP_UI_SORT_RIGHT: case WTOP_UI_PAUSE:
         return 1;
     default: return 0;
     }
@@ -425,7 +433,7 @@ wtop_ui_action wtop_ui_context_key_action(const wtop_ui_context_options *options
     if (key == 27 || (keymap == WTOP_KEYMAP_EMACS &&
         (modifiers & WTOP_MOD_CTRL) && (key == 'g' || key == 'G' || key == 7)))
         action = WTOP_UI_CANCEL;
-    else if ((modifiers & WTOP_MOD_CTRL) && (key == 'c' || key == 'C' || key == 3))
+    else if (wtop_ui_interrupt_key(key, modifiers))
         action = WTOP_UI_QUIT;
     else if (options->context == WTOP_CONTEXT_CONFIRM) {
         if (!command_modifier && (key == 'y' || key == 'Y')) action = WTOP_UI_CONFIRM;
@@ -551,4 +559,22 @@ size_t wtop_ui_status_format(const wtop_ui_status *status, int width,
     }
     if (flags) *flags = result_flags;
     return used;
+}
+
+void wtop_ui_chrome_layout(int height, int visible, int style,
+                          int position, int prompting, wtop_ui_chrome *layout)
+{
+    int end = height > 0 ? height : 0;
+    layout->footer = layout->status = layout->prompt = -1;
+    layout->banner_status = position == WTOP_STATUS_BANNER && (!visible || style != WTOP_FOOTER_STATUS);
+    if (end && (visible || prompting)) {
+        --end;
+        if (prompting) layout->prompt = end;
+        else if (style == WTOP_FOOTER_STATUS) layout->status = end;
+        else layout->footer = end;
+    }
+    if (end && position == WTOP_STATUS_BOTTOM && layout->status < 0 && !prompting) {
+        layout->status = --end;
+    }
+    layout->content_end = end;
 }

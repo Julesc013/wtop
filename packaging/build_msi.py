@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from package_candidate import PackageError, checksum_file, json_bytes, sha256, verify
 from inspect_pe import inspect_file
+from release_metadata import msi_version as mapped_msi_version
 
 NAMESPACE = uuid.UUID("c58bab6f-f4af-5ffb-b37b-8b0c08915594")
 WIX_VERSION = "4.0.6"
@@ -55,11 +56,12 @@ def write_guard_config(candidate: Path, stage: Path, manifest: dict) -> Path:
     return path
 
 
-def build(candidate: Path, stage: Path, wix: Path, numeric_version: str) -> dict:
+def build(candidate: Path, stage: Path, wix: Path, numeric_version: str | None = None) -> dict:
     manifest = verify(candidate)
     if manifest["installer"].get("built"):
         raise PackageError("this candidate already has an MSI; use a new empty candidate output")
-    version = msi_version(numeric_version)
+    mapped_version = mapped_msi_version(manifest['payload']['version'])
+    version = msi_version(numeric_version) if numeric_version is not None else mapped_version
     output = subprocess.run([str(wix), "--version"], check=True, capture_output=True, text=True).stdout.strip()
     if output.split("+")[0] != WIX_VERSION:
         raise PackageError(f"requires WiX {WIX_VERSION}, received {output!r}; no tool upgrades are implicit")
@@ -108,15 +110,18 @@ def build(candidate: Path, stage: Path, wix: Path, numeric_version: str) -> dict
     manifest["installer"] = {
         "built": True, "qualified": False, "product_code": product, "upgrade_code": upgrade,
         "msi_version": version, "semantic_version": payload["version"], "wix": output,
+        "version_mapping": "wtop.version/1" if version == mapped_version else "explicit_candidate_override",
         "scope": "perUserOrMachine", "automatic_upgrade": "blocked", "path_integration": "absent",
         "guard": {"sha256": sha256(guard.read_bytes()), "pe": guard_pe,
                   "configuration_sha256": sha256((stage / "guard_config.h").read_bytes())},
         "commands": commands,
         "preservation": "preflight refusal for detected changes; not an atomic compare-and-delete or replace",
         "remaining": ["validation_to_file_operation_race", "standard_user_and_native_matrix",
-                      "rollback_and_power_loss", "upgrade_transaction", "production_msi_version_mapping"],
+                      "rollback_and_power_loss", "upgrade_transaction"],
     }
-    manifest["promotion"]["blockers"] += ["msi_preservation_unqualified", "candidate_msi_version_only", "automatic_upgrade_not_implemented"]
+    manifest["promotion"]["blockers"] += ["msi_preservation_unqualified", "automatic_upgrade_not_implemented"]
+    if version != mapped_version:
+        manifest["promotion"]["blockers"].append("candidate_msi_version_override")
     (candidate / "candidate.json").write_bytes(json_bytes(manifest))
     checksum_file(candidate, manifest)
     verify(candidate)
@@ -128,7 +133,7 @@ def main(argv=None) -> int:
     parser.add_argument("--candidate", required=True, type=Path)
     parser.add_argument("--stage", required=True, type=Path)
     parser.add_argument("--wix", required=True, type=Path)
-    parser.add_argument("--msi-version", required=True, help="explicit candidate-only numeric version; never inferred by dropping SemVer suffixes")
+    parser.add_argument("--msi-version", help="optional candidate-only override; default is the bounded shared SemVer ledger")
     args = parser.parse_args(argv)
     try:
         manifest = build(args.candidate.resolve(), args.stage.resolve(), args.wix.resolve(), args.msi_version)

@@ -32,4 +32,26 @@ class PublicationOperations(unittest.TestCase):
         with patch.object(publish,'api',side_effect=pages) as api:
             self.assertEqual(publish.release_for('v0.4.0-beta.1')['id'],123)
             self.assertEqual(api.call_count,2)
+    def test_existing_tag_commit_is_checked_without_moving_it(self):
+        refs=[{'ref':'refs/tags/v0.4.0-beta.2','object':{'type':'tag','sha':'b'*40}}]
+        with patch.object(publish,'api',side_effect=[refs,{'object':{'type':'commit','sha':'a'*40}}]):
+            self.assertEqual(publish.tag_revision('v0.4.0-beta.2'),'a'*40)
+        with patch.object(publish,'api',return_value=[]):
+            self.assertIsNone(publish.tag_revision('v0.4.0-beta.2'))
+    def test_friendly_labels_preserve_asset_filenames(self):
+        manifest={'version':'0.4.0-beta.2','profiles':[{'payload':{'profile':'win-nt-x64'}}]}
+        name='wtop-0.4.0-beta.2-win-nt-x64-portable.zip'
+        self.assertEqual(publish.asset_display_name(name,manifest),'Wtop 0.4.0 Beta 2 for Windows NT (x64, 64-bit) Portable ZIP')
+        self.assertEqual(publish.asset_display_name('SHA256SUMS',manifest),'SHA256SUMS')
+    def test_tag_changed_after_staging_blocks_public_mutation(self):
+        manifest={'schema':'wtop.beta/2','version':'0.4.0-beta.2','tag':'v0.4.0-beta.2',
+                  'payload':{'source':{'revision':'a'*40}},'assets':[]}
+        release={'id':1,'tag_name':manifest['tag'],'target_commitish':'a'*40,'draft':True,'prerelease':True}
+        assets=[{'id':i,'name':name,'size':1,'digest':'fixture'} for i,name in enumerate(('beta-manifest.json','SHA256SUMS'))]
+        with patch.object(publish,'release_for',return_value=release),patch.object(publish,'download'),\
+             patch.object(publish,'verify',return_value=manifest),patch.object(publish.subprocess,'run'),\
+             patch.object(publish,'assets_for',return_value=assets),patch.object(publish,'public_blockers',return_value=[]),\
+             patch.object(publish,'api',return_value=release) as api,patch.object(publish,'tag_revision',return_value='b'*40):
+            with self.assertRaisesRegex(BetaError,'tag changed'):publish.publish(manifest['tag'])
+        self.assertFalse(any(len(call.args)>1 and call.args[1]=='PATCH' for call in api.call_args_list))
 if __name__=='__main__':unittest.main()

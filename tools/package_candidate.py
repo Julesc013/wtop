@@ -14,7 +14,7 @@ from pathlib import Path
 from inspect_pe import PEError, inspect_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
-SEMVER = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:dev|beta|rc)\.[1-9][0-9]*)?\Z")
+from release_metadata import SEMVER
 REVISION = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
 

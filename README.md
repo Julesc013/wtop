@@ -1,6 +1,8 @@
 # Wtop
 
-Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+Beta 2 work: [implementation and verification](docs/beta2-verification.md),
+[supplied plan](docs/beta2-plan.md), and [release policy](docs/beta-publication.md).
+Automated prerelease gates and stable human qualification are separate.
 
 Wtop is a native terminal process monitor derived from
 [NTop](https://github.com/gsass1/NTop). It keeps a compact process table and meters,
@@ -11,16 +13,18 @@ bindings, and explicit command-line output and settings operations.
 the unmodified NTop starting revision. Develop Wtop on short-lived branches from
 `master`; see [branch and upstream policy](docs/development.md#branches-and-upstream).
 
-**Status: development candidate, version 0.4.0-beta.1 (unpublished candidate).** The current application
-backend is Windows NT. This increment implements the eight-workstream design:
+**Status: version 0.4.0-beta.2 (prerelease candidate).** The current application
+backend is Windows NT. Beta 1 remains available under its unchanged tag. Beta 2
+adds composed frames, one default footer, explicit pause, safer selection and
+context-independent cancellation. The shared implementation includes:
 corrected measurements/actions, sample freshness, contextual TUI and Setup,
 versioned settings ownership, query/inspect/log, bounded optional providers,
 exact-byte delivery candidates and separate historical probes.
 
 **This is not a supported 0.4.0 release.** Modern x86/x64/ARM64 builds, native
 execution and packaging checks have different evidence scopes. The current
-[implementation and verification record](docs/implementation-verification-2026-11-17.md)
-records failures, fixes and remaining gates. DOS/Win16/OS2 probes are not full
+[Beta 2 verification record](docs/beta2-verification.md)
+records changes, observed failures, exact checks and remaining gates. DOS/Win16/OS2 probes are not full
 monitors; Win9x, early NT, CE, RT, WinPE and ReactOS support is unqualified.
 There is no published WinGet package, stable installer or native GUI.
 
@@ -109,7 +113,11 @@ collector; it is not a full runtime probe.
 | `--theme htop\|ntop\|monochrome` | Select a built-in palette; default `htop`. Selecting a theme resets its color roles. |
 | `-C`, `--no-color`, `--no-colour` | Force monochrome presentation after theme selection. |
 | `--mouse auto\|on\|off`; `--no-mouse`, `-M` | Request native mouse reporting with keyboard fallback; default `auto`. `--no-mouse` means `off`. |
-| `--status-bar` / `--function-bar`; negative forms | Show/hide the last-row function bar; shown by default. Live status, prompts and errors remain visible. |
+| `--status-bar` / `--function-bar`; negative forms | Show/hide the last-row function bar; shown by default. Active prompts and errors remain visible. |
+| `--footer functions\|compact\|status\|hidden` | Choose the single footer style; default `functions`. |
+| `--status-position banner\|bottom\|hidden` | Place contextual status in the header by default; a second bottom row is explicit opt-in. |
+| `--frame-interval MILLISECONDS` | Bound ordinary painting cadence (16–1000 ms; default 50), independently of sampling; input may redraw immediately. |
+| `--character-set unicode\|ascii` | Select conservative single-cell Unicode or ASCII presentation. Unsupported wide/combining scalars become placeholders. |
 | `-p`, `--pid PID,PID` | Filter process IDs. |
 | `-n`, `--name NAME,NAME` | Filter names by case-sensitive substring. |
 | `-u`, `--user USER` | Exact SID or resolved account name. Unresolved name filtering is explicitly partial. |
@@ -157,6 +165,12 @@ same qualification applies to baseline collection and emergency shutdown; see
 
 ## Interactive controls
 
+Startup restores the selected display configuration but leaves process selection,
+tags and follow state empty. Navigation or a row click selects a process lifetime.
+A selected process that exits or is filtered out is cleared; another process at
+that row or PID is never automatically made its action target. Escape is cancel
+and back, not undo for an already executed process action.
+
 The table below describes process-view keys. Help, Setup, editors, confirmations
 and retained action results have their own context labels and disabled reasons,
 shared by keyboard and mouse. The function keys provide a common route through all three keymaps. Process
@@ -182,7 +196,9 @@ PID reuse or unavailable identity must not turn a selection into another process
 | Ctrl+Left / Ctrl+Right | Previous/next sort column. |
 | `B` | Hide/show the function bar. |
 | `/`, `\`, `:` | Enter search, filter or explicit command input. |
-| `q`, Ctrl+C | Quit. |
+| Escape | Cancel the current editor/dialog or return from Help/Setup; on the main view clear selection, tags and follow state. |
+| `Z` | Pause/resume collection; paused sample age remains visible. |
+| `q`, Ctrl+C | Quit (`Ctrl+C` is global, including editors and confirmations). |
 
 Map-specific keys are intentional: **`k` opens termination in htop mode and moves
 up in Vi mode**. Vi/Vim mode adds `j`/`k`, `g`/`G`, `n`/`N` and `K` for navigation,
@@ -208,8 +224,12 @@ closes the panel. Column settings belong to the active tab; meters, colors,
 keymap, mouse, interval and bar visibility are global.
 
 The function bar is shown on the final row by default. Hiding it returns that
-row to the view; active prompts and errors are still displayed. Labels and enabled states follow the active context. The adjacent live status
-reports freshness, view/filter/sort, selections and unsaved changes. The view
+row to the view; active prompts and errors are still displayed. Labels, enabled
+states and mouse regions follow the same active context. Freshness, view/filter/
+sort, selections and unsaved changes appear in the header by default. `StatusPosition
+bottom` explicitly opts into a second bottom row; this is not the default. Setup
+also exposes footer/status placement, frame cadence, meter width/style and character
+set. A frame is composed offscreen before changed console runs are presented. The view
 starts with **Main** and **I/O** tabs. Each tab has its own columns, order, filter, sort
 direction and tree preference. Setup supports visibility/order and bounded create, duplicate, rename and confirmed
 delete operations. Stable numeric IDs follow tabs through reordering; eight tabs
@@ -223,8 +243,9 @@ While a text editor is active, other mouse controls are ignored; function keys
 and function-bar actions cancel that editor before changing context. Cancelling
 a live filter restores its prior value. Console-host behavior, resize races and
 visual usability require native acceptance, not just portable key-map tests.
-The current renderer projects each non-ASCII Unicode scalar to a single `?` cell
-and reports substitution; raw strings are retained in settings/JSON. This makes
+The conservative renderer preserves printable single-cell Unicode in Unicode
+mode and replaces unsupported wide/combining/emoji scalars predictably. ASCII mode
+substitutes non-ASCII scalars. Raw strings are retained in settings/JSON. This makes
 clipping and mouse geometry deterministic. A true CJK/combining/emoji cell renderer
 remains separate qualification work.
 
@@ -263,6 +284,12 @@ Theme htop
 Keymap htop
 Mouse auto
 FunctionBar 1
+FooterStyle functions
+StatusPosition banner
+FrameInterval 50
+MeterWidth 25
+MeterStyle bars
+CharacterSet unicode
 ShowTabs 1
 RedrawInterval 1000
 HeaderRows title,cpu,memory,commit,summary

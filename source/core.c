@@ -47,6 +47,7 @@ static const char *canonical_option(const char *name)
 static int option_takes_value(const char *name)
 {
     static const char *const names[] = {
+        "--footer", "--status-position", "--character-set", "--frame-interval",
         "--format", "--interval", "--delay", "--config", "--keymap",
         "--theme", "--mouse", "--write-config", "--cpu-normalization",
         "--portable-root", "--samples", "--duration", "--max-bytes", "--output",
@@ -211,6 +212,28 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
                     return 0;
                 }
                 options->keymap_name = value;
+            } else if (!strcmp(arg, "--footer")) {
+                wtop_footer_style style;
+                if (strcmp(value, "hidden") && !wtop_parse_footer_style(value, &style)) {
+                    *error = "--footer must be functions, compact, status or hidden"; return 0;
+                }
+                options->footer_style = value;
+            } else if (!strcmp(arg, "--status-position")) {
+                wtop_status_position position;
+                if (!wtop_parse_status_position(value, &position)) {
+                    *error = "--status-position must be banner, bottom or hidden"; return 0;
+                }
+                options->status_position = value;
+            } else if (!strcmp(arg, "--character-set")) {
+                wtop_character_set characters;
+                if (!wtop_parse_character_set(value, &characters)) {
+                    *error = "--character-set must be ascii or unicode"; return 0;
+                }
+                options->character_set = value;
+            } else if (!strcmp(arg, "--frame-interval")) {
+                if (!wtop_parse_unsigned(value, 16, 1000, 10, &options->frame_interval_ms)) {
+                    *error = "--frame-interval must be 16..1000 milliseconds"; return 0;
+                }
             } else if (!strcmp(arg, "--theme")) {
                 wtop_theme theme;
                 if (!wtop_parse_theme(value, &theme)) {

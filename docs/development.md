@@ -36,9 +36,9 @@ the fork over its downstream changes. The inherited `multiple-cpus` branch is
 also historical material, not Wtop's integration branch.
 
 Merge only after applicable checks pass, preserve other contributors' work, and
-do not force-push the canonical branch. A development merge does not publish a
-release or qualify additional operating systems. Normal `master` CI produces
-development artifacts; release publication remains a separate work unit.
+do not force-push the canonical branch. A development merge does not publicly publish a release or qualify additional
+operating systems. Canonical `master` can stage a verified alpha/beta draft through
+the dedicated release workflow. Public promotion is a separate explicit operation.
 
 ## Current implementation and module boundaries
 
@@ -53,10 +53,12 @@ Application files live under `source/`. The root `CMakeLists.txt` remains the
 build entry point. The inherited `source/ntop.c/.h`, `source/util.c/.h` and
 `source/vi.c/.h` retain the working native foundation. Portable policy belongs in
 `source/core.c/.h`, `source/settings.c/.h`, `source/ui.c/.h`, `source/text.c/.h`,
-`source/metrics.c/.h` and `source/actions.c/.h`; Windows handles,
+`source/metrics.c/.h`, `source/actions.c/.h` and `source/frame.c/.h`; Windows handles,
 console events and filesystem replacement stay with the native adapter.
 `settings_store_nt`, `providers_nt` and `output_nt` own native configuration
 transactions, isolated optional work and complete-record logging respectively.
+`console_frame_nt` presents the composed cell frame and validates viewport changes
+before reusing its front-buffer cache.
 Historical capability probes live under `source/legacy/`, with separate build
 and evidence profiles; see [historical backends](historical-backends.md).
 
@@ -74,7 +76,7 @@ starting an extraction or replacement.
 
 ## Windows build
 
-Use CMake 3.16+ and an appropriate Visual Studio C toolchain:
+Use CMake 3.16+, Python 3.10+ and an appropriate Visual Studio C toolchain:
 
 ```powershell
 cmake -S . -B out/windows-x64 -A x64
@@ -90,8 +92,8 @@ MSVC uses a static C runtime for the current application profile. Audit the PE
 imports before claiming one-file or old-OS-compatible operation.
 `source/build.bat` is a convenience entry point for CMake; it resolves the
 repository root from its own location and does not require copying files back to
-the root. Python enables additional development tests but is not part of the
-application's installed runtime.
+the root. Python generates the shared native version mapping at configure time
+and runs development tests; it is not part of the installed runtime.
 
 ## Host policy and specification checks
 
@@ -105,7 +107,7 @@ ctest --test-dir out/host --output-on-failure
 ```
 
 CMake registers separate `portable_core`, `portable_settings`, `portable_ui`,
-`portable_text`, `portable_metrics`, `portable_actions` and `portable_legacy_probe`
+`portable_text`, `portable_metrics`, `portable_actions`, `portable_frame` and `portable_legacy_probe`
 tests. Their contracts cover option conflicts/output arithmetic, bounded
 transactional settings and round trips, and key/action/visible-layout decisions.
 Expected results must come from the behavior contract, not another call to the
@@ -119,8 +121,9 @@ builds and raw logs outside tracked source paths.
 ## Native automated checks
 
 On Windows, CMake adds CLI version, capability, reserved-GUI and snapshot checks.
-It also runs native settings-store, isolated-provider and log-output fixtures.
-When Python is available, `native_cli_behavior`, `native_provider_behavior` and
+It also runs native settings-store, isolated-provider, log-output, tree, input
+identity and console-frame fixtures.
+`native_cli_behavior`, `native_provider_behavior` and
 `native_tui_interaction` exercise the actual application. The latter creates its own console, injects native input
 and observes the console buffer/settings. It must not attach to an unrelated
 interactive user's console or terminate arbitrary processes.
@@ -165,10 +168,12 @@ default build proves none of them.
 ## CI and evidence
 
 CI validates specifications, runs portable tests with sanitizers and builds
-Windows Win32/x64/ARM64 candidates. Its x86 runtime is hosted x64 Windows, while
-ARM64 is build-only. Neither is historical OS certification. Artifacts carry
-exact identity and explicit limits. A source push never automatically creates a
-release. Keep large binaries/raw logs in ignored `out/` or an external build
+Windows Win32/x64/ARM64 candidates. Win32 executes under WoW64 on the hosted
+x64 Windows Server runner; ARM64 executes on `windows-11-arm`. A runner label is
+not a receipt: inspect each actual run's OS, architecture, token and test results.
+These lanes do not certify historical Windows. Artifacts retain exact identities
+and explicit limits. Work branches never stage releases; canonical `master` may
+stage a draft after the separate beta workflow passes. Keep large binaries/raw logs in ignored `out/` or an external build
 directory; retain concise source-bound outcomes and known failures as evidence.
 
 The initial [bootstrap observations](bootstrap-verification.md) disclose the
@@ -181,10 +186,11 @@ acceptance and release status.
 
 Use [packaging/README](../packaging/README.md) to inspect and wrap the final EXE;
 packaging must not rebuild/relink different bytes for each install scope. CI
-builds x86/x64/ARM64, executes native tests on the hosted x64 machine for x86/x64,
-and creates separate candidate manifests. ARM64 compilation is not native ARM64
-execution. The x64 lane builds pinned WiX wrappers and runs disposable user/machine
-fixtures; promotion is deliberately rejected. No push publishes a release.
+builds and executes x86/x64/ARM64 in the lanes above and creates a separate
+candidate manifest for each. The x64 lane builds pinned WiX wrappers and runs
+disposable ownership/refusal fixtures; their stable promotion remains rejected.
+The beta workflow admits only profiles with complete final-byte native receipts.
+MSI is omitted from Beta 2 while installer lifecycle qualification remains open.
 
 The [implementation record](implementation-verification-2026-11-17.md) retains
 the first failed native run and follow-up scope. Do not rewrite historical

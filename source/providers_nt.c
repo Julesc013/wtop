@@ -746,7 +746,8 @@ static void core_provider(const wtop_provider_request *request, wtop_provider_re
     PDH_STATUS status;
     DWORD bytes = 0, chars = 0, i;
     size_t position;
-    LARGE_INTEGER frequency, first_before, first_after, last_before, last_after;
+    LARGE_INTEGER frequency = {0}, first_before = {0}, first_after = {0};
+    LARGE_INTEGER last_before = {0}, last_after = {0};
     int timing = 0, capped = 0;
     memset(counters, 0, sizeof(counters));
     if(!load_pdh(&api)) { failure(result, WTOP_PROVIDER_UNSUPPORTED, WTOP_PROVIDER_ERROR_WIN32, GetLastError()); return; }

@@ -1,6 +1,8 @@
 # Wtop roadmap
 
-Public beta work: [six-patch contract](docs/beta-plan.md). A draft is not a public release; client/human/feedback gates remain mandatory.
+Beta 2 work: [implementation and verification](docs/beta2-verification.md),
+[supplied plan](docs/beta2-plan.md), and [release policy](docs/beta-publication.md).
+Automated prerelease gates and stable human qualification are separate.
 
 Wtop aims to provide a dense htop-style native TUI and a unified command-line
 inspection/control interface from one maintainable source tree. Compatibility is
@@ -15,7 +17,7 @@ assigned without measured capacity and evidence.
 
 ## Current position
 
-The application is **0.4.0-beta.1 (unpublished candidate)**, developed on canonical `master`. Application,
+The application is **0.4.0-beta.2 (prerelease candidate)**, developed on canonical `master`. Application,
 helper and inherited configuration/build files remain under `source/`; root CMake
 is the build entrypoint. GPL history and the fixed NTop baseline remain intact.
 
@@ -30,9 +32,10 @@ for boundaries, actual checks and remaining failures. The earlier
 
 This is implementation progress, not a stable release or a claim that every
 formal acceptance case has passed. Native console fixtures, current CI-host
-execution, ARM64 compilation, scripted DOS instruction tests and historical
+execution, native ARM64 execution, scripted DOS instruction tests and historical
 OS execution are distinct evidence. MSI wrappers are explicitly unqualified and
-release promotion is blocked. WinGet publication and the native GUI are absent.
+stable promotion remains blocked. Beta 2 portable drafts have their own exact-byte
+automated gates; unqualified installer or historical profiles are omitted. WinGet publication and the native GUI are absent.
 
 ## Named release milestones
 
@@ -42,7 +45,7 @@ release promotion is blocked. WinGet publication and the native GUI are absent.
 | **Subsequent 0.x** | Extend and qualify the implemented query/inspection/logging/providers, complete compatibility and historical backend slices | Promote each implemented capability independently; preserve source, fixture and runtime evidence |
 | **1.0.0** — agreed TUI/CLI product complete | Stable public CLI/output/settings contracts and closure of the agreed capability/platform scope | An experimental or unimplemented historical port does not become completed scope by relabeling it; a narrower 1.0 would require an explicit scope decision |
 
-The current application is an unpublished `0.4.0-beta.1` candidate; **stable 0.4.0 remains a release goal**,
+Beta 1 is published; the current source is the `0.4.0-beta.2` candidate; **stable 0.4.0 remains a release goal**,
 following NTop 0.3.x. Candidate names use `0.4.0-dev.N` and
 `0.4.0-rc.N`, with stable `0.4.0`. The version number is independent of Actions
 run numbers. `0.4.0-stable.N` would still be a SemVer prerelease and is not the
