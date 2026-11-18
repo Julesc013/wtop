@@ -38,6 +38,10 @@ class KeyChar(C.Union):
     _fields_ = [("UnicodeChar", W.WCHAR), ("AsciiChar", C.c_char)]
 
 
+class CharInfo(C.Structure):
+    _fields_ = [("char", KeyChar), ("attributes", W.WORD)]
+
+
 class KeyEvent(C.Structure):
     _fields_ = [("down", W.BOOL), ("repeat", W.WORD), ("vk", W.WORD),
                 ("scan", W.WORD), ("char", KeyChar), ("modifiers", W.DWORD)]
@@ -117,6 +121,7 @@ class FixtureJob:
 class Console:
     def __init__(self):
         assert C.sizeof(InputRecord) == 20, "incorrect INPUT_RECORD ABI"
+        assert C.sizeof(CharInfo) == 4, "incorrect CHAR_INFO ABI"
         self.k = C.WinDLL("kernel32", use_last_error=True)
         declarations = {
             "CreateFileW": ([W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p,
@@ -130,6 +135,8 @@ class Console:
             "SetConsoleWindowInfo": ([W.HANDLE, W.BOOL, C.POINTER(Rect)], W.BOOL),
             "ReadConsoleOutputCharacterW": ([W.HANDLE, W.LPWSTR, W.DWORD,
                                              Coord, C.POINTER(W.DWORD)], W.BOOL),
+            "ReadConsoleOutputW": ([W.HANDLE, C.POINTER(CharInfo), Coord,
+                                     Coord, C.POINTER(Rect)], W.BOOL),
             "ReadConsoleOutputAttribute": ([W.HANDLE, C.POINTER(W.WORD), W.DWORD,
                                             Coord, C.POINTER(W.DWORD)], W.BOOL),
             "WriteConsoleOutputCharacterW": ([W.HANDLE, W.LPCWSTR, W.DWORD,
@@ -198,19 +205,31 @@ class Console:
             info = self.info(handle)
             width = info.window.Right - info.window.Left + 1
             height = info.window.Bottom - info.window.Top + 1
-            rows, attrs = [], []
+            # Read the cell grid, not a stream of UTF-16 characters. The latter
+            # expands combining clusters and can return fewer units than the
+            # cell width, shifting footer coordinates or introducing NULs.
+            # ReadConsoleOutputW is intentionally a legacy cell projection;
+            # it does not prove the terminal's complete glyph/font appearance.
+            cells = (CharInfo * (width * height))()
+            region = Rect(info.window.Left, info.window.Top,
+                          info.window.Right, info.window.Bottom)
+            self.check(self.k.ReadConsoleOutputW(handle, cells, Coord(width, height),
+                                                Coord(0, 0), C.byref(region)))
+            assert (region.Left, region.Top, region.Right, region.Bottom) == (
+                info.window.Left, info.window.Top, info.window.Right, info.window.Bottom)
+            rows, attrs, units = [], [], []
             for y in range(height):
-                coord = Coord(info.window.Left, info.window.Top + y)
-                chars = C.create_unicode_buffer(width + 1)
-                colors = (W.WORD * width)()
-                count = W.DWORD()
-                self.check(self.k.ReadConsoleOutputCharacterW(handle, chars, width, coord, C.byref(count)))
-                rows.append(chars[:width])
-                self.check(self.k.ReadConsoleOutputAttribute(handle, colors, width, coord, C.byref(count)))
-                attrs.append(list(colors))
+                line = cells[y * width:(y + 1) * width]
+                units.append([ord(cell.char.UnicodeChar) for cell in line])
+                attrs.append([cell.attributes for cell in line])
+                # Preserve one Python character per terminal cell. A trailing
+                # wide-cell marker is spacing, not a duplicated CJK glyph.
+                rows.append("".join(" " if cell.attributes & 0x200 else
+                    ("\ufffd" if 0xD800 <= ord(cell.char.UnicodeChar) <= 0xDFFF
+                     else cell.char.UnicodeChar) for cell in line))
             self.last_frame = {"width": width, "height": height,
                                "left": info.window.Left, "top": info.window.Top,
-                               "rows": rows, "attributes": attrs}
+                               "rows": rows, "attributes": attrs, "cell_units": units}
             return self.last_frame
         finally:
             self.k.CloseHandle(handle)
@@ -492,7 +511,7 @@ def setup_contract(console, exe, directory, pids, observations):
     next_id = int(config_values(config)["NextTabId"])
     with config.open("a", encoding="utf-8") as stream:
         stream.write("\n# Setup fixture extension must follow I/O's stable identity\nTab1.FutureScoped io-owned\n")
-    console.start(exe, config, pids, "--status-bar")
+    console.start(exe, config, pids, "--status-bar", "--character-set", "ascii")
     console.key(0x71)
     frame = console.wait(lambda f: overlay_contains(f, "Setup") and f["rows"][1].startswith("General")
                          and function_ready(f, 2, "Next") and function_ready(f, 10, "Quit"), "Setup General page")
@@ -521,7 +540,9 @@ def setup_contract(console, exe, directory, pids, observations):
     click_function(console, 4, "Clear")
     console.wait(lambda f: editor_contains(f, "=") and not editor_contains(f, "=" + expected_copy), "editor F4 clears text")
     name = "Audit \u4e2d\u6587 e\u0301 \U0001f600"
-    shown_name = "Audit ?? e? ?"
+    # Beta 3 substitutes a complete unsupported grapheme with one cell, so
+    # the base plus combining accent is one '?' rather than two projections.
+    shown_name = "Audit ?? ? ?"
     console.type(name)
     frame = console.wait(lambda f: editor_contains(f, "=" + shown_name), "CJK, combining and surrogate-pair input uses explicit ASCII cells")
     bounded_ascii_frame(frame)
@@ -588,6 +609,53 @@ def setup_contract(console, exe, directory, pids, observations):
     assert config_values(config)["Tab2.FutureScoped"] == "io-owned"
     console.stop()
     observations["checks"].append("contextual Setup CRUD/reorder/save with stable IDs, keyboard/mouse labels, Unicode raw preservation and bounded ASCII display")
+
+
+def unicode_layout_contract(console, exe, directory, pids, observations):
+    config = directory / "unicode-layout.conf"
+    new_config(exe, config)
+    assert config_values(config)["CharacterSet"] == "unicode"
+    console.start(exe, config, pids, "--status-position", "bottom")
+    console.wait(has_bar, "Unicode layout function bar")
+    console.type(":e\u0301\u4e2d\U0001f600Z")
+
+    def anchored(frame, column, caret):
+        row, colors = frame["rows"][-2], frame["attributes"][-2]
+        return row.startswith(":e") and row[column] == "Z" and (colors[caret] & 0xFF) == 0x30
+
+    # These are independent terminal-cell positions: prompt 1, e+accent 1,
+    # CJK 2, emoji 2, Z 1. ReadConsoleOutputW cannot expose the full combining
+    # text; raw preservation and cluster segmentation have separate fixtures.
+    frame = console.wait(lambda f: anchored(f, 6, 7), "Unicode cell widths and end caret")
+    assert frame["cell_units"][-2][2] == 0x4E2D, "CJK glyph lost in VT projection"
+    assert has_bar(frame), "Unicode editor displaced the independent function bar"
+    console.key(0x25)
+    console.wait(lambda f: anchored(f, 6, 6), "caret before final ASCII glyph")
+    console.key(0x25)
+    console.wait(lambda f: anchored(f, 6, 4), "caret skips the complete supplementary grapheme")
+    console.key(8, "\b")
+    console.wait(lambda f: anchored(f, 4, 2), "backspace removes the preceding whole CJK grapheme")
+    console.key(0x2E)
+    console.wait(lambda f: anchored(f, 2, 2), "delete removes the complete supplementary grapheme")
+    console.key(0x24)
+    console.key(0x2E)
+    console.wait(lambda f: f["rows"][-2].startswith(":Z")
+                 and (f["attributes"][-2][1] & 0xFF) == 0x30,
+                 "delete removes base plus combining accent as one grapheme")
+    console.key(ord("U"), "\x15", 8)
+    console.type("\U0001f469\u200d\U0001f4bbZ")
+    console.wait(lambda f: f["rows"][-2][3] == "Z"
+                 and (f["attributes"][-2][4] & 0xFF) == 0x30,
+                 "ZWJ sequence occupies its two-cell layout allocation")
+    console.key(0x24)
+    console.key(0x2E)
+    console.wait(lambda f: f["rows"][-2].startswith(":Z"), "delete removes the complete ZWJ sequence")
+    console.key(27, "\x1b")
+    console.wait(lambda f: is_main(f) and has_bar(f) and not editor_contains(f, ":Z"),
+                 "Unicode editor cancellation returns to main")
+    console.stop()
+    observations["checks"].append(
+        "native Unicode cell anchors and caret positions for combining/CJK/supplementary/ZWJ text, whole-grapheme deletion, independent function bar")
 
 
 def readonly_contract(console, exe, directory, pids, fixtures, observations):
@@ -1007,6 +1075,7 @@ def worker(exe, output):
             retained_frame_contract(console, exe, Path(temp), pids, observations)
             sampling_click_contract(console, exe, Path(temp), pids, observations)
             setup_contract(console, exe, Path(temp), pids, observations)
+            unicode_layout_contract(console, exe, Path(temp), pids, observations)
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
             churn_contract(console, exe, Path(temp), pids, fixtures, observations)
             recovery_contract(console, exe, Path(temp), pids, observations)

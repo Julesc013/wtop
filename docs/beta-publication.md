@@ -1,8 +1,10 @@
 # Draft staging and deliberate public promotion
 
 The supplied [Beta 2 plan](beta2-plan.md) authorizes automatic alpha/beta gates and
-retains human approval for stable releases. This task requests a **draft**, so the
-master-push path creates only a draft prerelease. Public publication always needs
+retains human approval for stable releases. The master-push path creates only a
+draft prerelease. Beta 3 may be publicly promoted when its separately checked
+prerelease gates pass; user authorization does not substitute for those results.
+Public publication always needs
 an explicit dispatch operation. Stable versions are refused by prerelease tooling.
 
 ## Build and draft

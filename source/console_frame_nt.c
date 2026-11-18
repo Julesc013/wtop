@@ -127,7 +127,10 @@ static int write_vt_rectangle(void *context, const wtop_frame *frame, const wtop
     DWORD written, request;
     if (!viewport_matches(host)) return 0;
     for (y = r->top; y <= r->bottom; ++y) {
-        count = swprintf(sequence, 48, L"\x1b[%d;%dH", y + 1, r->left + 1);
+        /* The Windows VT adapter anchors absolute rows to the active page,
+           but columns to the buffer, not the horizontally scrolled viewport.
+           See Microsoft Terminal AdaptDispatch::_CursorMovePosition. */
+        count = swprintf(sequence, 48, L"\x1b[%d;%dH", y + 1, host->left + r->left + 1);
         if (count < 1 || !vt_append(host, &used, sequence, (size_t)count)) return 0;
         for (x = r->left; x <= r->right; ++x) {
             const wtop_cell *cell = frame->back + (size_t)y * (size_t)frame->width + (size_t)x;

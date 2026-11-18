@@ -43,6 +43,9 @@ def run_restricted(arguments: list[str], cwd: Path, timeout: int = 600) -> int:
     kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
     kernel.GetExitCodeProcess.argtypes = [w.HANDLE, ctypes.POINTER(w.DWORD)]
     kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+    kernel.GetErrorMode.restype = w.UINT
+    kernel.SetErrorMode.argtypes = [w.UINT]
+    kernel.SetErrorMode.restype = w.UINT
     security.OpenProcessToken.argtypes = [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)]
     security.ConvertStringSidToSidW.argtypes = [w.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
     security.CreateRestrictedToken.argtypes = [w.HANDLE, w.DWORD, w.DWORD,
@@ -76,9 +79,18 @@ def run_restricted(arguments: list[str], cwd: Path, timeout: int = 600) -> int:
             ctypes.sizeof(integrity) + security.GetLengthSid(medium)))
         startup = STARTUPINFO(); startup.cb = ctypes.sizeof(startup)
         command = ctypes.create_unicode_buffer(subprocess.list2cmdline(arguments))
-        checked(security.CreateProcessAsUserW(restricted, str(Path(arguments[0]).resolve()),
-            command, None, None, False, 0x08000000 | 0x00000400, None,
-            str(cwd.resolve()), ctypes.byref(startup), ctypes.byref(process)))
+        # A loader/crash/open-file error must produce a process failure rather
+        # than an invisible modal dialog in this unattended owned fixture. The
+        # child inherits this error mode; the caller's mode is restored even if
+        # process creation fails. No machine/user registry setting is changed.
+        previous_error_mode = kernel.GetErrorMode()
+        kernel.SetErrorMode(previous_error_mode | 0x0001 | 0x0002 | 0x8000)
+        try:
+            checked(security.CreateProcessAsUserW(restricted, str(Path(arguments[0]).resolve()),
+                command, None, None, False, 0x08000000 | 0x00000400, None,
+                str(cwd.resolve()), ctypes.byref(startup), ctypes.byref(process)))
+        finally:
+            kernel.SetErrorMode(previous_error_mode)
         waited = kernel.WaitForSingleObject(process.hProcess, timeout * 1000)
         if waited == 258:
             # Only this owned test child is terminated. The caller must retain

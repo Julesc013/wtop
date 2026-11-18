@@ -1560,7 +1560,7 @@ static void PollSystemInfo(void)
     memset(&Performance, 0, sizeof(Performance));
     Performance.cb = sizeof(Performance);
     if(GetPerformanceInfo(&Performance, sizeof(Performance))) {
-        wtop_counter Bytes, Limit;
+        wtop_counter Bytes = {0, 0}, Limit = {0, 0};
         wtop_counter PageSize = CounterValue((ULONGLONG)Performance.PageSize);
         if(PageSize.high) SystemCommitState = WTOP_METRIC_CAPACITY;
         else SystemCommitState = wtop_commit_bytes(CounterValue((ULONGLONG)Performance.CommitTotal),

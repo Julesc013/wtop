@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes as C
 from ctypes import wintypes as W
 from datetime import datetime, timezone
+import faulthandler
 import hashlib
 import json
 import os
@@ -43,6 +44,13 @@ def checked(value):
 
 def write_receipt(path, data):
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def checkpoint(path, receipt, name):
+    receipt["stage"] = name
+    receipt.setdefault("progress", []).append({"stage": name,
+        "at_utc": datetime.now(timezone.utc).isoformat()})
+    write_receipt(path, receipt)
 
 
 def context():
@@ -110,15 +118,21 @@ class ResourceReader:
                 "user_100ns": str(units[3])}
 
 
-def run_json(exe, *args):
+def run_json(exe, *args, progress=None):
+    mark = progress or (lambda _: None)
+    mark("job_create")
     job = FixtureJob()
     process = None
     try:
+        mark("process_create")
         process = subprocess.Popen([exe, *args, "--format", "json", "--interval", "100", "--no-config"],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    encoding="utf-8", errors="strict")
+        mark("job_assign")
         job.assign(process)
+        mark("process_wait")
         out, error = process.communicate(timeout=20)
+        mark("process_exited")
         assert process.returncode in (0, 3), (process.returncode, error)
         data = json.loads(out)
         assert data["schema"] == 2, data
@@ -126,6 +140,7 @@ def run_json(exe, *args):
     finally:
         # The restricted harness also owns one-shot children. Its own forced
         # exit closes this non-inherited job, including a blocked monitor.
+        mark("job_close")
         job.close()
         if process is not None and process.poll() is None:
             process.kill()  # Handles the unassigned-child failure case only.
@@ -201,8 +216,8 @@ def console_worker(exe, output):
 
 def restricted_worker(exe, output):
     receipt = {"schema": 1, "kind": "native-resource-observations", "result": "failed",
-               "at_utc": datetime.now(timezone.utc).isoformat(), "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
-               "source_revision": os.environ.get("GITHUB_SHA"), "context": context(),
+               "at_utc": datetime.now(timezone.utc).isoformat(),
+               "source_revision": os.environ.get("GITHUB_SHA"),
                "queries": [], "console_workers": [], "human_review": False,
                "limits": ["restricted same-user medium token; no human desktop/UAC qualification",
                           "short resource window and coarse growth gates; not proof of absence of every leak",
@@ -211,17 +226,24 @@ def restricted_worker(exe, output):
     jobs = []
     workers = []
     try:
+        checkpoint(output, receipt, "binary_identity")
+        receipt["exe_sha256"] = hashlib.sha256(Path(exe).read_bytes()).hexdigest()
+        checkpoint(output, receipt, "token_context")
+        receipt["context"] = context()
         assert_restricted(receipt["context"])
+        checkpoint(output, receipt, "token_context_verified")
         reader = ResourceReader()
         # Prime ctypes and subprocess before measuring the test harness itself.
-        warm, code = run_json(exe, "inspect", str(os.getpid()), "--image-path")
+        warm, code = run_json(exe, "inspect", str(os.getpid()), "--image-path",
+            progress=lambda name: checkpoint(output, receipt, "warm_query:" + name))
         assert code == 0 and warm["providers"]["image_path"]["status"] == "valid", warm
         receipt["profile"] = warm["profile"]; receipt["version"] = warm["version"]
         baseline = reader.read(reader.k.GetCurrentProcess())
         for index in range(6):
             for args in (("query", "processes", "--pid", str(os.getpid())),
                          ("inspect", str(os.getpid()), "--image-path", "--threads", "--affinity", "--readonly")):
-                data, code = run_json(exe, *args)
+                data, code = run_json(exe, *args,
+                    progress=lambda name: checkpoint(output, receipt, f"query_{index}_{args[0]}:" + name))
                 assert [row["pid"] for row in data["processes"]] == [os.getpid()], data
                 states = {name: value["status"] for name, value in data.get("providers", {}).items()}
                 if args[0] == "inspect":
@@ -245,18 +267,22 @@ def restricted_worker(exe, output):
                 startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startup.wShowWindow = 0
                 job = FixtureJob(); jobs.append(job)
+                checkpoint(output, receipt, f"console_{index}:process_create")
                 process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), exe,
                     "--console-worker", str(destination)], creationflags=subprocess.CREATE_NEW_CONSOLE,
                     startupinfo=startup, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 workers.append((process, destination))
+                checkpoint(output, receipt, f"console_{index}:job_assign")
                 job.assign(process)
                 process.stdin.write(b"start\n"); process.stdin.flush()
-            for process, destination in workers:
+            for index, (process, destination) in enumerate(workers):
+                checkpoint(output, receipt, f"console_{index}:process_wait")
                 out, error = process.communicate(timeout=60)
                 if destination.exists():
                     receipt["console_workers"].append(json.loads(destination.read_text(encoding="utf-8")))
                 assert process.returncode == 0, (process.returncode, out.decode("utf-8", "replace"), error.decode("utf-8", "replace"))
                 assert destination.exists(), "console helper produced no resource receipt"
+                checkpoint(output, receipt, f"console_{index}:completed")
             observations = receipt["console_workers"]
             assert len(observations) == 3 and all(item["result"] == "passed" for item in observations)
             assert len({item["monitor_pid"] for item in observations}) == 3
@@ -269,13 +295,15 @@ def restricted_worker(exe, output):
         raise
     finally:
         cleanup_errors = []
-        for job in jobs:
+        for index, job in enumerate(jobs):
             try:
+                checkpoint(output, receipt, f"cleanup_job_{index}")
                 job.close()  # Includes each helper's monitor/provider descendants.
             except BaseException:
                 cleanup_errors.append(traceback.format_exc())
-        for process, _ in workers:
+        for index, (process, _) in enumerate(workers):
             try:
+                checkpoint(output, receipt, f"cleanup_process_{index}")
                 if process.poll() is None:
                     process.kill()  # Only a still-gated helper if assignment failed.
                 process.communicate(timeout=5)
@@ -300,7 +328,19 @@ def main():
             raise SystemExit("resource console worker did not receive its job gate")
         console_worker(exe, Path(sys.argv[3])); return
     if len(sys.argv) == 4 and sys.argv[2] == "--restricted-worker":
-        restricted_worker(exe, Path(sys.argv[3])); return
+        output = Path(sys.argv[3])
+        write_receipt(output, {"schema": 1, "kind": "native-resource-observations", "result": "running",
+            "stage": "restricted_python_entry", "human_review": False})
+        with output.with_suffix(".stack.txt").open("w", encoding="utf-8") as stack:
+            # Diagnostic only: do not terminate, waive a gate or extend the
+            # unchanged outer 180-second bound. Native-call frames are retained
+            # even when Python cannot unwind into a finally block.
+            faulthandler.dump_traceback_later(30, repeat=True, file=stack)
+            try:
+                restricted_worker(exe, output)
+            finally:
+                faulthandler.cancel_dump_traceback_later()
+        return
     if len(sys.argv) == 4 and sys.argv[2] == "--observations":
         output = Path(sys.argv[3]).resolve()
     elif len(sys.argv) == 2:
@@ -315,10 +355,18 @@ def main():
         code = run_restricted([sys.executable, str(Path(__file__).resolve()), exe,
                               "--restricted-worker", str(output)], Path.cwd(), timeout=180)
     except BaseException:
-        if not output.exists():
-            write_receipt(output, {"schema": 1, "kind": "native-resource-observations", "result": "failed",
-                "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
-                "outer_context": outer_context, "failure": traceback.format_exc(), "human_review": False})
+        receipt = {"schema": 1, "kind": "native-resource-observations", "human_review": False}
+        if output.exists():
+            try:
+                receipt = json.loads(output.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                receipt["partial_receipt"] = output.read_text(encoding="utf-8", errors="replace")
+        receipt.update({"result": "failed", "exe_sha256": hashlib.sha256(Path(exe).read_bytes()).hexdigest(),
+                        "outer_context": outer_context, "outer_failure": traceback.format_exc()})
+        stack = output.with_suffix(".stack.txt")
+        if stack.exists():
+            receipt["blocked_worker_stacks"] = stack.read_text(encoding="utf-8", errors="replace")
+        write_receipt(output, receipt)
         raise
     if not output.exists():
         write_receipt(output, {"schema": 1, "kind": "native-resource-observations", "result": "failed",

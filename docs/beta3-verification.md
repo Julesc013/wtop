@@ -210,6 +210,24 @@ production input/tree/inspection code. It is compile evidence only. Final native
 x86/x64/ARM64 runs, installer fixtures, security scans and uploaded-byte checks
 must be read from the exact release workflow; no Beta 2 receipt is reused.
 
+### First native integration attempt
+
+Source `d08d1de19ad91e5ab8a57397f3e78014905ab97c` was tested in
+[Windows checks run 44262855930](https://github.com/Julesc013/wtop/actions/runs/44262855930).
+All three profiles compiled and passed 22 of 25 native-suite entries, including
+provider, thread/affinity, asynchronous inspection, settings, input and tree
+fixtures. Three failures were retained: moved-viewport console positioning, an
+external Setup fixture still expecting the old text projection, and the new
+restricted-token resource fixture reaching its 180-second outer bound. These
+results do not qualify that attempt for release.
+
+The parallel packaging attempt also found a temporary-repository CRLF/LF mismatch
+in the third-party-notice test. Its fixture now uses explicit LF bytes and the
+production Git attributes; the production corresponding-source byte check is
+unchanged. The workflow's missing `beta3-changes.md` input was supplied. Corrected
+native results must come from the later exact-source workflow and final receipts;
+this failure record is retained rather than retroactively labelled successful.
+
 ## Remaining work and recommended sequence
 
 1. **Finish exact Beta 3 qualification:** resolve actual native fixture failures,

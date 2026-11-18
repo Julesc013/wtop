@@ -74,10 +74,10 @@ class BundleBoundary(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.source=self.root/'source';self.source.mkdir()
-        for filename in ('LICENSE','source/wtop.conf','spec/catalog/targets.json'):
+        for filename in ('.gitattributes','LICENSE','source/wtop.conf','spec/catalog/targets.json'):
             destination=self.source/filename;destination.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(ROOT/filename,destination)
-        (self.source/'VERSION').write_text(VERSION+'\n')
+        (self.source/'VERSION').write_bytes((VERSION+'\n').encode('ascii'))
         for args in (['init','-q'],['-c','core.autocrlf=false','add','.'],
                      ['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','fixture only']):
             subprocess.run(['git','-C',str(self.source),*args],check=True,capture_output=True)
@@ -134,8 +134,11 @@ class BundleBoundary(unittest.TestCase):
         with self.assertRaises(BetaError):assemble([self.root/'input-x64'],self.notes,output,root=self.source)
 
     def test_beta3_carries_exact_third_party_notices_without_changing_beta2(self):
-        (self.source/'VERSION').write_text('0.4.0-beta.3\n')
-        (self.source/'THIRD-PARTY-NOTICES.md').write_text('Synthetic licensed dependency notice for protocol test only.\n')
+        # Text-mode writes on Windows would produce CRLF while Git stores LF.
+        # Keep carrier/source byte identity and the production attributes policy;
+        # the verifier must not normalize away a real payload mismatch.
+        (self.source/'VERSION').write_bytes(b'0.4.0-beta.3\n')
+        (self.source/'THIRD-PARTY-NOTICES.md').write_bytes(b'Synthetic licensed dependency notice for protocol test only.\n')
         subprocess.run(['git','-C',str(self.source),'add','.'],check=True,capture_output=True)
         subprocess.run(['git','-C',str(self.source),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid',
                         '-c','commit.gpgsign=false','commit','-qm','beta3 fixture'],check=True,capture_output=True)
