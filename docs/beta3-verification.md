@@ -372,6 +372,26 @@ elevation and integrity. Server policy refusal and restricted resource stress
 coverage retain their distinct, explicit meanings. Native results must still
 qualify this corrected client context; no human desktop receipt is synthesized.
 
+Candidate `16ed8d1aa3cf7fe92cc41dc38ce0a13f034b815a`, tested as PR merge
+`f405c090870eb4d1c5857443ca4eb5d12b61700a` in
+[checks run 44276661784](https://github.com/Julesc013/wtop/actions/runs/44276661784),
+established the fresh account's distinct SID, ordinary Users membership,
+`TokenElevation=false`, medium integrity and unfiltered token. Its private
+profile/environment, owned process retirement and account/profile/staging
+cleanup passed. Elevated per-user and machine lifecycle sequences also passed.
+The fresh-user MSI process nevertheless failed **before package evaluation**:
+its log reported execution and logging mutex access denied (system error 5),
+then returned 1603. No ordinary-user installation passed at this checkpoint.
+
+The next fixture sequence runs the fresh-account lifecycle before the parent
+process loads MSI APIs or performs elevated transactions, and records the
+attempt order. This tests whether earlier client initialization affected the
+shared session. It does not establish that explanation in advance, change
+Windows Installer policy or synchronization-object ACLs, or waive any lifecycle
+assertion. Shared-session, cross-user coexistence remains a distinct test.
+Even successful alternate-credential account automation does not establish
+interactive-logon Group Policy, human UAC or desktop acceptance.
+
 ## Remaining work and recommended sequence
 
 1. **Finish exact Beta 3 qualification:** resolve actual native fixture failures,

@@ -720,7 +720,7 @@ def main(argv=None) -> int:
     observations = {"schema": "wtop.install-observations/2", "kernel": sys.getwindowsversion().build,
                     "product_type": sys.getwindowsversion().product_type,
                     "token_context": None,
-                    "scope_results": [], "qualified": False,
+                    "scope_results": [], "scope_attempt_order": [], "qualified": False,
                     "limits": ["hostile same-user preflight/deferred-recheck-to-mutation race",
                                "standard-user UAC boundary when runner elevated", "power loss/restart recovery",
                                "host matrix", "real prior-release application/version upgrade",
@@ -752,16 +752,29 @@ def main(argv=None) -> int:
         observations["profile"] = manifest['payload']['profile']
         observations["msi_version"] = manifest['installer']['msi_version']
         observations["installer_sha256"] = next(item['sha256'] for item in manifest['artifacts'] if item['kind'] == 'msi')
+        if args.standard_user:
+            require(token["is_user_an_admin"] and token["token_elevation"],
+                    "fresh-account fixture requires the disposable elevated parent")
+            # Keep fresh-account acceptance ahead of all caller MSI APIs. The
+            # ctypes-loaded MSI library can outlive its immediate query. A
+            # later different-user probe can inherit that session's client
+            # preconditioning, which is a separate coexistence qualification.
+            observations["scope_attempt_order"].append("fresh_standard_account_per_user")
+            run_standard_account(candidate, manifest, observations)
         if args.require_ordinary_token and args.expect_restricted_user_policy_refusal:
+            observations["scope_attempt_order"].append("restricted_server_policy_refusal")
             observations["policy_refusal"] = run_server_policy_probe(candidate, manifest, logs)
             observations["policy_refusal_verified"] = True
         else:
+            observations["scope_attempt_order"].append("current_account_per_user")
             observations["scope_results"].append(run_scope(candidate, manifest, "user", logs))
         if args.machine:
             require(token["is_user_an_admin"] and token["token_elevation"], "machine fixture requires an elevated disposable runner")
+            observations["scope_attempt_order"].append("current_account_per_machine")
             observations["scope_results"].append(run_scope(candidate, manifest, "machine", logs))
         if args.restricted_user:
             require(token["is_user_an_admin"] and token["token_elevation"], "restricted-token launcher requires the disposable elevated parent")
+            observations["scope_attempt_order"].append("same_user_restricted_server_policy")
             sys.path.insert(0, str(ROOT / "packaging"))
             from restricted_process import run_restricted
             command = [sys.executable, str(Path(__file__).resolve()), str(candidate),
@@ -777,10 +790,6 @@ def main(argv=None) -> int:
             if args.expect_restricted_user_policy_refusal:
                 require(ordinary.get("policy_refusal_verified") is True and not ordinary.get("scope_results"),
                         "Server child did not verify policy refusal separately from installation")
-        if args.standard_user:
-            require(token["is_user_an_admin"] and token["token_elevation"],
-                    "fresh-account fixture requires the disposable elevated parent")
-            run_standard_account(candidate, manifest, observations)
     except (OSError, ValueError, AssertionError, RuntimeError, subprocess.SubprocessError) as exc:
         observations["failure"] = str(exc)
         observations["failure_traceback"] = traceback.format_exc()
