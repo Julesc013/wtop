@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import unittest
 import uuid
 from pathlib import Path
@@ -27,6 +28,19 @@ from package_candidate import sha256, verify, third_party_notices_required
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def cleanup_preserving_failure(cleanup):
+    """Do not hide the actual failed step behind a second cleanup failure."""
+    primary = sys.exc_info()[1]
+    try:
+        cleanup()
+    except Exception:
+        if primary is None:
+            raise
+        # Keep both failures in the receipt, including on supported Python 3.10
+        # which does not have BaseException.add_note yet.
+        primary.fixture_cleanup_failure = traceback.format_exc()
 
 
 def install_scope_arguments(scope):
@@ -46,6 +60,24 @@ class InstallScopeArguments(unittest.TestCase):
         self.assertEqual(install_scope_arguments("user"), ["ALLUSERS=2", "MSIINSTALLPERUSER=1"])
         with self.assertRaises(ValueError):
             install_scope_arguments("unknown")
+
+    def test_failed_cleanup_retains_the_primary_failure_and_both_traces(self):
+        def failing_cleanup():
+            raise RuntimeError("cleanup sentinel")
+
+        with self.assertRaisesRegex(ValueError, "primary sentinel") as caught:
+            try:
+                raise ValueError("primary sentinel")
+            finally:
+                cleanup_preserving_failure(failing_cleanup)
+        self.assertIn("RuntimeError: cleanup sentinel", caught.exception.fixture_cleanup_failure)
+
+    def test_cleanup_failure_is_fatal_without_an_earlier_failure(self):
+        def failing_cleanup():
+            raise RuntimeError("cleanup sentinel")
+
+        with self.assertRaisesRegex(RuntimeError, "cleanup sentinel"):
+            cleanup_preserving_failure(failing_cleanup)
 
 
 def msi_call(arguments, log: Path, expect_success=True, expected_reason=None):
@@ -76,6 +108,10 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
     api.MsiOpenDatabaseW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.POINTER(handle)]
     api.MsiDatabaseOpenViewW.argtypes = [handle, ctypes.c_wchar_p, ctypes.POINTER(handle)]
     api.MsiViewExecute.argtypes = [handle, handle]
+    api.MsiViewFetch.argtypes = [handle, ctypes.POINTER(handle)]
+    api.MsiViewModify.argtypes = [handle, ctypes.c_int, handle]
+    api.MsiRecordGetStringW.argtypes = [handle, ctypes.c_uint, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint)]
+    api.MsiRecordSetStringW.argtypes = [handle, ctypes.c_uint, ctypes.c_wchar_p]
     api.MsiViewClose.argtypes = [handle]
     api.MsiCloseHandle.argtypes = [handle]
     api.MsiDatabaseCommit.argtypes = [handle]
@@ -91,9 +127,50 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
         new_version = f"{major}.{minor}.{build + delta}"
         statements = [f"UPDATE `Property` SET `Value`='{value}' WHERE `Property`='{key}'"
                       for key, value in (("ProductCode", product), ("ProductVersion", new_version))]
-        # WiX encodes version bounds in Upgrade, independently of ProductVersion.
-        statements += [f"UPDATE `Upgrade` SET `{field}`='{new_version}' WHERE `{field}`='{version}'"
-                       for field in ("VersionMin", "VersionMax")]
+        # VersionMin/Max are part of Upgrade's primary key. MSI SQL UPDATE
+        # cannot change them; fetched records need MSIMODIFY_REPLACE (4).
+        # Preserve every other field, including NULL bounds and attributes.
+        # https://learn.microsoft.com/windows/win32/api/msiquery/nf-msiquery-msiviewmodify
+        if new_version != version:
+            query = "SELECT `UpgradeCode`,`VersionMin`,`VersionMax`,`Language`,`Attributes`,`Remove`,`ActionProperty` FROM `Upgrade`"
+            upgrade_view = handle()
+            result = api.MsiDatabaseOpenViewW(database, query, ctypes.byref(upgrade_view))
+            require(result == 0, f"cannot open Upgrade fixture view ({result})")
+            records = []
+            try:
+                result = api.MsiViewExecute(upgrade_view, 0)
+                require(result == 0, f"cannot read Upgrade fixture rows ({result})")
+                # Fetch first so replacing a primary key cannot affect iteration.
+                while True:
+                    record = handle()
+                    result = api.MsiViewFetch(upgrade_view, ctypes.byref(record))
+                    if result == 259:  # ERROR_NO_MORE_ITEMS
+                        break
+                    require(result == 0, f"cannot fetch Upgrade fixture row ({result})")
+                    records.append(record)
+                    require(len(records) <= 16, "unexpected number of Upgrade fixture rows")
+                changed = 0
+                for record in records:
+                    replace = False
+                    for field in (2, 3):
+                        text = ctypes.create_unicode_buffer(32)
+                        capacity = ctypes.c_uint(len(text))
+                        result = api.MsiRecordGetStringW(record, field, text, ctypes.byref(capacity))
+                        require(result == 0, f"cannot read Upgrade version bound ({result})")
+                        if text.value == version:
+                            result = api.MsiRecordSetStringW(record, field, new_version)
+                            require(result == 0, f"cannot set Upgrade fixture version bound ({result})")
+                            replace = True
+                    if replace:
+                        result = api.MsiViewModify(upgrade_view, 4, record)
+                        require(result == 0, f"cannot replace Upgrade fixture key ({result})")
+                        changed += 1
+                require(changed > 0, "Upgrade fixture has no matching version bounds")
+            finally:
+                for record in records:
+                    api.MsiCloseHandle(record)
+                api.MsiViewClose(upgrade_view)
+                api.MsiCloseHandle(upgrade_view)
         if fail_after_execute:
             # Test-copy only. InstallExecute applies the generated transaction;
             # the following type-19 action then requests failure/real rollback.
@@ -104,9 +181,11 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
             ]
         for statement in statements:
             view = handle()
-            require(api.MsiDatabaseOpenViewW(database, statement, ctypes.byref(view)) == 0, "cannot author test MSI fixture")
+            result = api.MsiDatabaseOpenViewW(database, statement, ctypes.byref(view))
+            require(result == 0, f"MsiDatabaseOpenViewW failed ({result}): {statement}")
             try:
-                require(api.MsiViewExecute(view, 0) == 0, "cannot update test MSI property")
+                result = api.MsiViewExecute(view, 0)
+                require(result == 0, f"MsiViewExecute failed ({result}): {statement}")
             finally:
                 api.MsiViewClose(view)
                 api.MsiCloseHandle(view)
@@ -191,6 +270,25 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
     foreign_value = "FixtureForeign-" + uuid.uuid4().hex
     installed = False
     path_before = registry_path_values()
+
+    def cleanup_fixture():
+        if installed:
+            # Restore only this harness's just-installed fixture, then ask its
+            # actual owner to remove it. Never recursively delete a payload root.
+            (directory / "wtop.exe").write_bytes(original)
+            msi_call(["/x", product], logs / f"{scope}-cleanup.log")
+        for path in (sentinel, config):
+            if path.exists():
+                path.unlink()
+        # Remove only empty directories which this fixture created. A foreign
+        # addition causes rmdir to fail and is preserved; never recurse.
+        for path, created in ((directory, created_directory), (directory.parent, created_parent)):
+            if created and path.exists():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+
     try:
         msi_call(["/i", str(msi), *scope_arguments, "DISABLEROLLBACK=1"],
                  logs / f"{scope}-rollback-disabled-refusal.log", False, "requires Windows Installer rollback")
@@ -288,22 +386,7 @@ def run_scope(candidate: Path, manifest: dict, scope: str, logs: Path) -> dict:
                 "untrusted_machine_destination_refused": True if machine else None,
                 "foreign_file_and_registry_value_preserved": True, "user_data_preserved": True}
     finally:
-        if installed:
-            # Restore only this harness's just-installed fixture, then ask its
-            # actual owner to remove it. Never recursively delete a payload root.
-            (directory / "wtop.exe").write_bytes(original)
-            msi_call(["/x", product], logs / f"{scope}-cleanup.log")
-        for path in (sentinel, config):
-            if path.exists():
-                path.unlink()
-        # Remove only empty directories which this fixture created. A foreign
-        # addition causes rmdir to fail and is preserved; never recurse.
-        for path, created in ((directory, created_directory), (directory.parent, created_parent)):
-            if created and path.exists():
-                try:
-                    path.rmdir()
-                except OSError:
-                    pass
+        cleanup_preserving_failure(cleanup_fixture)
 
 
 def main(argv=None) -> int:
@@ -356,7 +439,10 @@ def main(argv=None) -> int:
                     "restricted ordinary-user MSI fixture failed; retain its independent logs")
     except (OSError, ValueError, AssertionError, subprocess.SubprocessError) as exc:
         observations["failure"] = str(exc)
-        print(str(exc), file=sys.stderr)
+        observations["failure_traceback"] = traceback.format_exc()
+        if hasattr(exc, "fixture_cleanup_failure"):
+            observations["cleanup_failure_traceback"] = exc.fixture_cleanup_failure
+        traceback.print_exc()
         return 1
     finally:
         (candidate / ("native-install-observations" + suffix + ".json")).write_text(json.dumps(observations, indent=2) + "\n", encoding="utf-8")

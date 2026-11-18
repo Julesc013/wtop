@@ -203,8 +203,11 @@ identity and hashes. No public manifest pull request, bucket, community feed,
 package submission or hosting is authorized by this task. External schema/client
 validation and channel policies are additional publication gates.
 
-Restricted-token automation disables administrator membership/privileges and
-uses medium integrity. It is useful evidence of ordinary process permissions;
+Restricted-token automation makes administrator membership deny-only, removes
+privileges and uses medium integrity. The workload confirms `IsUserAnAdmin=false`
+and integrity RID 8192; the inherited `TokenElevation` flag remains true. This is
+restricted same-user medium-token automation, not a separate standard account.
+It is useful evidence of restricted process permissions;
 it is **not** a fresh user profile, interactive UAC review, Windows Terminal
 appearance review or a person's desktop acceptance. Resource fixtures are bounded
 observations with recorded duration/provider load, not proof of zero leaks or
@@ -260,6 +263,48 @@ with process status `0xC0000142` (DLL initialization failure). Those permissions
 process-launch results remain separate from ordinary TUI and provider evidence.
 The later exact-source native run must qualify both repairs; this attempt is not
 release acceptance.
+
+### Native application qualification checkpoint
+
+Candidate head `269307921de94e2a15025a7dad4f1b7a2781ec89` was tested as PR merge
+revision `9267af9cc91460d92ef0f40c415efa03920920d1` in
+[Windows checks run 44267580472](https://github.com/Julesc013/wtop/actions/runs/44267580472).
+All **25 native CTest entries passed on Win32, x64 and ARM64**. Win32 and ARM64
+jobs completed successfully; the x64 job failed later in the separate MSI
+lifecycle step. This checkpoint qualifies the observed application tests, not
+the installer or a later release's bytes.
+
+The intervening native repairs retained exact viewport/caret/button assertions,
+fixed the cell-grid readback and asynchronous thread-panel fixture, and supplied
+explicit current-user/SYSTEM object access for the restricted workload. Its
+previous default object DACL granted full access to Administrators/SYSTEM while
+Administrators was deny-only. Token owner was already the current user; changing
+owner is not the demonstrated cause of the repair. The original parent token and
+interactive desktop ACLs remain unchanged.
+
+Each architecture ran 12 one-shot queries and three concurrent TUIs, measured for
+approximately ten seconds after a two-second warm-up. SHA256-bound diagnostic
+receipts record these bounded observations:
+
+| Profile | CPU, percent of one logical core | Maximum private-byte growth | Maximum Ctrl-C retirement |
+| --- | ---: | ---: | ---: |
+| Win32 | 0.937–1.406% | 135,168 bytes | 9.79 ms |
+| x64 | 1.250–1.718% | 425,984 bytes | 7.80 ms |
+| ARM64 | 1.562–1.719% | 221,184 bytes | 7.19 ms |
+
+All nine monitor processes exited zero; monitor and repeated-query harness handle
+growth was zero. These short windows are not long-run leak or performance proofs.
+All three native hosts selected conservative grapheme projection: full Windows
+Terminal shaping and human desktop acceptance remain separate gates.
+
+MSI reached real per-user install and same-version refusal, then exposed two
+independent defects. A deferred removal guard ran after `RemoveRegistryValues`
+had deleted the owner record it needed. The upgrade fixture also attempted to
+SQL-update primary-key version bounds in the `Upgrade` table, which MSI rejects;
+cleanup had masked that primary error. The repair moves removal validation before
+owned registry removal, uses bounded fetched-record replacement for changed keys,
+and retains both primary and cleanup traces. The next exact-source native run
+must qualify the repair and remaining lifecycle cases; no result is inferred here.
 
 ## Remaining work and recommended sequence
 

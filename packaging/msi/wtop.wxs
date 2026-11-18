@@ -60,7 +60,10 @@
       <!-- Runs inside direct msiexec installation, removal and repair, not just
            an optional download/bootstrap script. Preflight does not mutate. -->
       <Custom Action="CheckOwnedPayload" Before="InstallInitialize" />
-      <Custom Action="RecheckBeforeRemove" Before="RemoveFiles" Condition="Installed" />
+      <!-- Verify the owner while its registration still exists. Checking only
+           before RemoveFiles is too late: RemoveRegistryValues has removed the
+           very owner record the deferred guard must validate. -->
+      <Custom Action="RecheckBeforeRemove" Before="RemoveRegistryValues" Condition="Installed" />
       <Custom Action="RecheckBeforeInstall" Before="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>
   </Package>

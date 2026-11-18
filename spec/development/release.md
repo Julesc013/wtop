@@ -106,8 +106,9 @@ alpha/beta publication after automatic gates. Human desktop review is valuable
 but is not a mandatory alpha/beta prerequisite. Stable publication still requires
 ordinary-user desktop evidence, human interaction review and final-byte approval.
 This change is an authorized channel policy, not an automatically synthesized
-human receipt. The present task requests a **draft**; no automatic master push
-may publicly publish it.
+human receipt. An automatic master push stages only a **draft**. Public Beta 3
+promotion is separately user-authorized when its prerelease gates pass; it remains
+an explicit publication operation and cannot be implied by a source push.
 
 A draft may record a missing optional observation or unavailable security scanner
 truthfully. Failed required tests, changed payloads, invalid signatures or a

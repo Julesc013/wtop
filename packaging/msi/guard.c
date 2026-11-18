@@ -2,7 +2,8 @@
  * Callback: UINT WINAPI(MSIHANDLE), synchronous MSI execution thread. All native
  * handles belong to this invocation and are retired before return. No process,
  * background worker, file modification or registry mutation is performed here.
- * The immediate check schedules a deferred recheck beside each file action.
+ * The immediate check schedules deferred rechecks before owned registry removal
+ * and before file installation. The removal check needs the existing owner.
  * Neither is an atomic compare-and-delete/replace against a hostile same-user
  * actor. Machine scope is additionally confined to protected Program Files.
  * Promotion remains blocked until that residual boundary is qualified. */

@@ -248,10 +248,12 @@ References: [command catalog](spec/catalog/commands.json),
   locked executables and interrupted install/uninstall.
 - [ ] Keep preferences outside WinGet/MSI payload ownership; provide explicit
   remove-settings behavior without deleting arbitrary parent directories.
-- [ ] Define stable/prerelease/artifact names, version-to-MSI mapping and source
-  correspondence; reject collisions or unsupported version ranges.
-- [ ] Create exact-architecture WinGet manifests only after the acquired payload
-  is qualified. Do not repeat NTop's inspected neutral/x64 mismatch.
+- [ ] Qualify the implemented shared stable/prerelease/artifact version ledger,
+  MSI mapping and corresponding-source delivery across the actual release set;
+  retain collision/range refusal and signing/acquisition boundaries.
+- [ ] Validate prepared WinGet/Scoop/Chocolatey inputs with their native clients
+  and actual acquired payloads, including scope, aliases and removal. Preparation
+  uses exact architectures; no listing, bucket or feed is published by this work.
 - [ ] Document GitHub downloads with exact profile/digest and offline-copy paths
   for historical hosts. Do not require remote-script evaluation to install.
 - [ ] Retire or explicitly replace inherited `source/ntop.nuspec` before any
