@@ -99,7 +99,7 @@ jobs:
         # Exercise the independent installer boundary even when native runtime
         # tests failed. A failed native/MSI step still fails this entire job;
         # assembly and publication retain their successful-build dependency.
-        if: ${{ !cancelled() && steps.candidate.outcome == 'success' && matrix.arch == 'x64' }}
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' && matrix.arch != 'Win32' }}
         shell: pwsh
         env:
           DOTNET_ROLL_FORWARD: Major
@@ -108,7 +108,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python packaging/build_msi.py --candidate out/beta-candidate --stage out/beta-msi-stage --wix out/wix/wix.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tests/test_native_install.py out/beta-candidate --disposable-host --machine --restricted-user
+          # Server's unmanaged-install policy is verified, never changed. The
+          # Windows 11 ARM64 client must pass the full restricted-user lifecycle.
+          $policyArgs = @()
+          if ('${{ matrix.arch }}' -eq 'x64') { $policyArgs = @('--expect-restricted-user-policy-refusal') }
+          python tests/test_native_install.py out/beta-candidate --disposable-host --machine --restricted-user @policyArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain exact profile inputs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -118,10 +122,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Retain experimental MSI and failed or successful lifecycle evidence
-        if: always() && matrix.arch == 'x64'
+        if: always() && matrix.arch != 'Win32'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: wtop-msi-candidate-${{ github.sha }}
+          name: wtop-msi-candidate-${{ matrix.profile }}-${{ github.sha }}
           path: out/beta-candidate/
           if-no-files-found: warn
           retention-days: 30

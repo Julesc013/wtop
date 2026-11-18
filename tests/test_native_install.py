@@ -79,20 +79,50 @@ class InstallScopeArguments(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "cleanup sentinel"):
             cleanup_preserving_failure(failing_cleanup)
 
+    def test_policy_refusal_requires_effective_policy_and_exact_product(self):
+        product = "{01234567-89AB-CDEF-0123-456789ABCDEF}"
+        text = ("Machine policy value 'DisableMsi' is 1\n"
+                f"Rejecting product '{product}': Non-assigned apps are disabled for non-admin users.\n")
+        verify_policy_refusal(text, product)
+        for bad in (text.replace("is 1", "is 0"), text.replace(product, "{OTHER}"),
+                    "This installation is forbidden by system policy.",
+                    text + "Doing action: InstallInitialize\n"):
+            with self.assertRaises(AssertionError):
+                verify_policy_refusal(bad, product)
 
-def msi_call(arguments, log: Path, expect_success=True, expected_reason=None):
-    completed = subprocess.run(["msiexec.exe", *arguments, "/qn", "/norestart", "/L*V", str(log)],
-                               timeout=120, capture_output=True, text=True)
+
+def msi_log_text(log):
     raw = log.read_bytes() if log.exists() else b""
     encoding = "utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-16-le" if b"\0" in raw[:128] else "utf-8")
-    text = raw.decode(encoding, errors="replace")
+    return raw.decode(encoding, errors="replace")
+
+
+def verify_policy_refusal(text, product):
+    require("Machine policy value 'DisableMsi' is 1" in text,
+            "refusal does not establish effective DisableMSI=1")
+    require(f"Rejecting product '{product}': Non-assigned apps are disabled for non-admin users." in text,
+            "refusal does not establish this product's unmanaged/non-admin policy denial")
+    require("Doing action: InstallInitialize" not in text and ": InstallInitialize." not in text,
+            "policy refusal unexpectedly entered the installation transaction")
+
+
+def msi_execute(arguments, log):
+    completed = subprocess.run(["msiexec.exe", *arguments, "/qn", "/norestart", "/L*V", str(log)],
+                               timeout=120, capture_output=True, text=True)
+    return completed.returncode
+
+
+def msi_call(arguments, log: Path, expect_success=True, expected_reason=None, expected_refusal_code=1603):
+    code = msi_execute(arguments, log)
+    text = msi_log_text(log)
     if expect_success:
-        require(completed.returncode == 0, f"msiexec failed ({completed.returncode}); see {log}")
+        require(code == 0, f"msiexec failed ({code}); see {log}")
     else:
-        require(completed.returncode == 1603, f"expected installer refusal 1603, received {completed.returncode}; see {log}")
+        require(code == expected_refusal_code,
+                f"expected installer refusal {expected_refusal_code}, received {code}; see {log}")
         if expected_reason:
             require(expected_reason in text, f"refusal did not report the expected guard: {log}")
-    return completed.returncode
+    return code
 
 
 def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail_after_execute=False):
@@ -239,6 +269,99 @@ def registry_path_values():
         except FileNotFoundError:
             values.append(None)
     return values
+
+
+def run_server_policy_probe(candidate, manifest, logs):
+    """Verify an unmodified Server policy blocks a clean ordinary-user install.
+
+    This is evidence of refusal, not successful installation or ordinary-user
+    lifecycle acceptance. No installer policy or token is changed here.
+    """
+    import winreg
+    require(sys.getwindowsversion().product_type in (2, 3),
+            "expected policy-refusal probe is restricted to Server hosts")
+    require(not ctypes.windll.shell32.IsUserAnAdmin(),
+            "policy-refusal probe must run without administrator membership")
+    profile = manifest["payload"]["profile"]
+    arch = manifest["payload"]["pe"]["architecture"]
+    directory = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Wtop" / profile
+    registry = "Software\\Wtop\\Installations\\" + profile
+    view = winreg.KEY_WOW64_32KEY if arch == "x86" else winreg.KEY_WOW64_64KEY
+
+    def raw_policy():
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\Policies\Microsoft\Windows\Installer",
+                                0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                value, kind = winreg.QueryValueEx(key, "DisableMSI")
+        except FileNotFoundError:
+            return {"present": False}
+        require(kind == winreg.REG_DWORD, "unexpected DisableMSI registry data type")
+        return {"present": True, "registry_type": kind, "value": value}
+
+    def require_absent_payload_and_owner():
+        try:
+            directory.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError("policy probe requires an absent payload directory before and after refusal")
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, registry, 0, winreg.KEY_READ | view):
+                raise AssertionError("policy probe requires an absent Wtop owner before and after refusal")
+        except FileNotFoundError:
+            pass
+
+    product = manifest["installer"]["product_code"]
+    api = ctypes.WinDLL("msi", use_last_error=True)
+    api.MsiQueryProductStateW.argtypes = [ctypes.c_wchar_p]
+    api.MsiQueryProductStateW.restype = ctypes.c_int
+    product_state = api.MsiQueryProductStateW(product)
+    require(product_state == -1, "policy probe requires an unregistered MSI product")
+    require_absent_payload_and_owner()
+    path_before = registry_path_values()
+    policy_before = raw_policy()
+    msi = candidate / next(item["name"] for item in manifest["artifacts"] if item["kind"] == "msi")
+    log = logs / "user-clean-install-policy-refusal.log"
+    # Deliberately request a normal clean install. Do not set DISABLEROLLBACK or
+    # otherwise force an application-authored failure before the policy check.
+    code = msi_execute(["/i", str(msi), *install_scope_arguments("user")], log)
+
+    def cleanup_unexpected_install():
+        # A clean success is a failed refusal test. Retire only the exact new
+        # owned test product; never recursively delete its destination.
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, registry, 0, winreg.KEY_READ | view) as key:
+            require(winreg.QueryValueEx(key, "ProductCode")[0] == product,
+                    "unexpected install has a different owner; automatic cleanup refused")
+            require(Path(winreg.QueryValueEx(key, "InstallPath")[0]).resolve() == directory.resolve(),
+                    "unexpected install has a different directory; automatic cleanup refused")
+            require(winreg.QueryValueEx(key, "Owner")[0] == "msi",
+                    "unexpected install is not MSI-owned; automatic cleanup refused")
+        # The embedded guard independently checks the registration and exact
+        # payload hashes before the actual owner's uninstall mutates anything.
+        msi_call(["/x", product], logs / "unexpected-policy-install-cleanup.log")
+        require_absent_payload_and_owner()
+
+    try:
+        require(code == 1625, f"expected Server policy refusal 1625, received {code}; see {log}")
+        verify_policy_refusal(msi_log_text(log), product)
+        require_absent_payload_and_owner()
+        require(api.MsiQueryProductStateW(product) == product_state,
+                "policy refusal changed MSI product registration")
+        require(registry_path_values() == path_before, "policy refusal changed PATH")
+        require(raw_policy() == policy_before, "policy refusal changed the raw installer policy")
+    finally:
+        if code in (0, 3010, 1641):  # MSI success, including unexpected reboot variants
+            cleanup_preserving_failure(cleanup_unexpected_install)
+    return {"result": "clean_install_blocked_by_host_policy", "verified": True,
+            "exit_code": code, "effective_disable_msi": 1,
+            "raw_disable_msi_registry_before_and_after": policy_before,
+            "product_type": sys.getwindowsversion().product_type,
+            "unmanaged_non_admin_denial": True, "installation_transaction_entered": False,
+            "payload_directory_absent_before_and_after": True,
+            "wtop_owner_absent_before_and_after": True,
+            "msi_product_registration_unchanged": True,
+            "both_registry_path_values_unchanged": True,
+            "log": log.name, "log_sha256": sha256(log.read_bytes())}
 
 
 def protected_fixture_directory(directory):
@@ -420,9 +543,13 @@ def main(argv=None) -> int:
     parser.add_argument("--disposable-host", action="store_true", required=True)
     parser.add_argument("--machine", action="store_true")
     parser.add_argument("--restricted-user", action="store_true", help="also repeat per-user fixtures with a medium restricted token")
+    parser.add_argument("--expect-restricted-user-policy-refusal", action="store_true",
+                        help="Server-only: verify clean-install DisableMSI=1 refusal instead of claiming ordinary-user lifecycle acceptance")
     parser.add_argument("--require-ordinary-token", action="store_true")
     parser.add_argument("--label", default="", choices=("", "restricted-user"))
     args = parser.parse_args(argv)
+    if args.expect_restricted_user_policy_refusal and not (args.restricted_user or args.require_ordinary_token):
+        parser.error("expected restricted-user policy refusal requires --restricted-user")
     if os.name != "nt":
         parser.error("native installer execution requires Windows")
     candidate = args.candidate.resolve()
@@ -430,6 +557,7 @@ def main(argv=None) -> int:
     logs = candidate / ("native-install-logs" + suffix)
     logs.mkdir(exist_ok=True)
     observations = {"schema": "wtop.install-observations/1", "kernel": sys.getwindowsversion().build,
+                    "product_type": sys.getwindowsversion().product_type,
                     "token_elevated": bool(ctypes.windll.shell32.IsUserAnAdmin()),
                     "scope_results": [], "qualified": False,
                     "limits": ["hostile same-user preflight/deferred-recheck-to-mutation race",
@@ -448,7 +576,11 @@ def main(argv=None) -> int:
         observations["profile"] = manifest['payload']['profile']
         observations["msi_version"] = manifest['installer']['msi_version']
         observations["installer_sha256"] = next(item['sha256'] for item in manifest['artifacts'] if item['kind'] == 'msi')
-        observations["scope_results"].append(run_scope(candidate, manifest, "user", logs))
+        if args.require_ordinary_token and args.expect_restricted_user_policy_refusal:
+            observations["policy_refusal"] = run_server_policy_probe(candidate, manifest, logs)
+            observations["policy_refusal_verified"] = True
+        else:
+            observations["scope_results"].append(run_scope(candidate, manifest, "user", logs))
         if args.machine:
             require(observations["token_elevated"], "machine fixture requires an elevated disposable runner")
             observations["scope_results"].append(run_scope(candidate, manifest, "machine", logs))
@@ -456,12 +588,22 @@ def main(argv=None) -> int:
             require(observations["token_elevated"], "restricted-token launcher requires the disposable elevated parent")
             sys.path.insert(0, str(ROOT / "packaging"))
             from restricted_process import run_restricted
-            code = run_restricted([sys.executable, str(Path(__file__).resolve()), str(candidate),
-                "--disposable-host", "--require-ordinary-token", "--label=restricted-user"], ROOT, timeout=900)
+            command = [sys.executable, str(Path(__file__).resolve()), str(candidate),
+                "--disposable-host", "--require-ordinary-token", "--label=restricted-user"]
+            if args.expect_restricted_user_policy_refusal:
+                command.append("--expect-restricted-user-policy-refusal")
+            code = run_restricted(command, ROOT, timeout=900)
             ordinary = json.loads((candidate / "native-install-observations-restricted-user.json").read_text())
             observations["restricted_user"] = ordinary
             require(code == 0 and not ordinary.get("failure") and ordinary.get("token_elevated") is False,
                     "restricted ordinary-user MSI fixture failed; retain its independent logs")
+            if args.expect_restricted_user_policy_refusal:
+                require(ordinary.get("policy_refusal_verified") is True and not ordinary.get("scope_results"),
+                        "Server child did not verify policy refusal separately from installation")
+            else:
+                require(any(row.get("scope") == "user" and row.get("passed") is True
+                            for row in ordinary.get("scope_results", [])),
+                        "client child did not complete ordinary-user lifecycle acceptance")
     except (OSError, ValueError, AssertionError, subprocess.SubprocessError) as exc:
         observations["failure"] = str(exc)
         observations["failure_traceback"] = traceback.format_exc()
@@ -471,7 +613,10 @@ def main(argv=None) -> int:
         return 1
     finally:
         (candidate / ("native-install-observations" + suffix + ".json")).write_text(json.dumps(observations, indent=2) + "\n", encoding="utf-8")
-    print("Native MSI fixture checks passed; preservation/race and release qualification remain pending.")
+    if observations.get("policy_refusal_verified"):
+        print("Native Server policy refusal verified; no ordinary-user installation was accepted.")
+    else:
+        print("Native MSI fixture checks passed; preservation/race and release qualification remain pending.")
     return 0
 
 

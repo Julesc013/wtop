@@ -149,6 +149,16 @@ creates no account/service/task and is ordinary-token automation, not a new-user
 profile test, UAC interaction or human desktop review. Failed commands/logs are
 retained. Unittest discovery does not run this mutating harness.
 
+The x64 Windows Server runner rejects unmanaged, non-elevated MSI installation
+under its effective `DisableMSI=1` policy. CI passes
+`--expect-restricted-user-policy-refusal` only on that host: a distinct probe must
+observe error 1625, the specific policy denial and unchanged payload/ownership/
+PATH. That receipt is a verified refusal, not a successful per-user installation.
+No fixture changes the machine policy. The Windows 11 ARM64 client job builds its
+own MSI and requires the full restricted-user lifecycle without that exception.
+Exact receipts govern the result; x64 client, fresh-account/UAC and broader host
+acceptance remain open even if the ARM64 restricted-token test passes.
+
 ## Offline package-manager preparation
 
 After assembling a verified portable bundle:
@@ -193,6 +203,7 @@ performed by these scripts.
 
 - [Microsoft: single-package authoring and HKMU redirection](https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring)
 - [Microsoft: MSIINSTALLPERUSER and explicit ALLUSERS selection](https://learn.microsoft.com/en-us/windows/win32/msi/msiinstallperuser)
+- [Microsoft: DisableMSI policy and non-elevated per-user installation](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi)
 - [Microsoft: custom-action sequencing](https://learn.microsoft.com/en-us/windows/win32/msi/sequencing-custom-actions)
 - [Microsoft: file versioning rules](https://learn.microsoft.com/en-us/windows/win32/msi/file-versioning-rules)
 - [Microsoft: rollback custom actions](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions)

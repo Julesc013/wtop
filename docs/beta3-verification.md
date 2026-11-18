@@ -313,6 +313,34 @@ NULLs and field types. Extended MSI errors are captured before later API calls
 can replace them. A later exact-source native run must qualify the repair and
 remaining lifecycle cases; no result is inferred here.
 
+### Installer lifecycle checkpoint
+
+Candidate `fd0fe18aff85b255369a15229adb7158d0766ac1`, tested as PR merge
+`a02c98f633628c3c541305022466b7ddab54fd10` in
+[checks run 44269585860](https://github.com/Julesc013/wtop/actions/runs/44269585860),
+passed the complete **elevated per-user and machine** MSI fixture sequences on
+Windows Server build 26100. Both receipts record exact EXE/legal-file delivery,
+missing-file repair, changed-file preservation, running-image refusal,
+same-payload major upgrade, downgrade/same-version refusal, actual-script rollback
+restoring the old owner, uninstall, foreign-file/registry and user-data retention,
+plus unchanged user/machine PATH. The numeric MSI version was `0.4.403`.
+
+The same run's restricted-user repetition failed before Wtop's installer actions:
+Windows Installer returned **1625**, with effective `DisableMSI=1` and the logged
+unmanaged/non-admin policy denial. It recorded no successful restricted-user
+scope. This agrees with
+[Microsoft's documented policy](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi).
+It is a host policy boundary, not evidence that ordinary-user installation passed.
+
+CI now verifies that Server refusal explicitly, without modifying policy, while
+requiring a separate full restricted-user lifecycle on the native Windows 11
+ARM64 client. These are different outcomes, each retained in its receipt; an
+unexpected refusal on the client remains a failing gate. MSI artifacts are named
+per profile and remain separate experimental candidates. The final exact-source
+receipts must establish the outcome of those newly separated host checks. Real
+x64 client/fresh-account/UAC, prior-release file-version upgrades and hostile or
+interrupted filesystem transactions remain unqualified.
+
 ## Remaining work and recommended sequence
 
 1. **Finish exact Beta 3 qualification:** resolve actual native fixture failures,
