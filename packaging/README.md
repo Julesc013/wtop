@@ -78,8 +78,9 @@ the MSI carries no active `wtop.conf` and deletes no user data.
 
 An embedded, synchronous native DLL checks the actual destination and exact
 hashes inside the MSI execution sequence before `InstallInitialize`. It also
-passes bounded immutable context to deferred read-only checks immediately before
-the relevant `RemoveFiles`/`InstallFiles` operations. It runs
+passes bounded immutable context to deferred read-only checks before
+`RemoveRegistryValues` (while the existing owner record is available) and before
+`InstallFiles`. It runs
 for direct installation, repair and uninstall, including callers that bypass
 the acquisition script. It refuses existing payload-name collisions, missing or
 changed ownership records, changed owned EXE/license files, inaccessible files,

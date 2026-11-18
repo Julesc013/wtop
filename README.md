@@ -198,7 +198,7 @@ PID reuse or unavailable identity must not turn a selection into another process
 | `d` / `H` / `a` | Details / captured thread rows / affinity editor; F5 refreshes an inspection panel. |
 | Tab / Shift+Tab | Next/previous visible tab. |
 | Space / `U` | Tag focused process / clear tags. |
-| `F` / `I` | Follow selected process / reverse sort direction. |
+| `F` / `I` | Follow focused process / reverse sort direction. |
 | `P` / `M` | Sort by CPU / memory. |
 | Ctrl+Left / Ctrl+Right | Previous/next sort column. |
 | `B` | Hide/show the function bar. |
@@ -251,25 +251,36 @@ While a text editor is active, other mouse controls are ignored; function keys
 and function-bar actions cancel that editor before changing context. Cancelling
 a live filter restores its prior value. Console-host behavior, resize races and
 visual usability require native acceptance, not just portable key-map tests.
-The conservative renderer preserves printable single-cell Unicode in Unicode
-mode and replaces unsupported wide/combining/emoji scalars predictably. ASCII mode
-substitutes non-ASCII scalars. Raw strings are retained in settings/JSON. This makes
-clipping and mouse geometry deterministic. A true CJK/combining/emoji cell renderer
-remains separate qualification work.
+Editing, clipping and wrapping use Unicode 17 extended-grapheme boundaries. Full
+projection requires VT output and a separate bounded native cluster-width probe;
+accepting VT alone does not prove shaping support. Other hosts retain a
+conservative repertoire of printable single-cell Unicode, with one visible
+substitution per unsupported cluster. ASCII mode substitutes non-ASCII clusters.
+Raw strings remain intact in settings/JSON, and editing never splits a cluster
+into independently editable code units. The probe does not certify every font,
+Unicode sequence, bidi behavior or terminal preference; broader host and visual
+qualification remains open.
 
 ### Color roles
 
-The built-in htop scheme uses white text on black, green column headers, cyan
-selection/function backgrounds and meter labels, green total CPU/used-memory
-bars, and yellow tag/follow emphasis. Windows commit has its own cyan meter.
-Actual RGB colors depend on the host console palette. The scheme follows
+The built-in htop scheme uses a light text foreground, green column headers,
+cyan selection/function backgrounds and meter labels, green total CPU/used-memory
+bars, and yellow tag/follow emphasis. Normal cells use `BackgroundMode terminal`
+by default: modern VT output retains the terminal-default background, while the
+legacy console fallback inherits its palette background. Focus defaults to
+foreground/background indices 15/8, and confirmed selection to 0/3 (black on
+conventional dark cyan). `SelectionBackground 6` selects conventional dark yellow.
+Windows commit has its own cyan meter. Actual RGB colors depend on the host
+console palette; Wtop does not change host opacity or palette settings. The scheme follows
 [htop's pinned default color roles](https://github.com/htop-dev/htop/blob/21bbc80c7811149ee33f449748addf23740c7b9f/CRT.c);
 it does not invent uncollected CPU categories to reproduce a screenshot.
 
 Choose `--theme ntop` for the inherited appearance or `--theme monochrome` for
-monochrome. Individual role overrides are saved as Windows console attributes
-from 0 through 255; F2 Colors exposes them. Choosing another built-in theme resets
-those overrides. Current palettes are not 24-bit RGB theme files.
+monochrome. Legacy combined color roles accept Windows console attributes from
+0 through 255. The separate `FocusForeground`, `FocusBackground`,
+`SelectionForeground` and `SelectionBackground` roles accept palette indices
+from 0 through 15; F2 Colors exposes both kinds. Choosing another built-in theme
+resets the color-role overrides. Current palettes are not 24-bit RGB theme files.
 
 ## Configuration
 
@@ -330,13 +341,17 @@ known values, duplicate keys/columns, unsupported versions, invalid UTF-8 and
 oversized input fail before applying a partial configuration. Comments and
 unknown inert keys are preserved by supported saves within those bounds.
 
-The color keys are `FGColor`, `BGColor`, `FGHighlightColor`, `BGHighlightColor`,
+The legacy combined color keys are `FGColor`, `BGColor`, `FGHighlightColor`, `BGHighlightColor`,
 `MenuBarColor`, `ProcessListHeaderColor`, `CPUBarColor`, `MemoryBarColor`,
 `PageMemoryBarColor`, `ErrorColor`, `TaggedColor`, `FollowColor`, `MeterLabelColor`
-and `FunctionKeyColor`. The inherited `PageMemoryBarColor` name controls the
-commit meter; it does not change that metric's meaning. Decimal or `0x` attributes
-are accepted. Explicit role values override the file's theme; command-line theme
-selection overrides those file values.
+and `FunctionKeyColor`. The independent palette-index keys are `FocusForeground`,
+`FocusBackground`, `SelectionForeground` and `SelectionBackground`. The inherited
+`PageMemoryBarColor` name controls the commit meter; it does not change that
+metric's meaning. Decimal or `0x` values are accepted within each role's range.
+`BackgroundMode terminal|palette` selects inherited terminal semantics or the
+configured palette background. A legacy file with `BGColor` but no
+`BackgroundMode` retains palette behavior. Explicit role values override the
+file's theme; command-line theme selection overrides those file values.
 
 Configuration discovery and explicit save destinations are described in
 [installation and storage](docs/installation.md) and the

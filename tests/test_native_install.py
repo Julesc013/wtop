@@ -109,15 +109,43 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
     api.MsiDatabaseOpenViewW.argtypes = [handle, ctypes.c_wchar_p, ctypes.POINTER(handle)]
     api.MsiViewExecute.argtypes = [handle, handle]
     api.MsiViewFetch.argtypes = [handle, ctypes.POINTER(handle)]
-    api.MsiViewModify.argtypes = [handle, ctypes.c_int, handle]
     api.MsiRecordGetStringW.argtypes = [handle, ctypes.c_uint, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint)]
     api.MsiRecordSetStringW.argtypes = [handle, ctypes.c_uint, ctypes.c_wchar_p]
+    api.MsiGetLastErrorRecord.argtypes = []
+    api.MsiGetLastErrorRecord.restype = handle
+    api.MsiFormatRecordW.argtypes = [handle, handle, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint)]
     api.MsiViewClose.argtypes = [handle]
     api.MsiCloseHandle.argtypes = [handle]
     api.MsiDatabaseCommit.argtypes = [handle]
     api.MsiGetSummaryInformationW.argtypes = [handle, ctypes.c_wchar_p, ctypes.c_uint, ctypes.POINTER(handle)]
     api.MsiSummaryInfoSetPropertyW.argtypes = [handle, ctypes.c_uint, ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.c_wchar_p]
     api.MsiSummaryInfoPersist.argtypes = [handle]
+
+    def checked(result, operation):
+        if result != 0:
+            # Read the extended error before another MSI call overwrites it.
+            error = api.MsiGetLastErrorRecord()
+            detail = ""
+            if error:
+                try:
+                    text = ctypes.create_unicode_buffer(4096)
+                    capacity = ctypes.c_uint(len(text))
+                    if api.MsiFormatRecordW(0, error, text, ctypes.byref(capacity)) == 0:
+                        detail = ": " + text.value
+                finally:
+                    api.MsiCloseHandle(error)
+            raise AssertionError(f"{operation} failed ({result}){detail}")
+
+    def execute(database, statement, record=0):
+        view = handle()
+        checked(api.MsiDatabaseOpenViewW(database, statement, ctypes.byref(view)),
+                "MsiDatabaseOpenViewW " + statement)
+        try:
+            checked(api.MsiViewExecute(view, record), "MsiViewExecute " + statement)
+        finally:
+            api.MsiViewClose(view)
+            api.MsiCloseHandle(view)
+
     database = handle()
     require(api.MsiOpenDatabaseW(str(destination), ctypes.c_void_p(1), ctypes.byref(database)) == 0, "cannot open test MSI transaction")
     try:
@@ -127,50 +155,55 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
         new_version = f"{major}.{minor}.{build + delta}"
         statements = [f"UPDATE `Property` SET `Value`='{value}' WHERE `Property`='{key}'"
                       for key, value in (("ProductCode", product), ("ProductVersion", new_version))]
-        # VersionMin/Max are part of Upgrade's primary key. MSI SQL UPDATE
-        # cannot change them; fetched records need MSIMODIFY_REPLACE (4).
-        # Preserve every other field, including NULL bounds and attributes.
-        # https://learn.microsoft.com/windows/win32/api/msiquery/nf-msiquery-msiviewmodify
+        # VersionMin/Max are part of Upgrade's primary key. Rebuild this copied
+        # table with parameterized full-row inserts; SQL UPDATE cannot change
+        # primary keys. Retain native records to preserve NULLs and field types.
         if new_version != version:
-            query = "SELECT `UpgradeCode`,`VersionMin`,`VersionMax`,`Language`,`Attributes`,`Remove`,`ActionProperty` FROM `Upgrade`"
+            columns = "`UpgradeCode`,`VersionMin`,`VersionMax`,`Language`,`Attributes`,`Remove`,`ActionProperty`"
+            query = "SELECT " + columns + " FROM `Upgrade`"
             upgrade_view = handle()
-            result = api.MsiDatabaseOpenViewW(database, query, ctypes.byref(upgrade_view))
-            require(result == 0, f"cannot open Upgrade fixture view ({result})")
+            checked(api.MsiDatabaseOpenViewW(database, query, ctypes.byref(upgrade_view)),
+                    "open Upgrade fixture view")
             records = []
             try:
-                result = api.MsiViewExecute(upgrade_view, 0)
-                require(result == 0, f"cannot read Upgrade fixture rows ({result})")
-                # Fetch first so replacing a primary key cannot affect iteration.
+                checked(api.MsiViewExecute(upgrade_view, 0), "read Upgrade fixture rows")
                 while True:
                     record = handle()
                     result = api.MsiViewFetch(upgrade_view, ctypes.byref(record))
                     if result == 259:  # ERROR_NO_MORE_ITEMS
                         break
-                    require(result == 0, f"cannot fetch Upgrade fixture row ({result})")
+                    checked(result, "fetch Upgrade fixture row")
                     records.append(record)
                     require(len(records) <= 16, "unexpected number of Upgrade fixture rows")
+                # No result cursor remains live during replacement. Records are
+                # independently owned until MsiCloseHandle below.
+                api.MsiViewClose(upgrade_view)
+                api.MsiCloseHandle(upgrade_view)
+                upgrade_view = handle()
                 changed = 0
                 for record in records:
                     replace = False
                     for field in (2, 3):
                         text = ctypes.create_unicode_buffer(32)
                         capacity = ctypes.c_uint(len(text))
-                        result = api.MsiRecordGetStringW(record, field, text, ctypes.byref(capacity))
-                        require(result == 0, f"cannot read Upgrade version bound ({result})")
+                        checked(api.MsiRecordGetStringW(record, field, text, ctypes.byref(capacity)),
+                                "read Upgrade version bound")
                         if text.value == version:
-                            result = api.MsiRecordSetStringW(record, field, new_version)
-                            require(result == 0, f"cannot set Upgrade fixture version bound ({result})")
+                            checked(api.MsiRecordSetStringW(record, field, new_version),
+                                    "set Upgrade fixture version bound")
                             replace = True
                     if replace:
-                        result = api.MsiViewModify(upgrade_view, 4, record)
-                        require(result == 0, f"cannot replace Upgrade fixture key ({result})")
                         changed += 1
                 require(changed > 0, "Upgrade fixture has no matching version bounds")
+                execute(database, "DELETE FROM `Upgrade`")
+                for record in records:
+                    execute(database, "INSERT INTO `Upgrade` (" + columns + ") VALUES (?,?,?,?,?,?,?)", record)
             finally:
                 for record in records:
                     api.MsiCloseHandle(record)
-                api.MsiViewClose(upgrade_view)
-                api.MsiCloseHandle(upgrade_view)
+                if upgrade_view.value:
+                    api.MsiViewClose(upgrade_view)
+                    api.MsiCloseHandle(upgrade_view)
         if fail_after_execute:
             # Test-copy only. InstallExecute applies the generated transaction;
             # the following type-19 action then requests failure/real rollback.
@@ -180,15 +213,7 @@ def upgrade_probe(original: Path, destination: Path, version: str, delta=1, fail
                 "INSERT INTO `InstallExecuteSequence` (`Action`,`Sequence`) VALUES ('WtopFixtureFail',6550)",
             ]
         for statement in statements:
-            view = handle()
-            result = api.MsiDatabaseOpenViewW(database, statement, ctypes.byref(view))
-            require(result == 0, f"MsiDatabaseOpenViewW failed ({result}): {statement}")
-            try:
-                result = api.MsiViewExecute(view, 0)
-                require(result == 0, f"MsiViewExecute failed ({result}): {statement}")
-            finally:
-                api.MsiViewClose(view)
-                api.MsiCloseHandle(view)
+            execute(database, statement)
         summary = handle()
         require(api.MsiGetSummaryInformationW(database, None, 1, ctypes.byref(summary)) == 0, "cannot open test MSI summary")
         try:

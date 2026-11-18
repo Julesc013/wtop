@@ -302,9 +302,16 @@ independent defects. A deferred removal guard ran after `RemoveRegistryValues`
 had deleted the owner record it needed. The upgrade fixture also attempted to
 SQL-update primary-key version bounds in the `Upgrade` table, which MSI rejects;
 cleanup had masked that primary error. The repair moves removal validation before
-owned registry removal, uses bounded fetched-record replacement for changed keys,
-and retains both primary and cleanup traces. The next exact-source native run
-must qualify the repair and remaining lifecycle cases; no result is inferred here.
+owned registry removal and retains both primary and cleanup traces. In
+[checks run 44268684939](https://github.com/Julesc013/wtop/actions/runs/44268684939),
+candidate `05dfcaf855a980ab77288c5433c8e09197bbe713` again passed all 25 native
+entries on each architecture, and uninstall cleanup succeeded. The copied MSI
+fixture's attempted key replacement returned error 1627. The subsequent fixture
+repair retains complete bounded native records, closes the read cursor, and
+reconstructs the copied `Upgrade` table through parameterized inserts, preserving
+NULLs and field types. Extended MSI errors are captured before later API calls
+can replace them. A later exact-source native run must qualify the repair and
+remaining lifecycle cases; no result is inferred here.
 
 ## Remaining work and recommended sequence
 
