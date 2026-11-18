@@ -1,85 +1,102 @@
-# Wtop 0.4.0 Beta 2
+# Wtop 0.4.0 Beta 3
 
-Experimental modern Windows portable prerelease. This is not stable 0.4.0 or full
-htop parity. A draft remains private to repository collaborators until explicit
-public promotion. The release manifest and receipts define its exact profile set.
+Experimental modern Windows portable prerelease. The exact release manifest and
+native receipts identify delivered profiles. A draft remains visible to repository
+collaborators until public-promotion gates pass. This is not stable 0.4.0 or a
+universal historical Windows binary.
 
 ## Changes
 
-Beta 2 keeps the dense htop-style process table, native Win32 implementation,
-htop/vi/Emacs maps, configurable columns/meters/tabs/colors and explicit settings
-operations. It adds complete offscreen frame composition, changed-run output,
-independent paint/sample timing, one footer by default and `Z` pause/resume.
+- **Three row states:** startup has no target; navigation/search/hover gives grey
+  focus; Enter/click confirms a lifetime in dark cyan. Moving focus cannot silently
+  retarget a confirmed process. Escape unwinds context, then confirmation to focus,
+  then focus to none. Ctrl+C remains global.
+- **Terminal-default backgrounds:** modern VT output uses SGR 49; legacy consoles
+  inherit a palette background. Wtop does not alter opacity, Mica/Acrylic settings
+  or host palettes. Focus and selection colours are separately configurable;
+  existing explicit background settings migrate.
+- **Unicode 17 graphemes:** pinned utf8proc 2.11.0, cluster-safe editing/wrapping/
+  clipping and retained wide-cell text. ASCII/legacy fallback remains. Terminal
+  font, shaping, bidi and width limitations remain explicit.
+- **Details and threads:** scrollable captured process details, full image path,
+  command line, services and thread lifetime counters with status, age and manual
+  F5 refresh. Optional reads run in bounded owned child providers outside input.
+- **Affinity and collapse:** confirmed, identity-checked single-group affinity
+  editing with independent applied/verified outcomes and readonly enforcement;
+  Left/Right collapses/expands lifetime-bound subtrees.
+- **CLI inspection:** additive --image-path, --threads and --affinity flags for
+  inspect PID; exact counters/masks in JSON. Affinity is read-only in the CLI.
+  Command-line arguments remain separately opt-in.
+- **Delivery preparation:** stronger MSI upgrade/repair/rollback/refusal fixtures,
+  restricted-token automation and bounded concurrent-monitor resource tests.
+  Offline WinGet/Scoop/Chocolatey manifests are a separate preparation artifact;
+  no public package channel is submitted or hosted by this work.
 
-Startup selects no process. Saved views restore presentation preferences only.
-Escape cancels an editor or confirmation, closes Help/Setup, or clears selection,
-tags and follow state on the main screen. A cancelled live filter restores its
-previous value. Ctrl+C quits from every keymap and input context. Escape does not
-undo a process action that has already happened or revert committed settings.
+The dense htop-style table, optional Vi/Emacs maps, configurable columns/meters/
+tabs/colours, one default footer, pause, sample freshness and action outcomes remain.
+Settings save only on explicit request; no selected lifetime is persisted.
 
-Selection follows PID plus process creation time. A process that exits, is hidden
-or has its PID reused cannot silently transfer the action target to a nearby row.
-The mouse event-ordering repair keeps the displayed model and its hit targets
-consistent when a new sample is waiting for the next paint.
-
-## Downloads and verification
-
-Each included x86, x64 or ARM64 profile has a standalone EXE and portable ZIP
-containing identical executable bytes. The manifest identifies actual Windows
-host, token, compiler/SDK, PE imports, source tree, final-byte tests and security
-scan. x86-on-WoW64 is described as such. Native ARM64 tests must execute on ARM64.
-Do not infer a profile's presence or success from this list: inspect the draft's
-actual assets and `beta-manifest.json`.
-
-The source archive is the corresponding full Git tree. LICENSE, profile-specific
-payload/native/security receipts, JUnit results and SHA256SUMS accompany it. The
-release workflow reacquires uploaded assets and checks their bytes. Unsigned
-binaries are identified as `NotSigned`; hashes establish byte identity, not a
-trusted publisher or antivirus verdict. An unavailable security scan is recorded
-and blocks public promotion until resolved. Invalid signatures or detected
-threats block assembly. No security bypass is required or recommended.
+## Try the candidate
 
 ```powershell
 .\wtop.exe --readonly --no-config
 .\wtop.exe --paths --format json
-.\wtop.exe query system --format json
+.\wtop.exe inspect 1234 --image-path --threads --affinity --format json
+.\wtop.exe inspect 1234 --command-line --services --format json
 .\wtop.exe --portable
 ```
 
-Settings save only on explicit request. Normal startup and exit do not write
-configuration. The chosen configuration is disclosed by `--paths`; an explicit
-portable root owns its settings. Ordinary execution creates no service, scheduled
-task, startup entry, updater, installation registry record or PATH change.
+Use Up/Down to focus, Enter to confirm, d for details, H for thread rows and a for
+affinity. F5 refreshes an inspection panel. F1/F2 expose controls/Setup; F10 and
+Ctrl+C exit. With only focus, mutation buttons explain that confirmation is needed.
+Termination and affinity review require y to confirm.
 
-## Known limitations
+BackgroundMode terminal, FocusForeground 15, FocusBackground 8,
+SelectionForeground 0 and SelectionBackground 3 are the compiled defaults.
+SelectionBackground 6 selects conventional dark yellow. Actual RGB values belong
+to the host palette. Setup can change/save these roles. --paths discloses the
+configuration owner/destination. Ordinary startup and exit write no settings.
 
-The compatibility statement is the actual native receipt, not every OS able to
-parse the PE header. Historical Windows, DOS, Win16, CE, OS/2, RT, ReactOS and
-WinPE remain independently unqualified. MSI lifecycle, setup EXE delivery and
-community WinGet/Scoop/Chocolatey acceptance are separate work. No installer or
-package-manager installation command is advertised as available by this release.
+## Exact downloads and verification
 
-Unicode mode keeps conservative single-cell characters. Unsupported wide,
-combining and emoji text falls back predictably; raw Unicode remains in JSON and
-configuration. Full grapheme layout, thread rows, affinity, branch collapse, a
-full TUI detail panel, GPU/sensor telemetry and full htop parity remain open.
-CLI command-line/service inspection and per-core collection are already available
-through bounded optional providers.
+Each delivered x86/x64/ARM64 profile has an EXE and ZIP with identical application
+bytes. Inspect the actual asset set and beta-manifest; architecture names alone
+are not runtime evidence. Corresponding source, GPL/third-party notices, native/
+security receipts, JUnit and SHA256SUMS accompany the release. The workflow
+reacquires uploaded assets and checks their bytes.
 
-CPU means one logical processor = 100% by default. Machine normalization is
-explicit. Commit is not swap residency, and process I/O is not physical disk
-bandwidth. Missing or denied metrics are not zeros. Some baseline Windows and
-output calls are not generally cancellable. Normal cleanup and emergency
-own-process termination have different restoration guarantees.
+Receipts name host, architecture/token, compiler/SDK, imports and source/payload
+identity. x86-on-WOW64 and native ARM64 are distinct. Hashes establish byte
+correspondence, not publisher trust. Signing/scanner outcomes remain explicit;
+unavailable security evidence blocks public promotion. No security bypass is
+recommended.
 
-## Feedback
+## Remaining qualification
 
-Use the repository's enabled feedback route and report only the version, digest,
-host/terminal, reproduction and observed result needed to investigate. Do not
-attach private process command lines, environment, usernames or full snapshots by
-default. The source-side support reporter is opt-in, allowlisted and never uploads.
-See [testing](beta-testing.md) and [release policy](beta-publication.md).
+MSI assets are separate **experimental workflow candidates**, not supported
+installers in this portable release. Major-upgrade fixtures do not replace real
+prior-release, fresh-account/UAC, interruption/reboot and adversarial-path tests.
+MSI PATH integration is unimplemented: PATH remains unchanged and ADDTOPATH=1 is
+refused. There is no setup EXE or published package-manager installation.
 
-NTop ancestry and GPL-3.0-only notices remain intact. Beta 1's release/tag/assets
-remain unchanged. Stable human desktop approval is retained; it is not fabricated
-from automated Beta 2 input tests.
+Restricted medium-token automation is not a human ordinary-user desktop review.
+Resource observations have stated durations/growth bounds, not a guarantee of no
+leaks forever. Stable release still requires real human/host acceptance.
+
+Thread rows currently expose captured lifetime counters, not sampled CPU rates or
+mixed live process/thread sorting. Multi-group/CPU-Set affinity and folded WOW64
+masks remain unsupported. All 766 official Unicode boundary cases are tested;
+terminal width/shaping/bidi/accessibility still need host review.
+
+DOS, Win16, Win9x, early NT, CE, RT, OS/2, ReactOS and WinPE remain independently
+unqualified. Historical probes are not complete monitors. GPU/sensor parity,
+complete CLI mutations and the broader 1.0 scope remain work. GUI is deferred.
+Some OS/output calls have no universal cancellation deadline; cooperative exit130
+and emergency own-process exit124 have different guarantees. A confirmed action
+may have applied before shutdown; applied and verified remain separate outcomes.
+
+See the [complete implementation/qualification report](beta3-verification.md),
+[source-grounded interaction comparison](interaction-comparison.md),
+[testing guide](beta-testing.md) and [release policy](beta-publication.md).
+Earlier beta assets remain unchanged. No human acceptance or public availability
+is inferred merely from this source-side document.

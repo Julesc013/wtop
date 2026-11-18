@@ -31,7 +31,7 @@ name is wtop.exe or the profile's explicitly justified executable form. VERSION
 uses X.Y.Z for stable releases and X.Y.Z-dev.N or X.Y.Z-rc.N for prereleases.
 Build metadata and source revision remain separately recorded. A stable.N label,
 if requested, is channel metadata; it must not falsely imply a semantic-version
-stable release. The current development version is 0.4.0-dev.1.
+stable release. The current development version is 0.4.0-beta.3.
 
 An installation receipt records product/version/profile, scope, exact executable
 hash, owned files, created shortcuts, registry values and any optional PATH entry.
@@ -73,11 +73,11 @@ No publication, tag or package-manager availability is claimed by this spec.
 retains provenance/digests and independently verifies ZIP contents. Candidate MSI
 builds use pinned WiX 4.0.6 and the same payload; MSI guards refuse modified or
 foreign expected files and ownership records. Its preflight is not an atomic
-compare-and-replace/delete operation. Updates are refused, and candidate promotion
-is deliberately blocked until path races, interruption/rollback, target/token
+compare-and-replace/delete operation. Major upgrades and rollback now have candidate code/fixtures; promotion
+is deliberately blocked until remaining path races, interruption, target/token
 coverage and release-source/signature/channel gates close.
 
-The MSI presently makes no PATH changes and owns no user preferences. User and
+The MSI makes no PATH changes, refuses unsupported ADDTOPATH requests and owns no user preferences. User and
 machine scope use explicit HKCU/HKLM profile registration; portable mode changes
 no registry. See [packaging implementation](../../packaging/README.md) for exact
 commands and limitations. Broad intended ownership requirements below remain open.

@@ -18,6 +18,7 @@
 #include "vi.h"
 #include "ntop.h"
 #include "util.h"
+#include "text.h"
 #include <conio.h>
 #include <stdio.h>
 #include <windows.h>
@@ -366,22 +367,23 @@ int ViSetInputText(TCHAR InitialKey, const TCHAR *Text)
 static DWORD PreviousInputPosition(DWORD Position)
 {
     if(Position <= 1) return 1;
-    --Position;
-#ifdef UNICODE
-    if(Position > 1 && CurrentInputStr[Position] >= 0xdc00 && CurrentInputStr[Position] <= 0xdfff &&
-       CurrentInputStr[Position - 1] >= 0xd800 && CurrentInputStr[Position - 1] <= 0xdbff) --Position;
-#endif
-    return Position;
+    return 1 + (DWORD)wtop_text_utf16_previous((const unsigned short *)CurrentInputStr + 1,
+        _tcslen(CurrentInputStr + 1), Position - 1);
 }
 
 static DWORD NextInputPosition(DWORD Position, DWORD Length)
 {
     if(Position >= Length) return Length;
-#ifdef UNICODE
-    if(CurrentInputStr[Position] >= 0xd800 && CurrentInputStr[Position] <= 0xdbff && Position + 1 < Length &&
-       CurrentInputStr[Position + 1] >= 0xdc00 && CurrentInputStr[Position + 1] <= 0xdfff) ++Position;
-#endif
-    return Position + 1;
+    return 1 + (DWORD)wtop_text_utf16_next((const unsigned short *)CurrentInputStr + 1,
+        Length - 1, Position > 0 ? Position - 1 : 0);
+}
+
+/* An edit can join the clusters on either side (a base inserted before an
+   existing mark, or ZWJ between pictographs). Keep the caret at a whole-cluster
+   boundary after the edit, so Backspace/Delete never remove half the result. */
+static void NormalizeInputPosition(void)
+{
+    if(InputIndex > 1) InputIndex = NextInputPosition(InputIndex - 1, (DWORD)_tcslen(CurrentInputStr));
 }
 
 int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
@@ -399,7 +401,7 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
             while(Start > 1 && _istspace(IntFromTChar(CurrentInputStr[Start - 1]))) Start = PreviousInputPosition(Start);
             while(Start > 1 && !_istspace(IntFromTChar(CurrentInputStr[Start - 1]))) Start = PreviousInputPosition(Start);
             memmove(CurrentInputStr + Start, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
-            InputIndex = Start; return 1;
+            InputIndex = Start; NormalizeInputPosition(); return 1;
         }
         default: return 0;
         }
@@ -419,14 +421,14 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
         if(InputIndex < Length) {
             DWORD Next = NextInputPosition(InputIndex, Length);
             memmove(CurrentInputStr + InputIndex, CurrentInputStr + Next, (Length - Next + 1) * sizeof(*CurrentInputStr));
-            return 1;
+            NormalizeInputPosition(); return 1;
         }
         break;
     case VK_BACK:
         if(InputIndex > 1) {
             DWORD Previous = PreviousInputPosition(InputIndex);
             memmove(CurrentInputStr + Previous, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
-            InputIndex = Previous;
+            InputIndex = Previous; NormalizeInputPosition();
         } else ViDisableInput();
         return 1;
     case VK_ESCAPE: ViDisableInput(); return 1;
@@ -435,7 +437,7 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
         if(KeyEvent->uChar.UnicodeChar >= 0x20 && KeyEvent->uChar.UnicodeChar != 0x7f && Length + 1 < DEFAULT_STR_SIZE) {
             memmove(CurrentInputStr + InputIndex + 1, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
             CurrentInputStr[InputIndex++] = KeyEvent->uChar.UnicodeChar;
-            return 1;
+            NormalizeInputPosition(); return 1;
         }
     }
     return 0;

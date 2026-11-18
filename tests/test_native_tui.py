@@ -363,14 +363,14 @@ def tab_selected(frame, name):
     return position is not None and frame["attributes"][position[1]][position[0]] == 0x30
 
 
-def visible_pids(frame, pids, selected_only=False):
+def visible_pids(frame, pids, selected_only=False, highlighted_only=False):
     found = set()
     for y, row in enumerate(frame["rows"]):
         trimmed = row.lstrip()
         token = trimmed.split(None, 1)[0] if trimmed else ""
         if token.isdigit() and int(token) in pids:
             x = len(row) - len(trimmed)
-            if not selected_only or frame["attributes"][y][x] == 0x30:
+            if (not selected_only or frame["attributes"][y][x] == 0x30) and (not highlighted_only or frame["attributes"][y][x] == 0x8f):
                 found.add(int(token))
     return found
 
@@ -668,6 +668,30 @@ def churn_contract(console, exe, directory, pids, fixtures, observations):
     observations["checks"].append("process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case")
 
 
+def inspection_contract(console, exe, directory, pids, observations):
+    config = directory / "inspection.conf"
+    new_config(exe, config)
+    original = config.read_bytes()
+    console.start(exe, config, pids, "--readonly", "-s", "ID")
+    console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids), "inspection owned targets")
+    console.key(0x24)
+    console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {max(pids)} and not visible_pids(f, pids, True), "read-only inspection from focus")
+    console.type("d")
+    console.wait(lambda f: overlay_contains(f, "Process details"), "asynchronous detail panel opens")
+    console.wait(lambda f: text_contains(f, "Provider:"), "detail result is displayed with state")
+    assert function_ready(console.frame(), 7, "Affinity", False), "read-only detail exposed affinity mutation"
+    console.type("H")
+    frame = console.wait(lambda f: overlay_contains(f, "Thread rows") and text_contains(f, "Threads:"), "bounded thread rows from detail panel")
+    assert text_contains(frame, "lifetime 100ns"), "thread counters were not labelled as lifetime values"
+    console.key(0x23)  # End exposes later rows; it never changes the captured target.
+    console.wait(lambda f: overlay_contains(f, "Thread rows") and text_contains(f, "TID "), "thread rows remain navigable")
+    console.key(27, "\x1b")
+    console.wait(lambda f: is_main(f) and not visible_pids(f, pids, True), "inspection closes without creating selection")
+    console.stop()
+    assert config.read_bytes() == original
+    observations["checks"].append("read-only focused details and thread panels use bounded providers, scroll and return without selecting or writing config")
+
+
 def recovery_contract(console, exe, directory, pids, observations):
     config = directory / "recovery.conf"
     new_config(exe, config)
@@ -678,10 +702,14 @@ def recovery_contract(console, exe, directory, pids, observations):
                          and function_ready(f, 9, "Kill", False), "startup has no implicit target")
     assert all(function_ready(frame, number, label, False)
                for number, label in ((7, "Prio+"), (8, "Prio-"), (9, "Kill")))
-    console.key(0x28)  # Down selects the first row, not the second.
-    console.wait(lambda f: visible_pids(f, pids, True) == {max(pids)}, "first Down explicitly selects first process")
+    console.key(0x28)  # Down only highlights the first visible row.
+    console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {max(pids)}
+                         and not visible_pids(f, pids, True) and function_ready(f, 9, "Kill", False), "Down highlights without enabling mutation")
+    console.key(13, "\r")
+    console.wait(lambda f: visible_pids(f, pids, True) == {max(pids)}, "Enter confirms highlighted target")
     console.type(" ")
-    console.wait(lambda f: visible_pids(f, pids, True) == {sorted(pids, reverse=True)[1]}, "tag moves to next process")
+    console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {sorted(pids, reverse=True)[1]}
+                         and visible_pids(f, pids, True) == {max(pids)}, "tag moves focus while confirmed target stays fixed")
     console.type("F")
     console.key(0x70)
     console.wait(lambda f: overlay_contains(f, "Help"), "Help above a selection and tag")
@@ -689,7 +717,10 @@ def recovery_contract(console, exe, directory, pids, observations):
     console.wait(lambda f: is_main(f) and function_ready(f, 9, "Kill"), "Escape closes Help without mutating captured selection")
     console.key(27, "\x1b")
     frame = console.wait(lambda f: is_main(f) and function_ready(f, 9, "Kill", False)
-                         and not visible_pids(f, pids, True), "main Escape clears selection, tags and follow")
+                         and not visible_pids(f, pids, True) and visible_pids(f, pids, highlighted_only=True) == {max(pids)}, "first main Escape clears selection/tags and highlights former target")
+    console.key(27, "\x1b")
+    frame = console.wait(lambda f: is_main(f) and not visible_pids(f, pids, True)
+                         and not visible_pids(f, pids, highlighted_only=True), "second main Escape clears highlight/search/follow")
     for y, row in enumerate(frame["rows"]):
         token = row.lstrip().split(None, 1)[0:1]
         if token and token[0].isdigit() and int(token[0]) in pids:
@@ -835,7 +866,9 @@ def worker(exe, output):
 
             console.wait(lambda f: visible_pids(f, pids) == set(pids), "identity-bearing targets before confirmation")
             assert not visible_pids(console.frame(), pids, True), "startup unexpectedly selected a process"
-            console.key(0x24)  # Explicitly select a process before requesting an action.
+            console.key(0x24)  # Home highlights; Enter confirms an explicit action target.
+            console.wait(lambda f: bool(visible_pids(f, pids, highlighted_only=True)) and not visible_pids(f, pids, True), "Home highlights without selecting")
+            console.key(13, "\r")
             console.wait(lambda f: bool(visible_pids(f, pids, True))
                          and function_ready(f, 9, "Kill"), "explicit target before confirmation")
             console.records(console.key_records(0x78, repeat=32))  # Held initiating F9.
@@ -935,12 +968,12 @@ def worker(exe, output):
             console.wait(has_bar, "vi common bar")
             ordered_pids = sorted(pids, reverse=True)
             console.key(0x24)  # Home: first row in stable descending PID order.
-            console.wait(lambda f: visible_pids(f, pids, True) == {ordered_pids[0]}, "vi first process selection")
+            console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {ordered_pids[0]} and not visible_pids(f, pids, True), "vi Home highlights first process")
             console.type("j")
-            console.wait(lambda f: visible_pids(f, pids, True) == {ordered_pids[1]}, "vi j selects next process")
+            console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {ordered_pids[1]} and not visible_pids(f, pids, True), "vi j highlights next process")
             console.type("k")
-            console.wait(lambda f: is_main(f) and visible_pids(f, pids, True) == {ordered_pids[0]},
-                         "vi k selects previous process without opening termination")
+            console.wait(lambda f: is_main(f) and visible_pids(f, pids, highlighted_only=True) == {ordered_pids[0]} and not visible_pids(f, pids, True),
+                         "vi k highlights previous process without opening termination")
             console.key(0x70)
             console.wait(lambda f: overlay_contains(f, "Help"), "vi help input acknowledgement")
             console.key(27, "\x1b")
@@ -977,6 +1010,7 @@ def worker(exe, output):
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
             churn_contract(console, exe, Path(temp), pids, fixtures, observations)
             recovery_contract(console, exe, Path(temp), pids, observations)
+            inspection_contract(console, exe, Path(temp), pids, observations)
         observations["result"] = "passed"
     except BaseException:
         observations["result"] = "failed"

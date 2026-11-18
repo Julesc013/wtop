@@ -28,14 +28,17 @@ mouse input where available, thread view, priority/affinity controls where the
 kernel permits, and a process-detail view. Unsupported actions are visibly
 disabled with a reason. Windows priority classes are not relabeled as Unix nice.
 
-Startup has no selected process, tags or followed lifetime, even after restoring
-a display configuration. A selection exists only after explicit navigation, a
-search match or a process-row click. Escape cancels the current editor (restoring
-its prior live filter), closes a dialog or panel, then clears selection, tags and
-follow state on the main view. It does not reverse a completed process action or
-discard committed configuration changes. Ctrl+C quits from every context and
-keymap, including raw console key events and native console-control delivery.
-The existing bounded shutdown/fallback contract still applies to blocked OS calls.
+Startup has no focused/confirmed process, tags or followed lifetime, even after
+restoring a display configuration. Navigation, search and mouse hover create
+focus only. Enter or a row click confirms a lifetime; later focus movement does
+not retarget it. Focus and confirmation have independently configurable colours.
+Escape first cancels the current editor (restoring its prior live filter) or
+closes the current panel/confirmation. On the main view it clears confirmed
+selection/tags to focus, then clears focus/search/follow to no target. It never
+reverses a completed process action or discards committed configuration changes.
+Ctrl+C quits from every context/keymap, including raw console key events and
+native control delivery. The bounded shutdown/fallback contract still applies
+when OS work cannot be cancelled. No row may be an invisible action target.
 
 Selection and tags follow lifetime IDs, not row positions. Sorting is stable
 with a deterministic tie-breaker. A selected process that exits is retired;
@@ -97,8 +100,9 @@ a disabled mouse preference or failed console-mode negotiation preserves keyboar
 use. Restore original console input/output modes on normal exit. No click should
 act on an unseen replacement row after a refresh or resize.
 
-The default htop-derived color roles are white text on black, black/green column
-headers, black/cyan selection and function labels, cyan meter text, and yellow
+The default htop-derived color roles are white text on the terminal-default background,
+bright text on grey focus, black/green column headers, black/dark-cyan confirmed
+selection and function labels, cyan meter text, and yellow
 tag/follow emphasis. CPU and used-memory bars use green. An explicitly selected
 NTop scheme preserves the prior aesthetic; monochrome remains available.[^htop-colors]
 These are terminal color roles, not a guarantee that every host's palette has the
@@ -112,8 +116,11 @@ Saved columns use stable IDs rather than screen positions. The setup interface
 discloses which setting is global and which belongs to the current tab. Its Tabs
 page implements bounded create, duplicate, rename, confirmed delete and reorder;
 stable numeric IDs retain unknown scoped fields through migration and reordering.
-Arbitrary graphical panels, plugin tabs, affinity, thread/detail views and full
-htop parity remain separate work until implemented and qualified.
+The current candidate has captured detail/thread panels, bounded optional
+providers and confirmed affinity editing for representable single-group masks.
+Left/Right collapse/expand lifetime-bound subtrees. Live sampled thread CPU,
+processor-group/CPU-Set editing, arbitrary plugins and full htop parity remain
+separate work. Captured panels expose observation age and manual refresh.
 
 ## Current renderer boundary
 
@@ -124,13 +131,22 @@ intervals, and accepted input can request immediate painting. A new model must n
 replace the displayed model during a deferred-paint interval and make valid visible
 mouse targets disappear.
 
-The conservative Unicode mode retains printable single-cell characters and
-substitutes unsupported wide/combining/emoji scalars. ASCII mode substitutes every
-non-ASCII scalar. Controls are inert; decoding and clipping do not split a
-surrogate/scalar. Model/configuration/JSON retain raw Unicode. Full grapheme width
-and accessibility across console hosts remain separate work. Explicit pause freezes
-collection while age and the PAUSED indicator continue to describe the sample. The minimum layout is 40 by 10 cells; below it the
-resize/quit fallback replaces unsafe controls.
+The modern VT profile uses Unicode17 extended grapheme boundaries from pinned
+utf8proc2.11.0. Layout/editor/clipping preserve clusters; wide/fullwidth and emoji
+presentation use two cells, ambiguous characters one. Oversized clusters are
+consumed whole and replaced with explicit loss/capacity state. Controls/bidi
+overrides are inert. Front/back storage includes cluster payload and continuation
+cells, so changing only combining marks still causes a repaint.
+
+The legacy block-output profile retains a conservative glyph repertoire. Both
+profiles preserve raw model/configuration/JSON text. Unicode boundary conformance
+is independently tested; font shaping, bidirectional layout, terminal-specific
+width/appearance and accessibility require separate host/human evidence.
+`BackgroundMode terminal` emits SGR49 in VT mode and inherits the caller's palette
+background in legacy mode. Explicit row accents remain explicit. The application
+never changes terminal opacity or palettes. `BackgroundMode palette` remains
+available for existing configurations. Explicit pause freezes collection while
+age and PAUSED remain visible. Below40x10, resize/quit replaces unsafe controls.
 
 ## Requirements and acceptance
 

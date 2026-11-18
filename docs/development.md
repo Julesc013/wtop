@@ -58,7 +58,12 @@ console events and filesystem replacement stay with the native adapter.
 `settings_store_nt`, `providers_nt` and `output_nt` own native configuration
 transactions, isolated optional work and complete-record logging respectively.
 `console_frame_nt` presents the composed cell frame and validates viewport changes
-before reusing its front-buffer cache.
+before reusing its front-buffer cache. Beta 3 adds `features_nt` for bounded
+identity-checked details/threads/affinity and `tui_inspection_nt` for owned
+asynchronous panel reads/actions. Unicode 17 grapheme segmentation lives in
+`grapheme.c` and pinned `vendor/utf8proc`; those isolated targets use C99 while
+the established portable policy core retains its C90 profile. The modern build
+statically includes Unicode data and ships the corresponding third-party notices.
 Historical capability probes live under `source/legacy/`, with separate build
 and evidence profiles; see [historical backends](historical-backends.md).
 

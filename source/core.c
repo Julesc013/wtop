@@ -150,6 +150,9 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
         else if (!strcmp(arg, "--command-line")) options->command_line = 1;
         else if (!strcmp(arg, "--services")) options->services = 1;
         else if (!strcmp(arg, "--per-core")) options->per_core = 1;
+        else if (!strcmp(arg, "--image-path")) options->image_path = 1;
+        else if (!strcmp(arg, "--threads")) options->threads = 1;
+        else if (!strcmp(arg, "--affinity")) options->affinity = 1;
         else if (!strcmp(arg, "--status-bar")) options->show_function_bar = 1;
         else if (!strcmp(arg, "--no-status-bar")) options->show_function_bar = 0;
         else if (!strcmp(arg, "--no-mouse")) options->mouse_mode = WTOP_MOUSE_OFF;
@@ -279,8 +282,9 @@ int wtop_parse_options(int argc, const char *const *argv, wtop_options *options,
         (options->pid_filter || options->name_filter || options->user_filter)) {
         *error = "process selectors apply to query processes; use inspect PID for service association"; return 0;
     }
-    if ((options->command_line || options->services) && options->mode != WTOP_INSPECT) {
-        *error = "--command-line and --services require inspect PID"; return 0;
+    if ((options->command_line || options->services || options->image_path ||
+         options->threads || options->affinity) && options->mode != WTOP_INSPECT) {
+        *error = "--command-line, --services, --image-path, --threads and --affinity require inspect PID"; return 0;
     }
     if (options->mode == WTOP_LOG) {
         if (!options->sample_limit && !options->duration_ms) {

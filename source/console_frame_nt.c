@@ -2,6 +2,47 @@
 #include "console_frame_nt.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
+int wtop_console_frame_configure(wtop_console_frame *host, HANDLE output,
+                                  WORD inherited_attributes, int prefer_vt)
+{
+    DWORD mode;
+    if (!host) return 0;
+    /* Reconfiguration of the same handle must recapture its restored mode,
+       never promote our temporary VT/no-wrap mode into the caller baseline. */
+    wtop_console_frame_restore(host);
+    if (!GetConsoleMode(output, &mode)) return 0;
+    host->configured_output = output; host->original_output_mode = mode;
+    host->inherited_attributes = inherited_attributes;
+    /* No wrap: writing the bottom-right cell must never scroll the viewport.
+       The private screen buffer means this cannot alter the invoking shell. */
+    if (prefer_vt && SetConsoleMode(output,
+        (mode | ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING) & ~ENABLE_WRAP_AT_EOL_OUTPUT)) {
+        host->vt_enabled = 1; host->mode_changed = 1;
+    }
+    wtop_frame_invalidate(&host->cells);
+    return 1;
+}
+void wtop_console_frame_restore(wtop_console_frame *host)
+{
+    if (!host) return;
+    if (host->mode_changed && host->configured_output)
+        SetConsoleMode(host->configured_output, host->original_output_mode);
+    host->mode_changed = host->vt_enabled = 0;
+    host->configured_output = NULL;
+}
+
+static WORD legacy_attribute(const wtop_console_frame *host, unsigned short attribute)
+{
+    WORD result = attribute & WTOP_ATTR_PALETTE_MASK;
+    if (attribute & WTOP_ATTR_DEFAULT_BACKGROUND)
+        result = (result & 0x0f) | (host->inherited_attributes & 0xf0);
+    return result;
+}
 
 static int viewport_matches(wtop_console_frame *host)
 {
@@ -26,8 +67,8 @@ static int write_rectangle(void *context, const wtop_frame *frame, const wtop_re
     if (!viewport_matches(host)) return 0;
     for (y = r->top; y <= r->bottom; ++y) for (x = r->left; x <= r->right; ++x) {
         const wtop_cell *cell = &frame->back[(size_t)y * (size_t)frame->width + (size_t)x];
-        host->upload[index].Char.UnicodeChar = (WCHAR)cell->glyph;
-        host->upload[index].Attributes = (WORD)cell->attribute;
+        host->upload[index].Char.UnicodeChar = (WCHAR)(cell->cluster_units ? '?' : cell->glyph);
+        host->upload[index].Attributes = legacy_attribute(host, cell->attribute);
         ++index;
     }
     size.X = (SHORT)width; size.Y = (SHORT)(r->bottom - r->top + 1);
@@ -46,6 +87,75 @@ static int write_rectangle(void *context, const wtop_frame *frame, const wtop_re
     }
     host->error = ERROR_SUCCESS;
     return 1;
+}
+
+static int vt_append(wtop_console_frame *host, size_t *used, const WCHAR *text, size_t count)
+{
+    WCHAR *buffer;
+    size_t need, next;
+    if (count > 8388608UL || *used > 8388608UL - count) { host->error = ERROR_NOT_ENOUGH_MEMORY; return 0; }
+    need = *used + count;
+    if (need > host->vt_capacity) {
+        next = host->vt_capacity ? host->vt_capacity : 4096;
+        while (next < need) next *= 2;
+        buffer = (WCHAR *)realloc(host->vt_buffer, next * sizeof(*buffer));
+        if (!buffer) { host->error = ERROR_NOT_ENOUGH_MEMORY; return 0; }
+        host->vt_buffer = buffer; host->vt_capacity = next;
+    }
+    memcpy(host->vt_buffer + *used, text, count * sizeof(*text)); *used = need;
+    return 1;
+}
+static int vt_color(wtop_console_frame *host, size_t *used, unsigned short attribute)
+{
+    /* Win32 BGR bits -> ANSI RGB indices. Do not translate an inherited
+       background into a palette colour: SGR49 is semantically different. */
+    static const unsigned indices[8] = {0,4,2,6,1,5,3,7};
+    WCHAR sequence[32];
+    unsigned fg = attribute & 15, bg = (attribute >> 4) & 15;
+    int count = swprintf(sequence, 32, L"\x1b[0;%u;%um",
+        (fg & 8 ? 90 : 30) + indices[fg & 7],
+        attribute & WTOP_ATTR_DEFAULT_BACKGROUND ? 49 : (bg & 8 ? 100 : 40) + indices[bg & 7]);
+    return count > 0 && vt_append(host, used, sequence, (size_t)count);
+}
+static int write_vt_rectangle(void *context, const wtop_frame *frame, const wtop_rectangle *r)
+{
+    wtop_console_frame *host = (wtop_console_frame *)context;
+    size_t used = 0, sent = 0;
+    int x, y, count;
+    unsigned short previous = 0xffff;
+    WCHAR sequence[48], glyph;
+    DWORD written, request;
+    if (!viewport_matches(host)) return 0;
+    for (y = r->top; y <= r->bottom; ++y) {
+        count = swprintf(sequence, 48, L"\x1b[%d;%dH", y + 1, r->left + 1);
+        if (count < 1 || !vt_append(host, &used, sequence, (size_t)count)) return 0;
+        for (x = r->left; x <= r->right; ++x) {
+            const wtop_cell *cell = frame->back + (size_t)y * (size_t)frame->width + (size_t)x;
+            if (!cell->width) continue;
+            if (previous != cell->attribute) {
+                if (!vt_color(host, &used, cell->attribute)) return 0;
+                previous = cell->attribute;
+            }
+            if (cell->cluster_units) {
+                if (!vt_append(host, &used, (const WCHAR *)(frame->back_text + cell->cluster_offset), cell->cluster_units)) return 0;
+            } else {
+                glyph = (WCHAR)cell->glyph;
+                if (!vt_append(host, &used, &glyph, 1)) return 0;
+            }
+        }
+    }
+    /* Keep complete sequences/clusters in one write when possible. Short
+       writes resume exactly; any error invalidates the retained frame. */
+    host->vt_used = used;
+    while (sent < used) {
+        request = (DWORD)(used - sent);
+        if (!WriteConsoleW(host->output, host->vt_buffer + sent, request, &written, NULL) || !written) {
+            host->error = GetLastError(); if (!host->error) host->error = ERROR_WRITE_FAULT; return 0;
+        }
+        sent += written;
+    }
+    if (!viewport_matches(host)) return 0;
+    host->error = ERROR_SUCCESS; return 1;
 }
 int wtop_console_frame_begin(wtop_console_frame *host, HANDLE output,
                             int width, int height, int left, int top, WORD attribute)
@@ -78,7 +188,9 @@ int wtop_console_frame_present(wtop_console_frame *host)
     if (!viewport_matches(host)) {
         wtop_frame_invalidate(&host->cells); ++host->retries; return -1;
     }
-    result = wtop_frame_present(&host->cells, write_rectangle, host);
+    host->error = ERROR_SUCCESS;
+    result = wtop_frame_present(&host->cells, host->vt_enabled ? write_vt_rectangle : write_rectangle, host);
+    if (result < 0 && !host->error) host->error = ERROR_NOT_ENOUGH_MEMORY;
     if (result < 0) ++host->retries;
     else if (result) ++host->presents;
     else ++host->unchanged;
@@ -86,7 +198,9 @@ int wtop_console_frame_present(wtop_console_frame *host)
 }
 void wtop_console_frame_dispose(wtop_console_frame *host)
 {
+    wtop_console_frame_restore(host);
     wtop_frame_dispose(&host->cells);
     free(host->upload);
+    free(host->vt_buffer);
     memset(host, 0, sizeof(*host));
 }

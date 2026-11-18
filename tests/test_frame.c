@@ -54,6 +54,46 @@ int main(void)
         wtop_frame_put(&frame, 39, 9, 'Y', 0x30);
     }
     assert(state.calls == 5); /* Four successful changes plus one failed sink. */
+    {
+        const unsigned short accent[] = {'e',0x301};
+        const unsigned short other[] = {'e',0x308};
+        const unsigned short wide[] = {0xd83d,0xde00};
+        wtop_frame_begin(&frame, 7 | WTOP_ATTR_DEFAULT_BACKGROUND);
+        assert(wtop_frame_put_cluster(&frame, 5, 2, accent, 2, 1, 7));
+        assert(wtop_frame_put_cluster(&frame, 8, 2, wide, 2, 2, 3));
+        assert(!wtop_frame_put_cluster(&frame, 39, 2, wide, 2, 2, 3));
+        assert(wtop_frame_present(&frame, sink, &state) == 1);
+        /* Pool allocation order must not create a false dirty frame. */
+        wtop_frame_begin(&frame, 7 | WTOP_ATTR_DEFAULT_BACKGROUND);
+        assert(wtop_frame_put_cluster(&frame, 8, 2, wide, 2, 2, 3));
+        assert(wtop_frame_put_cluster(&frame, 5, 2, accent, 2, 1, 7));
+        assert(wtop_frame_present(&frame, sink, &state) == 0);
+        assert(wtop_frame_put_cluster(&frame, 5, 2, other, 2, 1, 7));
+        assert(wtop_frame_present(&frame, sink, &state) == 1);
+        assert(state.seen.left == 5 && state.seen.right == 5);
+        /* Repainting a continuation erases the whole old wide glyph. */
+        wtop_frame_put(&frame, 9, 2, 'X', 7);
+        assert(frame.back[2 * 40 + 8].glyph == ' ' && frame.back[2 * 40 + 8].width == 1);
+        assert(wtop_frame_present(&frame, sink, &state) == 1);
+        assert(state.seen.left == 8 && state.seen.right == 9);
+    }
+    {
+        const unsigned short wide[] = {0x4e2d};
+        assert(wtop_frame_resize(&frame, 10, 2));
+        wtop_frame_begin(&frame, 7);
+        for (i = 0; i < 10; i += 2)
+            assert(wtop_frame_put_cluster(&frame, i, 0, wide, 1, 2, 7));
+        for (i = 1; i < 9; i += 2)
+            assert(wtop_frame_put_cluster(&frame, i, 1, wide, 1, 2, 7));
+        assert(wtop_frame_present(&frame, sink, &state) == 1);
+        wtop_frame_attribute(&frame, 4, 0, 3);
+        wtop_frame_attribute(&frame, 5, 1, 3);
+        assert(wtop_frame_present(&frame, sink, &state) == 1);
+        /* Different wide-glyph alignment in each row means the only rectangle
+           whose edges are whole clusters in BOTH rows covers the full width. */
+        assert(state.seen.left == 0 && state.seen.right == 9);
+        assert(state.seen.top == 0 && state.seen.bottom == 1);
+    }
     wtop_frame_dispose(&frame); wtop_frame_dispose(&frame);
     assert(!frame.front && !frame.back && !frame.count);
     return 0;

@@ -2,7 +2,7 @@ name: Wtop portable prerelease draft
 
 on:
   push:
-    branches: [master, 'work/public-beta-*']
+    branches: [master, 'work/public-beta-*', 'work/beta3-*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
       tag:
         description: 'Existing draft tag, required only for publish'
         type: string
-        default: v0.4.0-beta.2
+        default: v0.4.0-beta.3
 
 permissions:
   contents: read
@@ -89,12 +89,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/package_candidate.py verify out/beta-candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build exact-payload experimental MSI and exercise its lifecycle
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        env:
+          DOTNET_ROLL_FORWARD: Major
+        run: |
+          dotnet tool install wix --tool-path out/wix --version 4.0.6
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python packaging/build_msi.py --candidate out/beta-candidate --stage out/beta-msi-stage --wix out/wix/wix.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/test_native_install.py out/beta-candidate --disposable-host --machine --restricted-user
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain exact profile inputs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wtop-beta-input-${{ matrix.profile }}-${{ github.sha }}
           path: out/beta-candidate/
           if-no-files-found: error
+          retention-days: 30
+      - name: Retain experimental MSI and failed or successful lifecycle evidence
+        if: always() && matrix.arch == 'x64'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wtop-msi-candidate-${{ github.sha }}
+          path: out/beta-candidate/
+          if-no-files-found: warn
           retention-days: 30
       - name: Retain failed and successful native observations
         if: always()
@@ -106,9 +126,12 @@ jobs:
             out/beta-windows/Testing/Temporary/LastTest.log
             out/beta-windows/native-tui-observations.json
             out/beta-windows/native-provider-observations.json
+            out/beta-windows/native-resource-observations.json
             out/beta-provenance.json
             out/beta-candidate/native-receipt.json
             out/beta-candidate/security-scan.json
+            out/beta-candidate/native-install-observations*.json
+            out/beta-candidate/native-install-logs*/
           if-no-files-found: warn
           retention-days: 30
 
@@ -138,13 +161,22 @@ jobs:
           for profile in win-nt-x86 win-nt-x64 win-nt-arm64; do
             gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "wtop-beta-input-$profile-$SOURCE_SHA" --dir "out/profiles/$profile"
           done
-          python tools/release_bundle.py assemble --input out/profiles/win-nt-x86 --input out/profiles/win-nt-x64 --input out/profiles/win-nt-arm64 --notes docs/beta2-changes.md --output out/beta
+          python tools/release_bundle.py assemble --input out/profiles/win-nt-x86 --input out/profiles/win-nt-x64 --input out/profiles/win-nt-arm64 --notes docs/beta3-changes.md --output out/beta
           python tools/release_bundle.py verify out/beta
+          python tools/prepare_distribution.py prepare --bundle out/beta --output out/distribution-preparation
+          python tools/prepare_distribution.py verify --bundle out/beta --output out/distribution-preparation
       - name: Retain verified draft package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wtop-beta-${{ github.sha }}
           path: out/beta/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain offline channel preparation without publishing listings
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wtop-distribution-preparation-${{ github.sha }}
+          path: out/distribution-preparation/
           if-no-files-found: error
           retention-days: 30
 

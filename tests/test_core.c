@@ -122,6 +122,7 @@ static void command_test(void)
     const char *error;
     const char *query[] = { "wtop", "--format=json", "query", "system", "--per-core" };
     const char *inspect[] = { "wtop", "inspect", "4294967295", "--command-line", "--services" };
+    const char *features[] = { "wtop", "inspect", "42", "--threads", "--affinity", "--image-path", "--readonly" };
     const char *log[] = { "wtop", "log", "--output", "-", "--samples=2", "--interval=50", "--max-bytes=8192" };
     const char *duration[] = { "wtop", "log", "--output=capture.jsonl", "--duration=500", "--samples=10" };
     const char *paths[] = { "wtop", "--paths", "--portable-root=C:\\tools\\wtop", "--format=json" };
@@ -133,6 +134,10 @@ static void command_test(void)
         { "wtop", "inspect", "4294967296", NULL },
         { "wtop", "inspect", "42", "--pid=42", NULL },
         { "wtop", "--command-line", NULL },
+        { "wtop", "--threads", NULL },
+        { "wtop", "--affinity", NULL },
+        { "wtop", "--image-path", NULL },
+        { "wtop", "inspect", "42", "--affinity=0xff", NULL },
         { "wtop", "query", "processes", "--services", NULL },
         { "wtop", "log", "--output=-", NULL },
         { "wtop", "log", "--samples=1", NULL },
@@ -150,6 +155,8 @@ static void command_test(void)
     assert(options.mode == WTOP_QUERY && options.query_target == WTOP_QUERY_SYSTEM && options.json && options.per_core);
     assert(wtop_parse_options(5, inspect, &options, &error));
     assert(options.mode == WTOP_INSPECT && options.inspect_pid == 4294967295UL && options.command_line && options.services);
+    assert(wtop_parse_options(7, features, &options, &error));
+    assert(options.threads && options.affinity && options.image_path && options.readonly && !options.command_line);
     assert(wtop_parse_options(7, log, &options, &error));
     assert(options.mode == WTOP_LOG && options.json && options.sample_limit == 2 && options.interval_ms == 50 && options.max_bytes == 8192);
     assert(!strcmp(options.output_path, "-"));

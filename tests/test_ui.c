@@ -126,12 +126,13 @@ static void contexts(void)
     wtop_ui_binding binding;
     int map, slot, context;
     wtop_ui_context_defaults(&options, WTOP_CONTEXT_PROCESS);
+    options.has_focus = options.focus_identity_known = options.affinity_supported = 1;
     options.has_selection = options.identity_known = options.kill_supported = 1;
     options.priority_supported = options.save_available = 1;
     options.can_add_tab = options.can_delete_tab = 1;
     options.can_move_left = options.can_move_right = options.setup_tabs = 1;
     for (map=WTOP_KEYMAP_HTOP; map<=WTOP_KEYMAP_EMACS; ++map) {
-        for (context=WTOP_CONTEXT_PROCESS; context<=WTOP_CONTEXT_RESULTS; ++context) {
+        for (context=WTOP_CONTEXT_PROCESS; context<=WTOP_CONTEXT_AFFINITY; ++context) {
             options.context = (wtop_ui_context)context;
             for (slot=0; slot<10; ++slot) {
                 wtop_ui_action key;
@@ -290,8 +291,40 @@ static void chrome_layout(void)
     assert(wtop_ui_context_key_action(&context,WTOP_KEYMAP_HTOP,'Z',0)==WTOP_UI_NONE);
 }
 
+static void highlighted_is_not_selected(void)
+{
+    wtop_ui_context_options options;
+    wtop_ui_binding binding;
+    int map;
+    wtop_ui_context_defaults(&options, WTOP_CONTEXT_PROCESS);
+    options.has_focus = options.focus_identity_known = 1;
+    options.kill_supported = options.priority_supported = options.affinity_supported = 1;
+    for(map = WTOP_KEYMAP_HTOP; map <= WTOP_KEYMAP_EMACS; ++map) {
+        assert(wtop_ui_context_key_action(&options, map, '\r', 0) == WTOP_UI_SELECT);
+        assert(wtop_ui_context_key_action(&options, map, 'd', 0) == WTOP_UI_DETAILS);
+        assert(wtop_ui_context_key_action(&options, map, 'H', 0) == WTOP_UI_THREADS);
+        assert(wtop_ui_context_key_action(&options, map, 'a', 0) == WTOP_UI_NONE);
+        assert(wtop_ui_context_key_action(&options, map, WTOP_KEY_LEFT, 0) == WTOP_UI_COLLAPSE);
+        assert(wtop_ui_context_key_action(&options, map, WTOP_KEY_RIGHT, 0) == WTOP_UI_EXPAND);
+        assert(wtop_ui_context_key_action(&options, map, ' ', 0) == WTOP_UI_TAG);
+        wtop_ui_resolve_function(&options, 8, &binding);
+        assert(!binding.enabled && binding.reason == WTOP_UI_NO_SELECTION);
+        wtop_ui_resolve_function(&options, 6, &binding);
+        assert(!binding.enabled && binding.reason == WTOP_UI_NO_SELECTION);
+    }
+    options.has_selection = options.identity_known = 1;
+    wtop_ui_resolve_action(&options, WTOP_UI_AFFINITY, &binding);
+    assert(binding.enabled);
+    options.readonly = 1;
+    wtop_ui_resolve_action(&options, WTOP_UI_AFFINITY, &binding);
+    assert(!binding.enabled && binding.reason == WTOP_UI_READONLY);
+    wtop_ui_resolve_action(&options, WTOP_UI_DETAILS, &binding);
+    assert(binding.enabled);
+}
+
 int main(void)
 {
+    highlighted_is_not_selected();
     keymaps(); action_bar(); columns(); metric_units();
     contexts(); availability(); live_status(); chrome_layout();
     puts("portable UI contracts passed");

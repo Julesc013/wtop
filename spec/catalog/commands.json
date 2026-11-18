@@ -636,6 +636,48 @@
         "WT-AC-031-05"
       ],
       "evidence": []
+    },
+    {
+      "id": "WT-CMD-IMAGE-PATH",
+      "tokens": [
+        "--image-path"
+      ],
+      "mode": "modifier",
+      "arguments": "none; requires inspect PID",
+      "status": "candidate",
+      "behavior": "Read the full executable path through a bounded identity-checked child provider; no command arguments are implied.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-THREADS",
+      "tokens": [
+        "--threads"
+      ],
+      "mode": "modifier",
+      "arguments": "none; requires inspect PID",
+      "status": "candidate",
+      "behavior": "Read up to1024 thread rows with creation identities, typed relative priority and exact lifetime100ns execution counters. CPU percentages are not fabricated from one observation.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "WT-CMD-AFFINITY",
+      "tokens": [
+        "--affinity"
+      ],
+      "mode": "modifier",
+      "arguments": "none; requires inspect PID",
+      "status": "candidate",
+      "behavior": "Read exact process/system affinity masks and group limitations. This flag never changes affinity. Ambiguous multi-group or folded32bit native masks report unsupported.",
+      "acceptance": [
+        "WT-AC-030-01"
+      ],
+      "evidence": []
     }
   ]
 }

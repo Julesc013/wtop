@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 static CHAR_INFO read_cell(HANDLE output, SHORT x, SHORT y)
 {
     CHAR_INFO cell;
@@ -13,6 +14,13 @@ static CHAR_INFO read_cell(HANDLE output, SHORT x, SHORT y)
     assert(ReadConsoleOutputW(output,&cell,size,origin,&region));
     assert(region.Left == x && region.Top == y);
     return cell;
+}
+static int contains_sequence(const wtop_console_frame *host, const WCHAR *text)
+{
+    size_t i, n = wcslen(text);
+    for(i=0;i+n<=host->vt_used;++i)
+        if(!wmemcmp(host->vt_buffer+i,text,n)) return 1;
+    return 0;
 }
 int main(void)
 {
@@ -98,6 +106,54 @@ int main(void)
     cell = read_cell(output,before.srWindow.Right,before.srWindow.Bottom);
     assert(cell.Char.UnicodeChar=='A' && cell.Attributes==0x30);
     printf("presenter: 1000 unchanged frames, no live clear, attribute-only update, actual resize/origin retry, cursor retained\n");
+    /* Legacy fallback inherits the invoking palette background and strips the
+       semantic flags rather than leaking them into COMMON_LVB attributes. */
+    assert(wtop_console_frame_configure(&host,output,0x57,0));
+    assert(wtop_console_frame_begin(&host,output,width,height,before.srWindow.Left,before.srWindow.Top,
+        7|WTOP_ATTR_DEFAULT_BACKGROUND));
+    wtop_frame_put(&host.cells,1,0,'B',3|WTOP_ATTR_DEFAULT_BACKGROUND);
+    assert(wtop_console_frame_present(&host)==1);
+    cell=read_cell(output,before.srWindow.Left+1,before.srWindow.Top);
+    assert(cell.Char.UnicodeChar=='B' && cell.Attributes==0x53);
+    {
+        DWORD original, restored;
+        assert(GetConsoleMode(output,&original));
+        assert(wtop_console_frame_configure(&host,output,before.wAttributes,1));
+        if(host.vt_enabled) {
+            assert(wtop_console_frame_begin(&host,output,width,height,before.srWindow.Left,before.srWindow.Top,
+                7|WTOP_ATTR_DEFAULT_BACKGROUND));
+            wtop_frame_put(&host.cells,1,0,'V',0x30|WTOP_ATTR_EXPLICIT_BACKGROUND);
+            wtop_frame_put(&host.cells,width-1,height-1,'Q',7|WTOP_ATTR_DEFAULT_BACKGROUND);
+            assert(wtop_console_frame_present(&host)==1);
+            assert(contains_sequence(&host,L"\x1b[0;37;49m"));
+            assert(contains_sequence(&host,L"\x1b[0;30;46m"));
+            cell=read_cell(output,before.srWindow.Left+1,before.srWindow.Top);
+            assert(cell.Char.UnicodeChar=='V' && (cell.Attributes&0xff)==0x30);
+            assert(GetConsoleScreenBufferInfo(output,&after));
+            assert(after.srWindow.Top==before.srWindow.Top);
+            cell=read_cell(output,before.srWindow.Right,before.srWindow.Bottom);
+            assert(cell.Char.UnicodeChar=='Q');
+            assert(wtop_console_frame_present(&host)==0);
+            /* Reconfiguring an already configured handle must not capture the
+               temporary VT/no-wrap mode as the mode to restore later. */
+            assert(wtop_console_frame_configure(&host,output,before.wAttributes,1));
+            assert(host.vt_enabled);
+            assert(SetConsoleWindowInfo(output,TRUE,&moved));
+            assert(wtop_console_frame_begin(&host,output,width-1,height-1,moved.Left,moved.Top,
+                7|WTOP_ATTR_DEFAULT_BACKGROUND));
+            wtop_frame_put(&host.cells,0,0,'O',7|WTOP_ATTR_DEFAULT_BACKGROUND);
+            wtop_frame_put(&host.cells,width-2,height-2,'E',7|WTOP_ATTR_DEFAULT_BACKGROUND);
+            assert(wtop_console_frame_present(&host)==1);
+            cell=read_cell(output,moved.Left,moved.Top); assert(cell.Char.UnicodeChar=='O');
+            cell=read_cell(output,moved.Right,moved.Bottom); assert(cell.Char.UnicodeChar=='E');
+            assert(GetConsoleScreenBufferInfo(output,&after));
+            assert(after.srWindow.Left==moved.Left && after.srWindow.Top==moved.Top);
+            assert(SetConsoleWindowInfo(output,TRUE,&before.srWindow));
+            puts("VT presenter: SGR49 background, explicit selection, bottom-right/no scroll, moved origin, exact mode restoration");
+        } else puts("VT presenter unavailable: inherited-palette fallback verified");
+        wtop_console_frame_restore(&host);
+        assert(GetConsoleMode(output,&restored) && restored==original);
+    }
     wtop_console_frame_dispose(&host);
     assert(CloseHandle(output));
     if(allocated) assert(FreeConsole());

@@ -58,6 +58,7 @@ wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers)
     if(key >= WTOP_KEY_F1 && key <= WTOP_KEY_F10)
         return wtop_ui_function_action(key - WTOP_KEY_F1);
     if(key == 27) return WTOP_UI_CANCEL;
+    if(!ctrl && !alt && (key == '\r' || key == '\n')) return WTOP_UI_SELECT;
     if(key == '\t') return modifiers & WTOP_MOD_SHIFT ? WTOP_UI_PREVIOUS_TAB : WTOP_UI_NEXT_TAB;
     if(key == WTOP_KEY_UP) return WTOP_UI_UP;
     if(key == WTOP_KEY_DOWN) return WTOP_UI_DOWN;
@@ -67,6 +68,8 @@ wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers)
     if(key == WTOP_KEY_END) return WTOP_UI_BOTTOM;
     if(key == WTOP_KEY_LEFT && ctrl) return WTOP_UI_SORT_LEFT;
     if(key == WTOP_KEY_RIGHT && ctrl) return WTOP_UI_SORT_RIGHT;
+    if(!ctrl && !alt && key == WTOP_KEY_LEFT) return WTOP_UI_COLLAPSE;
+    if(!ctrl && !alt && key == WTOP_KEY_RIGHT) return WTOP_UI_EXPAND;
     if(keymap == WTOP_KEYMAP_EMACS) {
         if(ctrl) {
             switch(key) {
@@ -100,6 +103,9 @@ wtop_ui_action wtop_ui_key_action(int keymap, int key, unsigned modifiers)
     if(key == 'q') return WTOP_UI_QUIT;
     if(key == '?' || key == 'h') return WTOP_UI_HELP;
     if(key == 'Z') return WTOP_UI_PAUSE;
+    if(key == 'd') return WTOP_UI_DETAILS;
+    if(key == 'H') return WTOP_UI_THREADS;
+    if(key == 'a') return WTOP_UI_AFFINITY;
     if(key == 'B') return WTOP_UI_BAR;
     if(key == 't') return WTOP_UI_TREE;
     if(keymap == WTOP_KEYMAP_VI) {
@@ -206,9 +212,9 @@ const char *wtop_ui_reason_name(wtop_ui_reason reason)
         "no selected process", "process identity is unavailable",
         "operation is unsupported", "no configuration save destination",
         "view capacity reached", "at least one view must remain",
-        "already at the ordering boundary"
+        "already at the ordering boundary", "no highlighted process"
     };
-    if (reason < WTOP_UI_AVAILABLE || reason > WTOP_UI_ORDER_BOUNDARY)
+    if (reason < WTOP_UI_AVAILABLE || reason > WTOP_UI_NO_FOCUS)
         return "invalid availability state";
     return names[reason];
 }
@@ -241,6 +247,14 @@ static void action_labels(wtop_ui_binding *binding)
     case WTOP_UI_SEARCH_PREVIOUS: label = "Previous match"; compact = "N"; break;
     case WTOP_UI_NEXT_TAB: label = "Next view"; compact = ">"; break;
     case WTOP_UI_PREVIOUS_TAB: label = "Previous view"; compact = "<"; break;
+    case WTOP_UI_SELECT: label = "Select"; compact = "Enter"; break;
+    case WTOP_UI_COLLAPSE: label = "Collapse"; compact = "<-"; break;
+    case WTOP_UI_EXPAND: label = "Expand"; compact = "->"; break;
+    case WTOP_UI_DETAILS: label = "Details"; compact = "d"; break;
+    case WTOP_UI_THREADS: label = "Threads"; compact = "H"; break;
+    case WTOP_UI_AFFINITY: label = "Affinity"; compact = "a"; break;
+    case WTOP_UI_REFRESH: label = "Refresh"; compact = "R"; break;
+    case WTOP_UI_AFFINITY_APPLY: label = "Review"; compact = "OK"; break;
     case WTOP_UI_PAUSE: label = "Pause/resume"; compact = "Z"; break;
     case WTOP_UI_BAR: label = "Controls"; compact = "B"; break;
     case WTOP_UI_COMMAND: label = "Command"; compact = ":"; break;
@@ -281,7 +295,8 @@ static int process_only_action(wtop_ui_action action)
     case WTOP_UI_SEARCH_PREVIOUS: case WTOP_UI_NEXT_TAB:
     case WTOP_UI_PREVIOUS_TAB: case WTOP_UI_COMMAND: case WTOP_UI_SORT_CPU:
     case WTOP_UI_SORT_MEMORY: case WTOP_UI_SORT_PID: case WTOP_UI_SORT_LEFT:
-    case WTOP_UI_SORT_RIGHT: case WTOP_UI_PAUSE:
+    case WTOP_UI_SORT_RIGHT: case WTOP_UI_PAUSE: case WTOP_UI_SELECT:
+    case WTOP_UI_COLLAPSE: case WTOP_UI_EXPAND:
         return 1;
     default: return 0;
     }
@@ -300,7 +315,7 @@ void wtop_ui_resolve_action(const wtop_ui_context_options *options,
     binding->reason = WTOP_UI_WRONG_CONTEXT;
     if (!options || binding->action == WTOP_UI_NONE) return;
     context = options->context;
-    if (context < WTOP_CONTEXT_PROCESS || context > WTOP_CONTEXT_RESULTS) return;
+    if (context < WTOP_CONTEXT_PROCESS || context > WTOP_CONTEXT_AFFINITY) return;
     if (context == WTOP_CONTEXT_CONFIRM && action != WTOP_UI_CONFIRM &&
         action != WTOP_UI_HELP && action != WTOP_UI_CANCEL && action != WTOP_UI_QUIT)
         reason = WTOP_UI_WRONG_CONTEXT;
@@ -333,7 +348,17 @@ void wtop_ui_resolve_action(const wtop_ui_context_options *options,
                  (action == WTOP_UI_TAB_MOVE_RIGHT && !options->can_move_right))
             reason = WTOP_UI_ORDER_BOUNDARY;
     }
+    if (reason == WTOP_UI_AVAILABLE &&
+        (action == WTOP_UI_DETAILS || action == WTOP_UI_THREADS || action == WTOP_UI_AFFINITY) &&
+        context != WTOP_CONTEXT_PROCESS && context != WTOP_CONTEXT_DETAILS && context != WTOP_CONTEXT_THREADS)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    if (reason == WTOP_UI_AVAILABLE && action == WTOP_UI_REFRESH &&
+        context != WTOP_CONTEXT_DETAILS && context != WTOP_CONTEXT_THREADS && context != WTOP_CONTEXT_AFFINITY)
+        reason = WTOP_UI_WRONG_CONTEXT;
+    if (reason == WTOP_UI_AVAILABLE && action == WTOP_UI_AFFINITY_APPLY && context != WTOP_CONTEXT_AFFINITY)
+        reason = WTOP_UI_WRONG_CONTEXT;
     target_action = action == WTOP_UI_KILL || action == WTOP_UI_CONFIRM ||
+                    action == WTOP_UI_AFFINITY || action == WTOP_UI_AFFINITY_APPLY ||
                     action == WTOP_UI_PRIORITY_UP || action == WTOP_UI_PRIORITY_DOWN;
     if (reason == WTOP_UI_AVAILABLE && target_action) {
         if (options->readonly) reason = WTOP_UI_READONLY;
@@ -341,13 +366,16 @@ void wtop_ui_resolve_action(const wtop_ui_context_options *options,
         else if (!options->identity_known) reason = WTOP_UI_NO_IDENTITY;
         else if ((action == WTOP_UI_KILL || action == WTOP_UI_CONFIRM) &&
                  !options->kill_supported) reason = WTOP_UI_UNSUPPORTED;
+        else if ((action == WTOP_UI_AFFINITY || action == WTOP_UI_AFFINITY_APPLY) && !options->affinity_supported)
+            reason = WTOP_UI_UNSUPPORTED;
         else if ((action == WTOP_UI_PRIORITY_UP || action == WTOP_UI_PRIORITY_DOWN) &&
                  !options->priority_supported) reason = WTOP_UI_UNSUPPORTED;
     }
     if (reason == WTOP_UI_AVAILABLE &&
-        (action == WTOP_UI_TAG || action == WTOP_UI_FOLLOW)) {
-        if (!options->has_selection) reason = WTOP_UI_NO_SELECTION;
-        else if (!options->identity_known) reason = WTOP_UI_NO_IDENTITY;
+        (action == WTOP_UI_TAG || action == WTOP_UI_FOLLOW || action == WTOP_UI_DETAILS || action == WTOP_UI_THREADS ||
+         action == WTOP_UI_COLLAPSE || action == WTOP_UI_EXPAND || action == WTOP_UI_SELECT)) {
+        if (!options->has_focus) reason = WTOP_UI_NO_FOCUS;
+        else if (action != WTOP_UI_SELECT && !options->focus_identity_known) reason = WTOP_UI_NO_IDENTITY;
     }
     if (reason == WTOP_UI_AVAILABLE && action == WTOP_UI_SAVE) {
         if(options->readonly) reason = WTOP_UI_READONLY;
@@ -373,6 +401,16 @@ void wtop_ui_resolve_function(const wtop_ui_context_options *options,
             else if (index == 2) action = WTOP_UI_PAGE_UP;
             else if (index == 3) action = WTOP_UI_PAGE_DOWN;
             else if (index == 8) action = WTOP_UI_CANCEL;
+            break;
+        case WTOP_CONTEXT_DETAILS: case WTOP_CONTEXT_THREADS: case WTOP_CONTEXT_AFFINITY:
+            if (index == 1) action = WTOP_UI_CANCEL;
+            else if (index == 2) action = WTOP_UI_PAGE_UP;
+            else if (index == 3) action = WTOP_UI_PAGE_DOWN;
+            else if (index == 4) action = WTOP_UI_REFRESH;
+            else if (index == 5 && options->context != WTOP_CONTEXT_AFFINITY)
+                action = options->context == WTOP_CONTEXT_DETAILS ? WTOP_UI_THREADS : WTOP_UI_DETAILS;
+            else if (index == 6 && options->context != WTOP_CONTEXT_AFFINITY) action = WTOP_UI_AFFINITY;
+            else if (index == 8 && options->context == WTOP_CONTEXT_AFFINITY) action = WTOP_UI_AFFINITY_APPLY;
             break;
         case WTOP_CONTEXT_SETUP:
             if (index == 1) action = WTOP_UI_SETUP_NEXT_PAGE;
@@ -444,6 +482,14 @@ wtop_ui_action wtop_ui_context_key_action(const wtop_ui_context_options *options
     } else if (options->context == WTOP_CONTEXT_RESULTS && !command_modifier &&
                (key == '\r' || key == '\n')) action = WTOP_UI_CANCEL;
     else if (!command_modifier && key == 'q') action = WTOP_UI_QUIT;
+    else if (options->context == WTOP_CONTEXT_DETAILS || options->context == WTOP_CONTEXT_THREADS || options->context == WTOP_CONTEXT_AFFINITY) {
+        if (!command_modifier && (key == 'r' || key == 'R')) action = WTOP_UI_REFRESH;
+        else if (options->context != WTOP_CONTEXT_AFFINITY && !command_modifier && key == 'd') action = WTOP_UI_DETAILS;
+        else if (options->context != WTOP_CONTEXT_AFFINITY && !command_modifier && key == 'H') action = WTOP_UI_THREADS;
+        else if (options->context != WTOP_CONTEXT_AFFINITY && !command_modifier && key == 'a') action = WTOP_UI_AFFINITY;
+        else if (options->context == WTOP_CONTEXT_AFFINITY && !command_modifier && (key == '\r' || key == '\n')) action = WTOP_UI_AFFINITY_APPLY;
+        else { action = wtop_ui_key_action(keymap, key, modifiers); if (!navigation_action(action)) action = WTOP_UI_NONE; }
+    }
     else if (options->context == WTOP_CONTEXT_PROCESS)
         action = wtop_ui_key_action(keymap, key, modifiers);
     else if (options->context == WTOP_CONTEXT_SETUP) {

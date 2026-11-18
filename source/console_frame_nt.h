@@ -11,7 +11,20 @@ typedef struct wtop_console_frame {
     SHORT left, top;
     DWORD error;
     unsigned long presents, unchanged, retries;
+    HANDLE configured_output;
+    DWORD original_output_mode;
+    WORD inherited_attributes;
+    int vt_enabled, mode_changed;
+    WCHAR *vt_buffer;
+    size_t vt_capacity, vt_used;
 } wtop_console_frame;
+
+/* Select VT only after the host accepts it. Never change palette/opacity.
+   A legacy host retains the caller's background palette index. Call restore
+   before closing a borrowed output handle; dispose is otherwise sufficient. */
+int wtop_console_frame_configure(wtop_console_frame *host, HANDLE output,
+                                  WORD inherited_attributes, int prefer_vt);
+void wtop_console_frame_restore(wtop_console_frame *host);
 /* No physical writes during composition. UI thread only; no callback retention.
    begin returns 0 on allocation/geometry error. present returns -1 to retry a
    changed/clipped viewport; it never acknowledges a partially written frame. */

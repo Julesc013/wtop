@@ -34,7 +34,16 @@ LEGACY_REQUIRED_TESTS = frozenset((
     'native_output','native_tree','cli_version','cli_capabilities','cli_gui_reserved',
     'cli_snapshot','native_cli_behavior','native_provider_behavior','native_tui_interaction',
 ))
-REQUIRED_TESTS = LEGACY_REQUIRED_TESTS | {'portable_frame', 'native_console_frame', 'native_input'}
+BETA2_REQUIRED_TESTS = LEGACY_REQUIRED_TESTS | {'portable_frame', 'native_console_frame', 'native_input'}
+REQUIRED_TESTS = BETA2_REQUIRED_TESTS | {'portable_grapheme', 'native_features', 'native_tui_inspection', 'native_resource_behavior'}
+
+
+def required_tests(version: str):
+    if version == '0.4.0-beta.1':
+        return LEGACY_REQUIRED_TESTS
+    if version == '0.4.0-beta.2':
+        return BETA2_REQUIRED_TESTS
+    return REQUIRED_TESTS
 
 class BetaError(ValueError):
     pass
@@ -86,7 +95,7 @@ def validate_native(receipt: dict, payload: dict) -> None:
     if any(receipt.get(key) != value for key, value in exact.items()):
         raise BetaError('native receipt does not bind the exact beta payload')
     tests = receipt.get('tests', {})
-    required = LEGACY_REQUIRED_TESTS if payload['version'] == '0.4.0-beta.1' else REQUIRED_TESTS
+    required = required_tests(payload['version'])
     if tests.get('status') != 'passed' or not required.issubset(tests.get('names', [])):
         raise BetaError('native receipt does not cover required tests')
     if not SHA.fullmatch(str(tests.get('junit_sha256', ''))):
@@ -301,7 +310,7 @@ def verify(directory: Path) -> dict:
     if tree!=payload['source']['tree'] or entries.get('VERSION',b'').decode().strip()!=version or entries.get('LICENSE')!=data['LICENSE']:
         raise BetaError('corresponding source does not match')
     receipt=load_json(directory/'native-receipt.json');validate_native(receipt,payload)
-    required = LEGACY_REQUIRED_TESTS if version == '0.4.0-beta.1' else REQUIRED_TESTS
+    required = required_tests(version)
     if receipt['tests']!=native_tests(directory/'native-tests.xml', required) or manifest['signing']!=receipt['authenticode']:
         raise BetaError('test or signing receipt mismatch')
     return manifest

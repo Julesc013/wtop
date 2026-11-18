@@ -30,18 +30,18 @@ REPOSITORY={'full_name':'Julesc013/wtop','has_issues':True,'private':False,'arch
 
 def receipt(payload,junit):
     arch=payload['pe']['architecture']
-    return {'schema':'wtop.beta-native/1','result':'passed','version':VERSION,
+    return {'schema':'wtop.beta-native/1','result':'passed','version':payload['version'],
             'profile':payload['profile'],'source_revision':payload['source']['revision'],
             'executable_sha256':payload['executable']['sha256'],'tests':native_tests(junit),
-            'version_command':VERSION,'embedded_version':{'file':VERSION,'product':VERSION},
-            'embedded_numeric_version':[0,4,0,20002], 'authenticode':'NotSigned',
+            'version_command':payload['version'],'embedded_version':{'file':payload['version'],'product':payload['version']},
+            'embedded_numeric_version':metadata(payload['version'])['native_version'], 'authenticode':'NotSigned',
             'human_visual_acceptance':False,
             'host':{'system':'Windows','major':10,'build':26100,'product_type':1,
                     'native_architecture':'x64' if arch=='x86' else arch,'elevated':True}}
 
 
 def scan_receipt(payload):
-    return {'schema':'wtop.security-scan/1','version':VERSION,'profile':payload['profile'],
+    return {'schema':'wtop.security-scan/1','version':payload['version'],'profile':payload['profile'],
             'source_revision':payload['source']['revision'],'executable_sha256':payload['executable']['sha256'],
             'status':'unavailable','reason':'Synthetic fixture; no scanner ran'}
 
@@ -132,6 +132,22 @@ class BundleBoundary(unittest.TestCase):
         output,manifest=self.assemble()
         self.assertEqual(manifest['omitted_profiles'],['win-nt-arm64','win-nt-x86'])
         with self.assertRaises(BetaError):assemble([self.root/'input-x64'],self.notes,output,root=self.source)
+
+    def test_beta3_carries_exact_third_party_notices_without_changing_beta2(self):
+        (self.source/'VERSION').write_text('0.4.0-beta.3\n')
+        (self.source/'THIRD-PARTY-NOTICES.md').write_text('Synthetic licensed dependency notice for protocol test only.\n')
+        subprocess.run(['git','-C',str(self.source),'add','.'],check=True,capture_output=True)
+        subprocess.run(['git','-C',str(self.source),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid',
+                        '-c','commit.gpgsign=false','commit','-qm','beta3 fixture'],check=True,capture_output=True)
+        self.identity=source_identity(self.source)
+        output,manifest=self.assemble()
+        self.assertEqual(manifest['metadata']['msi_version'],'0.4.403')
+        self.assertEqual((output/'THIRD-PARTY-NOTICES.md').read_bytes(),(self.source/'THIRD-PARTY-NOTICES.md').read_bytes())
+        self.assertTrue(any('offline preparation only' in text for text in manifest['omitted_deliverables']))
+        self.assertEqual(verify(output),manifest)
+        (output/'THIRD-PARTY-NOTICES.md').write_bytes(b'changed notice')
+        self.refresh_outer_hashes(output,manifest)
+        with self.assertRaisesRegex(BetaError,'third-party notices'):verify(output)
 
     def test_updated_outer_checksums_do_not_hide_changed_exe(self):
         output,manifest=self.assemble()

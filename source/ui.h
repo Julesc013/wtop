@@ -24,24 +24,27 @@ typedef enum wtop_ui_action {
     WTOP_UI_SETUP_PREVIOUS_PAGE, WTOP_UI_SETUP_NEXT_PAGE,
     WTOP_UI_ADJUST_DOWN, WTOP_UI_ADJUST_UP,
     WTOP_UI_TAB_NEW, WTOP_UI_TAB_DUPLICATE, WTOP_UI_TAB_RENAME,
-    WTOP_UI_TAB_DELETE, WTOP_UI_TAB_MOVE_LEFT, WTOP_UI_TAB_MOVE_RIGHT, WTOP_UI_PAUSE
+    WTOP_UI_TAB_DELETE, WTOP_UI_TAB_MOVE_LEFT, WTOP_UI_TAB_MOVE_RIGHT, WTOP_UI_PAUSE,
+    WTOP_UI_SELECT, WTOP_UI_COLLAPSE, WTOP_UI_EXPAND, WTOP_UI_DETAILS,
+    WTOP_UI_THREADS, WTOP_UI_AFFINITY, WTOP_UI_REFRESH, WTOP_UI_AFFINITY_APPLY
 } wtop_ui_action;
 
 typedef enum wtop_ui_context {
     WTOP_CONTEXT_PROCESS, WTOP_CONTEXT_HELP, WTOP_CONTEXT_SETUP,
     WTOP_CONTEXT_EDITOR, WTOP_CONTEXT_SORT, WTOP_CONTEXT_CONFIRM,
-    WTOP_CONTEXT_RESULTS
+    WTOP_CONTEXT_RESULTS, WTOP_CONTEXT_DETAILS, WTOP_CONTEXT_THREADS, WTOP_CONTEXT_AFFINITY
 } wtop_ui_context;
 typedef enum wtop_ui_reason {
     WTOP_UI_AVAILABLE, WTOP_UI_WRONG_CONTEXT, WTOP_UI_READONLY,
     WTOP_UI_NO_SELECTION, WTOP_UI_NO_IDENTITY, WTOP_UI_UNSUPPORTED,
     WTOP_UI_NO_SAVE_DESTINATION, WTOP_UI_CAPACITY, WTOP_UI_LAST_VIEW,
-    WTOP_UI_ORDER_BOUNDARY
+    WTOP_UI_ORDER_BOUNDARY, WTOP_UI_NO_FOCUS
 } wtop_ui_reason;
 typedef struct wtop_ui_context_options {
     wtop_ui_context context;
     int readonly;
     int has_selection, identity_known;
+    int has_focus, focus_identity_known, affinity_supported;
     int kill_supported, priority_supported, save_available;
     int setup_tabs, can_add_tab, can_delete_tab;
     int can_move_left, can_move_right;

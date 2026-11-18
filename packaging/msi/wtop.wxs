@@ -8,15 +8,21 @@
     <SummaryInformation Description="Unqualified Wtop delivery candidate" />
     <MediaTemplate EmbedCab="yes" />
     <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
+    <Property Id="REBOOT" Value="ReallySuppress" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/Julesc013/wtop" />
     <!-- Scope owns ALLUSERS=2 and MSIINSTALLPERUSER=1. Re-declaring either
          Property, even without a Value, duplicates its WiX 4 symbol. -->
     <Property Id="INSTALLFOLDER" Secure="yes" />
-    <Upgrade Id="$(var.UpgradeCode)">
-      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes" Property="WTOP_RELATED" />
-    </Upgrade>
+    <!-- Removing the older owner after InstallInitialize makes that removal
+         part of the rollback transaction. Its own embedded guard must pass. -->
+    <MajorUpgrade Schedule="afterInstallInitialize" AllowSameVersionUpgrades="no"
+                  DowngradeErrorMessage="A newer Wtop MSI is installed. Downgrades are refused; preserve user data and remove its verified owner first." />
     <Launch Condition="VersionNT &gt;= 601" Message="This candidate MSI mechanism requires Windows Installer 5.0 on Windows 7/Server 2008 R2 or newer. Application runtime qualification is separate." />
-    <Launch Condition="Installed OR NOT WTOP_RELATED" Message="Candidate automatic upgrades are blocked. Preserve user data and uninstall the existing unmodified candidate before installing this version." />
+    <Launch Condition="NOT DISABLEROLLBACK AND NOT RollbackDisabled" Message="Wtop requires Windows Installer rollback; disabling rollback is refused." />
+    <!-- PATH remains untouched until a separately owned shim/alias transaction
+         is qualified. Never silently accept an option which was not applied. -->
+    <Launch Condition="NOT ADDTOPATH OR ADDTOPATH = &quot;0&quot;" Message="This MSI candidate does not own PATH integration. Use the full path or a package-manager-owned command alias." />
     <StandardDirectory Id="$(var.ProgramFilesDirectory)">
       <Directory Id="WtopDirectory" Name="Wtop">
         <Directory Id="INSTALLFOLDER" Name="$(var.Profile)">
@@ -31,19 +37,31 @@
           <Component Id="License" Guid="$(var.LicenseComponent)" Bitness="$(var.Bitness)">
             <File Id="LicenseFile" Source="$(var.LicenseFile)" Name="LICENSE" KeyPath="yes" />
           </Component>
+          <?ifdef var.ThirdPartyNotices ?>
+          <Component Id="ThirdPartyNotices" Guid="$(var.ThirdPartyComponent)" Bitness="$(var.Bitness)">
+            <File Id="ThirdPartyNoticesFile" Source="$(var.ThirdPartyNotices)" Name="THIRD-PARTY-NOTICES.md" KeyPath="yes" />
+          </Component>
+          <?endif ?>
         </Directory>
       </Directory>
     </StandardDirectory>
     <Feature Id="Wtop" Title="Wtop candidate" Level="1">
       <ComponentRef Id="Payload" />
       <ComponentRef Id="License" />
+      <?ifdef var.ThirdPartyNotices ?>
+      <ComponentRef Id="ThirdPartyNotices" />
+      <?endif ?>
     </Feature>
     <Binary Id="Guard" SourceFile="$(var.GuardDll)" />
     <CustomAction Id="CheckOwnedPayload" BinaryRef="Guard" DllEntry="WtopGuard" Execute="immediate" Return="check" />
+    <CustomAction Id="RecheckBeforeRemove" BinaryRef="Guard" DllEntry="WtopGuardDeferred" Execute="deferred" Impersonate="yes" Return="check" />
+    <CustomAction Id="RecheckBeforeInstall" BinaryRef="Guard" DllEntry="WtopGuardDeferred" Execute="deferred" Impersonate="yes" Return="check" />
     <InstallExecuteSequence>
       <!-- Runs inside direct msiexec installation, removal and repair, not just
            an optional download/bootstrap script. Preflight does not mutate. -->
       <Custom Action="CheckOwnedPayload" Before="InstallInitialize" />
+      <Custom Action="RecheckBeforeRemove" Before="RemoveFiles" Condition="Installed" />
+      <Custom Action="RecheckBeforeInstall" Before="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

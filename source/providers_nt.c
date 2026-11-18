@@ -7,6 +7,7 @@
  */
 #define COBJMACROS
 #include "providers_nt.h"
+#include "features_nt.h"
 #include <wbemidl.h>
 #include <oleauto.h>
 #include <sddl.h>
@@ -20,7 +21,7 @@
 #include <errno.h>
 
 #define WIRE_MAGIC 0x57545031UL
-#define WIRE_VERSION 1UL
+#define WIRE_VERSION 2UL
 #define WIRE_MAX_BYTES 1048576UL
 #define RETIRE_GRACE_MS 250UL
 #define REQUEST_PIPE_BYTES 4096UL
@@ -60,7 +61,7 @@ static DWORD checksum_bytes(const void *data, size_t count)
 }
 static int valid_kind(wtop_provider_kind kind)
 {
-    if(kind >= WTOP_PROVIDER_COMMAND_LINE && kind <= WTOP_PROVIDER_ACCOUNT) return 1;
+    if(kind >= WTOP_PROVIDER_COMMAND_LINE && kind <= WTOP_PROVIDER_AFFINITY) return 1;
 #ifdef WTOP_PROVIDER_TESTING
     if(kind >= WTOP_PROVIDER_TEST_VALID && kind <= WTOP_PROVIDER_TEST_EXTRA) return 1;
 #endif
@@ -72,6 +73,9 @@ static int valid_request(const wtop_provider_request *request)
     if(request->kind == WTOP_PROVIDER_PER_CORE && (request->interval_ms < 50 || request->interval_ms > 60000)) return 0;
     if(request->kind == WTOP_PROVIDER_ACCOUNT &&
        (!request->sid[0] || wide_length(request->sid, ARRAY_COUNT(request->sid)) == ARRAY_COUNT(request->sid))) return 0;
+    if(request->kind == WTOP_PROVIDER_PROCESS_DETAILS &&
+       (!request->detail_flags || (request->detail_flags & ~WTOP_DETAIL_ALL))) return 0;
+    if(request->kind != WTOP_PROVIDER_PROCESS_DETAILS && request->detail_flags) return 0;
     return 1;
 }
 const char *wtop_provider_state_name(wtop_provider_state state)
@@ -223,7 +227,7 @@ static int launch_worker(wtop_provider_session *session, const request_packet *p
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = child_read;
     startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = child_write;
-    if(_snwprintf_s(command, 32768, _TRUNCATE, L"\"%s\" --wtop-provider-v1 %llu %llu", path,
+    if(_snwprintf_s(command, 32768, _TRUNCATE, L"\"%s\" --wtop-provider-v2 %llu %llu", path,
         (unsigned long long)(ULONG_PTR)child_read, (unsigned long long)(ULONG_PTR)child_write) < 0) { error = ERROR_BUFFER_OVERFLOW; goto done; }
     if(!CreateProcessW(path, command, NULL, NULL, TRUE,
         CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
@@ -255,6 +259,26 @@ done:
     return ok;
 }
 
+static int valid_status(wtop_provider_status status)
+{
+    return status.state >= WTOP_PROVIDER_VALID && status.state <= WTOP_PROVIDER_ADMISSION_CLOSED &&
+        status.error_domain >= WTOP_PROVIDER_ERROR_NONE && status.error_domain <= WTOP_PROVIDER_ERROR_EXIT_CODE;
+}
+static int valid_affinity(const wtop_provider_affinity *affinity)
+{
+    if(!valid_status(affinity->status) ||
+       affinity->limitation < WTOP_AFFINITY_LIMIT_NONE || affinity->limitation > WTOP_AFFINITY_LIMIT_API) return 0;
+    if(affinity->status.state == WTOP_PROVIDER_VALID)
+        return wtop_feature_affinity_mask_valid(affinity->process_mask, affinity) &&
+            (affinity->mask_bits != 32 || !(affinity->system_mask >> 32)) && affinity->group == 0;
+    return !affinity->process_mask && !affinity->system_mask;
+}
+static int valid_service(const wtop_provider_service *row)
+{
+    return wide_length(row->name, WTOP_PROVIDER_NAME_CHARS) < WTOP_PROVIDER_NAME_CHARS &&
+        wide_length(row->display_name, WTOP_PROVIDER_NAME_CHARS) < WTOP_PROVIDER_NAME_CHARS &&
+        row->identity_state >= WTOP_PROVIDER_VALID && row->identity_state <= WTOP_PROVIDER_ADMISSION_CLOSED;
+}
 static int valid_response(const response_packet *packet, const request_packet *request)
 {
     const wtop_provider_result *result = &packet->result;
@@ -276,9 +300,7 @@ static int valid_response(const response_packet *packet, const request_packet *r
         if(result->count > WTOP_PROVIDER_MAX_SERVICES) return 0;
         for(i = 0; i < result->count; ++i) {
             const wtop_provider_service *row = &result->data.services[i];
-            if(wide_length(row->name, WTOP_PROVIDER_NAME_CHARS) == WTOP_PROVIDER_NAME_CHARS ||
-               wide_length(row->display_name, WTOP_PROVIDER_NAME_CHARS) == WTOP_PROVIDER_NAME_CHARS ||
-               row->identity_state < WTOP_PROVIDER_VALID || row->identity_state > WTOP_PROVIDER_ADMISSION_CLOSED) return 0;
+            if(!valid_service(row)) return 0;
         }
     }
     if(result->kind == WTOP_PROVIDER_PER_CORE) {
@@ -294,6 +316,33 @@ static int valid_response(const response_packet *packet, const request_packet *r
        (wide_length(result->data.account.name, ARRAY_COUNT(result->data.account.name)) == ARRAY_COUNT(result->data.account.name) ||
         wide_length(result->data.account.domain, ARRAY_COUNT(result->data.account.domain)) == ARRAY_COUNT(result->data.account.domain) ||
         wide_length(result->data.account.sid, ARRAY_COUNT(result->data.account.sid)) == ARRAY_COUNT(result->data.account.sid))) return 0;
+    if(result->kind == WTOP_PROVIDER_AFFINITY && !valid_affinity(&result->data.affinity)) return 0;
+    if(result->kind == WTOP_PROVIDER_PROCESS_DETAILS) {
+        const wtop_provider_details *details = &result->data.details;
+        if(details->requested != request->request.detail_flags ||
+           !valid_status(details->image_status) || !valid_status(details->command_status) ||
+           !valid_status(details->services_status) || !valid_affinity(&details->affinity) ||
+           wide_length(details->image_path, WTOP_PROVIDER_IMAGE_CHARS) == WTOP_PROVIDER_IMAGE_CHARS ||
+           wide_length(details->command_line, WTOP_PROVIDER_COMMAND_CHARS) == WTOP_PROVIDER_COMMAND_CHARS ||
+           details->service_count > WTOP_PROVIDER_MAX_SERVICES ||
+           details->service_count > details->service_total_count) return 0;
+        for(i = 0; i < details->service_count; ++i)
+            if(!valid_service(&details->services[i])) return 0;
+    }
+    if(result->kind == WTOP_PROVIDER_THREADS) {
+        if(result->count > WTOP_PROVIDER_MAX_THREADS) return 0;
+        for(i = 0; i < result->count; ++i) {
+            const wtop_provider_thread *row = &result->data.threads[i];
+            if(!row->tid || row->pid != request->request.pid ||
+               row->observed_ms > result->observed_ms ||
+               !valid_status(row->identity_status) || !valid_status(row->times_status) ||
+               !valid_status(row->priority_status) ||
+               (row->identity_status.state == WTOP_PROVIDER_VALID &&
+                !row->creation.dwHighDateTime && !row->creation.dwLowDateTime) ||
+               (row->times_status.state == WTOP_PROVIDER_VALID && row->identity_status.state != WTOP_PROVIDER_VALID) ||
+               (row->priority_status.state == WTOP_PROVIDER_VALID && row->identity_status.state != WTOP_PROVIDER_VALID)) return 0;
+        }
+    }
     return 1;
 }
 
@@ -311,6 +360,17 @@ wtop_provider_state wtop_provider_collect(wtop_provider_session *session,
     memset(result, 0, sizeof(*result)); result->state = WTOP_PROVIDER_ERROR;
     result->retirement_confirmed = 1;
     if(request) { result->kind = request->kind; result->pid = request->pid; result->creation = request->creation; }
+    /* Transport failure/cancellation supplies no field observation. Zeroed enum
+       storage would otherwise masquerade as VALID in a partially shown panel. */
+    if(request && request->kind == WTOP_PROVIDER_PROCESS_DETAILS) {
+        result->data.details.requested = request->detail_flags;
+        result->data.details.image_status.state = WTOP_PROVIDER_UNAVAILABLE;
+        result->data.details.command_status.state = WTOP_PROVIDER_UNAVAILABLE;
+        result->data.details.services_status.state = WTOP_PROVIDER_UNAVAILABLE;
+        result->data.details.affinity.status.state = WTOP_PROVIDER_UNAVAILABLE;
+    }
+    if(request && request->kind == WTOP_PROVIDER_AFFINITY)
+        result->data.affinity.status.state = WTOP_PROVIDER_UNAVAILABLE;
     if(!session || !valid_request(request) || !timeout_ms || timeout_ms > WTOP_PROVIDER_MAX_TIMEOUT_MS) {
         failure(result, WTOP_PROVIDER_CAPACITY, WTOP_PROVIDER_ERROR_WIN32, ERROR_INVALID_PARAMETER); return result->state;
     }
@@ -651,6 +711,98 @@ done:
     if(target) CloseHandle(target);
 }
 
+static wtop_provider_status observed_status(const wtop_provider_result *result)
+{
+    wtop_provider_status status;
+    status.state = result->state;
+    status.error_domain = result->error_domain;
+    status.native_error = result->native_error;
+    return status;
+}
+static void invalidate_details(wtop_provider_details *details, wtop_provider_status status)
+{
+    if(details->requested & WTOP_DETAIL_IMAGE_PATH) details->image_status = status;
+    if(details->requested & WTOP_DETAIL_COMMAND_LINE) details->command_status = status;
+    if(details->requested & WTOP_DETAIL_SERVICES) details->services_status = status;
+    if(details->requested & WTOP_DETAIL_AFFINITY) details->affinity.status = status;
+    details->image_path[0] = details->command_line[0] = 0;
+    details->service_count = details->service_total_count = 0;
+    details->affinity.process_mask = details->affinity.system_mask = 0;
+}
+static void details_provider(const wtop_provider_request *request, wtop_provider_result *result)
+{
+    wtop_provider_details *details = &result->data.details;
+    wtop_provider_result *part = NULL;
+    wtop_provider_request subrequest = *request;
+    wtop_provider_status empty;
+    HANDLE process;
+    memset(&empty, 0, sizeof(empty)); empty.state = WTOP_PROVIDER_UNAVAILABLE;
+    details->requested = request->detail_flags;
+    details->image_status = details->command_status = details->services_status = details->affinity.status = empty;
+    process = open_identity(request->pid, request->creation, result);
+    if(!process) { invalidate_details(details, observed_status(result)); return; }
+    /* This handle spans the entire composition; PID-based WMI/SCM results must
+       still belong to its live lifetime when the bundle is published. Fields
+       are sequential observations, not one atomic system snapshot. */
+    result->state = WTOP_PROVIDER_VALID;
+    if(request->detail_flags & WTOP_DETAIL_IMAGE_PATH)
+        wtop_feature_image_query(process, details->image_path, WTOP_PROVIDER_IMAGE_CHARS, &details->image_status);
+    if(request->detail_flags & WTOP_DETAIL_AFFINITY)
+        wtop_feature_affinity_query(process, &details->affinity);
+    if(request->detail_flags & (WTOP_DETAIL_COMMAND_LINE | WTOP_DETAIL_SERVICES)) {
+        part = calloc(1, sizeof(*part));
+        if(!part) {
+            empty.state = WTOP_PROVIDER_ERROR; empty.error_domain = WTOP_PROVIDER_ERROR_WIN32;
+            empty.native_error = ERROR_NOT_ENOUGH_MEMORY;
+            if(request->detail_flags & WTOP_DETAIL_COMMAND_LINE) details->command_status = empty;
+            if(request->detail_flags & WTOP_DETAIL_SERVICES) details->services_status = empty;
+        }
+    }
+    subrequest.detail_flags = 0;
+    if(part && (request->detail_flags & WTOP_DETAIL_COMMAND_LINE)) {
+        subrequest.kind = WTOP_PROVIDER_COMMAND_LINE;
+        command_line_provider(&subrequest, part);
+        details->command_status = observed_status(part);
+        if(part->state == WTOP_PROVIDER_VALID)
+            copy_wide(details->command_line, WTOP_PROVIDER_COMMAND_CHARS, part->data.command_line);
+    }
+    if(part && (request->detail_flags & WTOP_DETAIL_SERVICES)) {
+        memset(part, 0, sizeof(*part));
+        subrequest.kind = WTOP_PROVIDER_SERVICES;
+        services_provider(&subrequest, part);
+        details->services_status = observed_status(part);
+        if(part->state == WTOP_PROVIDER_VALID || part->state == WTOP_PROVIDER_CAPACITY) {
+            details->service_count = part->count; details->service_total_count = part->total_count;
+            memcpy(details->services, part->data.services, part->count * sizeof(details->services[0]));
+        }
+    }
+    if(!revalidate_identity(process, request->creation)) {
+        result->state = WTOP_PROVIDER_IDENTITY_CHANGED;
+        invalidate_details(details, observed_status(result));
+    }
+    result->observed_ms = GetTickCount64();
+    result->acquisition_ms = (double)(result->observed_ms - result->started_ms);
+    free(part); CloseHandle(process);
+}
+static void affinity_provider(const wtop_provider_request *request, wtop_provider_result *result)
+{
+    HANDLE process = open_identity(request->pid, request->creation, result);
+    if(!process) { result->data.affinity.status = observed_status(result); return; }
+    wtop_feature_affinity_query(process, &result->data.affinity);
+    if(!revalidate_identity(process, request->creation)) {
+        result->data.affinity.status.state = WTOP_PROVIDER_IDENTITY_CHANGED;
+        result->data.affinity.status.error_domain = WTOP_PROVIDER_ERROR_NONE;
+        result->data.affinity.status.native_error = 0;
+        result->data.affinity.process_mask = result->data.affinity.system_mask = 0;
+    }
+    result->state = result->data.affinity.status.state;
+    result->error_domain = result->data.affinity.status.error_domain;
+    result->native_error = result->data.affinity.status.native_error;
+    result->observed_ms = GetTickCount64();
+    result->acquisition_ms = (double)(result->observed_ms - result->started_ms);
+    CloseHandle(process);
+}
+
 /* Optional PDH remains optional at the loader boundary. English paths are
    localized then expanded, following PdhAddEnglishCounterW's documented
    wildcard procedure; each concrete instance receives its own handle. */
@@ -873,7 +1025,7 @@ int wtop_provider_worker_dispatch(int argc, WCHAR *const *argv, int *exit_code)
     request_packet request;
     response_packet *response = NULL;
     int ok = 0;
-    if(argc < 2 || wcscmp(argv[1], L"--wtop-provider-v1")) return 0;
+    if(argc < 2 || wcscmp(argv[1], L"--wtop-provider-v2")) return 0;
     *exit_code = 2;
     if(argc != 4 || !parse_handle(argv[2], &input) || !parse_handle(argv[3], &output) || input == output) return 1;
     memset(&request, 0, sizeof(request));
@@ -893,6 +1045,9 @@ int wtop_provider_worker_dispatch(int argc, WCHAR *const *argv, int *exit_code)
     case WTOP_PROVIDER_SERVICES: services_provider(&request.request, &response->result); break;
     case WTOP_PROVIDER_PER_CORE: core_provider(&request.request, &response->result); break;
     case WTOP_PROVIDER_ACCOUNT: account_provider(&request.request, &response->result); break;
+    case WTOP_PROVIDER_PROCESS_DETAILS: details_provider(&request.request, &response->result); break;
+    case WTOP_PROVIDER_THREADS: wtop_feature_threads_collect(&request.request, &response->result); break;
+    case WTOP_PROVIDER_AFFINITY: affinity_provider(&request.request, &response->result); break;
 #ifdef WTOP_PROVIDER_TESTING
     case WTOP_PROVIDER_TEST_DELAY:
     case WTOP_PROVIDER_TEST_RETIRE_PENDING: Sleep(60000); response->result.state = WTOP_PROVIDER_VALID; break;

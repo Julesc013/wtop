@@ -175,6 +175,40 @@ static void test_large_metric_sort(void)
     SortOrder=ASCENDING; assert(SortProcessByUpTime(&rows[0],&rows[1])>0);
 }
 
+static void test_collapsed_lifetime_views(void)
+{
+    wtop_settings_defaults(&Settings);
+    reset_rows(4);
+    for(DWORD i = 0; i < 4; ++i) {
+        ProcessList[i].ID = i + 1; ProcessList[i].CreationTime = (i + 1) * 10;
+        _tcscpy_s(ProcessList[i].ExeName, MAX_PATH, _T("tree.exe"));
+    }
+    ProcessList[1].ParentPID = 1; ProcessList[2].ParentPID = 2;
+    ActiveTab()->tree = 1;
+    ProcessSortType = SORT_BY_TREE; SortProcessList(); RebuildView();
+    VisibleProcessCount = 10;
+    SelectView(2); FocusView(1);
+    assert(SelectedIdentity.ID == 3 && FocusedIdentity.ID == 2);
+    SetFocusedCollapse(TRUE);
+    assert(CollapsedCount == 1 && ViewCount == 3 && !HasSelection());
+    assert(ProcessList[ViewIndices[0]].ID == 1 && ProcessList[ViewIndices[1]].ID == 2 && ProcessList[ViewIndices[2]].ID == 4);
+    assert(HasFocus() && FocusedIdentity.ID == 2 && IsCollapsed(&ProcessList[FocusedProcessIndex]));
+    strcpy_s(ActiveTab()->filter, sizeof(ActiveTab()->filter), "tree");
+    RebuildView(); assert(ViewCount == 4); /* Filtering reveals hidden matches. */
+    ActiveTab()->filter[0] = 0; RebuildView(); assert(ViewCount == 3);
+    SetFocusedCollapse(FALSE); assert(ViewCount == 4 && !CollapsedCount);
+    SetFocusedCollapse(TRUE); assert(CollapsedCount == 1);
+    ProcessList[FocusedProcessIndex].CreationTime = 99;
+    PruneCollapsed(); SortProcessList(); RebuildView();
+    assert(!CollapsedCount && ViewCount == 4 && !HasFocus());
+    /* A lifetime-unknown process cannot create a persistent collapse record. */
+    ProcessList[0].CreationTime = 0; FocusView(0); SetFocusedCollapse(TRUE);
+    assert(!CollapsedCount);
+    free(CollapsedProcesses); CollapsedProcesses = NULL; CollapsedCapacity = 0;
+    free(ViewIndices); ViewIndices = NULL; ViewCapacity = ViewCount = 0;
+    ClearFocus(); ClearSelection();
+}
+
 int main(void)
 {
     printf("native tree fixture memory: %llu bytes\n", (unsigned long long)MAX_PROCESS_ROWS * sizeof(*ProcessList));
@@ -187,6 +221,7 @@ int main(void)
     test_shuffled_preorder();
     test_uncertain_parent_identity();
     test_index_failure_retains_all_rows();
+    test_collapsed_lifetime_views();
     free(ProcessList); ProcessList = NULL;
     free(ViMessage); ViMessage = NULL;
     puts("native tree: bounded construction, lifetime qualification and allocation recovery passed");

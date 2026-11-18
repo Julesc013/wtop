@@ -404,8 +404,40 @@ static void beta2_presentation(void)
     free(serialized); wtop_config_document_free(&document); wtop_config_document_free(&other);
 }
 
+static void semantic_row_colors_and_migration(void)
+{
+    wtop_settings settings, copy;
+    wtop_config_document document = {0}, reread = {0};
+    const char *error;
+    char *text;
+    wtop_settings_defaults(&settings);
+    assert(settings.background_mode == WTOP_BACKGROUND_TERMINAL);
+    assert(settings.colors[WTOP_COLOR_FG_FOCUS] == 15 && settings.colors[WTOP_COLOR_BG_FOCUS] == 8);
+    assert(settings.colors[WTOP_COLOR_FG_SELECTED] == 0 && settings.colors[WTOP_COLOR_BG_SELECTED] == 3);
+    assert(read_text("BGColor 0x40\nBGHighlightColor 0x6e\n", &settings, &document, &error));
+    assert(settings.background_mode == WTOP_BACKGROUND_PALETTE);
+    assert(settings.colors[WTOP_COLOR_FG_SELECTED] == 14 && settings.colors[WTOP_COLOR_BG_SELECTED] == 6);
+    assert(read_text("SelectionForeground 2\nBackgroundMode terminal\nBGColor 0x20\nSelectionBackground 0\nBGHighlightColor 0x7f\n", &settings, &document, &error));
+    assert(settings.background_mode == WTOP_BACKGROUND_TERMINAL);
+    assert(settings.colors[WTOP_COLOR_FG_SELECTED] == 2 && settings.colors[WTOP_COLOR_BG_SELECTED] == 0);
+    settings.colors[WTOP_COLOR_FG_FOCUS] = 4; settings.colors[WTOP_COLOR_BG_FOCUS] = 7;
+    text = serialize(&settings, &document);
+    wtop_settings_defaults(&copy);
+    assert(read_text(text, &copy, &reread, &error));
+    assert(copy.background_mode == WTOP_BACKGROUND_TERMINAL);
+    assert(copy.colors[WTOP_COLOR_FG_FOCUS] == 4 && copy.colors[WTOP_COLOR_BG_FOCUS] == 7);
+    assert(copy.colors[WTOP_COLOR_FG_SELECTED] == 2 && copy.colors[WTOP_COLOR_BG_SELECTED] == 0);
+    assert(!read_text("FocusBackground 16\n", &copy, &reread, &error));
+    assert(!read_text("SelectionForeground 0x30\n", &copy, &reread, &error));
+    assert(!read_text("BackgroundMode transparent\n", &copy, &reread, &error));
+    assert(copy.colors[WTOP_COLOR_FG_FOCUS] == 4 && copy.background_mode == WTOP_BACKGROUND_TERMINAL);
+    assert(strstr(text, "BackgroundMode terminal") && !strstr(text, "SelectedPid") && !strstr(text, "FocusedPid"));
+    free(text); wtop_config_document_free(&document); wtop_config_document_free(&reread);
+}
+
 int main(void)
 {
+    semantic_row_colors_and_migration();
     beta2_presentation();
     defaults_and_overrides();
     preservation_and_layout();

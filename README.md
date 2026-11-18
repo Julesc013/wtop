@@ -1,7 +1,7 @@
 # Wtop
 
-Beta 2 work: [implementation and verification](docs/beta2-verification.md),
-[supplied plan](docs/beta2-plan.md), and [release policy](docs/beta-publication.md).
+Beta 3 work: [implementation, qualification and remaining work](docs/beta3-verification.md),
+[interaction comparison](docs/interaction-comparison.md), and [release policy](docs/beta-publication.md).
 Automated prerelease gates and stable human qualification are separate.
 
 Wtop is a native terminal process monitor derived from
@@ -13,17 +13,18 @@ bindings, and explicit command-line output and settings operations.
 the unmodified NTop starting revision. Develop Wtop on short-lived branches from
 `master`; see [branch and upstream policy](docs/development.md#branches-and-upstream).
 
-**Status: version 0.4.0-beta.2 (prerelease candidate).** The current application
-backend is Windows NT. Beta 1 remains available under its unchanged tag. Beta 2
-adds composed frames, one default footer, explicit pause, safer selection and
-context-independent cancellation. The shared implementation includes:
+**Status: version 0.4.0-beta.3 (prerelease candidate).** The current application
+backend is Windows NT. Earlier beta release assets remain unchanged. Beta 3
+adds separate grey focus and confirmed selection, terminal-default backgrounds,
+Unicode 17 grapheme layout/editing, collapsible trees, bounded detail/thread
+inspection and identity-checked affinity controls. The shared implementation includes:
 corrected measurements/actions, sample freshness, contextual TUI and Setup,
 versioned settings ownership, query/inspect/log, bounded optional providers,
 exact-byte delivery candidates and separate historical probes.
 
 **This is not a supported 0.4.0 release.** Modern x86/x64/ARM64 builds, native
 execution and packaging checks have different evidence scopes. The current
-[Beta 2 verification record](docs/beta2-verification.md)
+[Beta 3 verification record](docs/beta3-verification.md)
 records changes, observed failures, exact checks and remaining gates. DOS/Win16/OS2 probes are not full
 monitors; Win9x, early NT, CE, RT, WinPE and ReactOS support is unqualified.
 There is no published WinGet package, stable installer or native GUI.
@@ -80,6 +81,7 @@ wtop --paths --format json
 wtop --portable --tui
 wtop query system --per-core --format json
 wtop query services --format json
+wtop inspect 1234 --image-path --threads --affinity --format json
 wtop inspect 1234 --command-line --services --format json
 wtop log --output .\observations.jsonl --samples 10 --interval 1000
 wtop log --output - --duration 5000 --max-bytes 1048576
@@ -98,7 +100,7 @@ collector; it is not a full runtime probe.
 | `--snapshot`, `--dump`, `-d` | Collect a bounded snapshot and print text or JSON. |
 | `--format text` or `--format json` | Select output format; alone selects snapshot mode. |
 | `--interval MILLISECONDS`; `--delay DECISECONDS` | 50–60000 ms or 1–600 deciseconds; default 1000 ms. `-d` retains NTop's dump meaning. |
-| `query processes\|system\|services`; `inspect PID` | Shared snapshot model; inspect can request `--command-line` and `--services`. |
+| `query processes\|system\|services`; `inspect PID` | Shared snapshot model; inspect can request `--image-path`, `--threads`, `--affinity`, `--command-line` and `--services`. |
 | `--per-core` | Optional isolated PDH provider; physical collection requires at least one second. |
 | `log --output PATH\|-` | JSONL only; explicit sample count or duration required. Default 16 MiB complete-record output cap; existing files are refused. |
 | `--cpu-normalization core\|machine` | Default one core = 100%; machine uses the observed active logical processor capacity. |
@@ -117,7 +119,7 @@ collector; it is not a full runtime probe.
 | `--footer functions\|compact\|status\|hidden` | Choose the single footer style; default `functions`. |
 | `--status-position banner\|bottom\|hidden` | Place contextual status in the header by default; a second bottom row is explicit opt-in. |
 | `--frame-interval MILLISECONDS` | Bound ordinary painting cadence (16–1000 ms; default 50), independently of sampling; input may redraw immediately. |
-| `--character-set unicode\|ascii` | Select conservative single-cell Unicode or ASCII presentation. Unsupported wide/combining scalars become placeholders. |
+| `--character-set unicode\|ascii` | Unicode 17 grapheme projection on negotiated VT hosts; conservative glyph fallback on legacy hosts. ASCII remains available. |
 | `-p`, `--pid PID,PID` | Filter process IDs. |
 | `-n`, `--name NAME,NAME` | Filter names by case-sensitive substring. |
 | `-u`, `--user USER` | Exact SID or resolved account name. Unresolved name filtering is explicitly partial. |
@@ -166,7 +168,9 @@ same qualification applies to baseline collection and emergency shutdown; see
 ## Interactive controls
 
 Startup restores the selected display configuration but leaves process selection,
-tags and follow state empty. Navigation or a row click selects a process lifetime.
+tags and follow state empty. Navigation/search/hover creates grey focus. Enter
+or a row click confirms a process lifetime with a separate selection colour.
+Moving focus afterward does not move the confirmed action target.
 A selected process that exits or is filtered out is cleared; another process at
 that row or PID is never automatically made its action target. Escape is cancel
 and back, not undo for an already executed process action.
@@ -188,15 +192,18 @@ PID reuse or unavailable identity must not turn a selection into another process
 | F7 / F8 | Raise/lower Windows priority class for selected/tagged processes. REALTIME is excluded; these are not Unix nice values. |
 | F9 | Review selected/tagged process identities before termination; `y` confirms, `n` or Escape cancels. |
 | F10 | Quit. |
-| Arrows, Page Up/Down, Home/End | Navigate the process view. |
+| Up/Down, Page Up/Down, Home/End | Move grey focus without confirming an action target. |
+| Enter / row click | Confirm the focused/clicked lifetime. |
+| Left / Right | Collapse / expand the focused subtree. |
+| `d` / `H` / `a` | Details / captured thread rows / affinity editor; F5 refreshes an inspection panel. |
 | Tab / Shift+Tab | Next/previous visible tab. |
-| Space / `U` | Tag selected process / clear tags. |
+| Space / `U` | Tag focused process / clear tags. |
 | `F` / `I` | Follow selected process / reverse sort direction. |
 | `P` / `M` | Sort by CPU / memory. |
 | Ctrl+Left / Ctrl+Right | Previous/next sort column. |
 | `B` | Hide/show the function bar. |
 | `/`, `\`, `:` | Enter search, filter or explicit command input. |
-| Escape | Cancel the current editor/dialog or return from Help/Setup; on the main view clear selection, tags and follow state. |
+| Escape | Cancel the current editor/dialog or return from Help/Setup; on the main view clear confirmation/tags to focus, then clear focus/search/follow. |
 | `Z` | Pause/resume collection; paused sample age remains visible. |
 | `q`, Ctrl+C | Quit (`Ctrl+C` is global, including editors and confirmations). |
 
@@ -212,8 +219,9 @@ The inherited explicit command surface includes `:tree`, `:sort COLUMN`,
 `:search PATTERN`, `:kill PID`, `:exec COMMAND`, `:q` and `:quit`; `:save` explicitly
 saves the current settings. `:kill` is an explicit native termination request;
 `:exec` is an explicit command launch. Neither is interpreted from settings or
-process text. Full htop feature parity, affinity controls, thread/detail views
-and arbitrary plugins remain planned.
+process text. Affinity is limited to safely representable single-group masks;
+thread rows show exact lifetime counters, with sampled thread CPU and mixed main
+thread rows still open. Full htop parity and arbitrary plugins remain further work.
 
 ### Setup, status and mouse
 
