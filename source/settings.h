@@ -23,6 +23,11 @@ typedef enum wtop_keymap {
 typedef enum wtop_theme {
     WTOP_THEME_HTOP, WTOP_THEME_NTOP, WTOP_THEME_MONO
 } wtop_theme;
+typedef enum wtop_footer_style { WTOP_FOOTER_FUNCTIONS, WTOP_FOOTER_COMPACT, WTOP_FOOTER_STATUS } wtop_footer_style;
+typedef enum wtop_status_position { WTOP_STATUS_BANNER, WTOP_STATUS_BOTTOM, WTOP_STATUS_HIDDEN } wtop_status_position;
+typedef enum wtop_meter_style { WTOP_METER_BARS, WTOP_METER_BLOCKS, WTOP_METER_TEXT } wtop_meter_style;
+typedef enum wtop_character_set { WTOP_CHARSET_ASCII, WTOP_CHARSET_UNICODE } wtop_character_set;
+
 typedef enum wtop_mouse {
     WTOP_MOUSE_AUTO, WTOP_MOUSE_ON, WTOP_MOUSE_OFF
 } wtop_mouse;
@@ -64,6 +69,12 @@ typedef struct wtop_settings {
     wtop_mouse mouse;
     int show_function_bar;
     int show_tabs;
+    wtop_footer_style footer_style;
+    wtop_status_position status_position;
+    wtop_meter_style meter_style;
+    wtop_character_set character_set;
+    unsigned long frame_interval_ms;
+    int meter_width;
     int header_rows[WTOP_HEADER_ROWS];
     int header_count;
     wtop_tab tabs[WTOP_MAX_TABS];
@@ -90,6 +101,13 @@ const char *wtop_mouse_name(wtop_mouse mouse);
 const char *wtop_column_name(int column);
 const char *wtop_header_row_name(int row);
 const char *wtop_color_name(int role);
+const char *wtop_footer_style_name(int value);
+const char *wtop_status_position_name(int value);
+const char *wtop_meter_style_name(int value);
+const char *wtop_character_set_name(int value);
+int wtop_parse_footer_style(const char *text, wtop_footer_style *value);
+int wtop_parse_status_position(const char *text, wtop_status_position *value);
+int wtop_parse_character_set(const char *text, wtop_character_set *value);
 int wtop_parse_keymap(const char *text, wtop_keymap *keymap);
 int wtop_parse_theme(const char *text, wtop_theme *theme);
 int wtop_parse_mouse(const char *text, wtop_mouse *mouse);

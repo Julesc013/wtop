@@ -375,8 +375,38 @@ static void document_clone_is_independent(void)
     wtop_config_document_free(&copy);
 }
 
+static void beta2_presentation(void)
+{
+    wtop_settings settings, copy;
+    wtop_config_document document = {0}, other = {0};
+    const char *error;
+    char *serialized;
+    wtop_settings_defaults(&settings);
+    assert(settings.footer_style==WTOP_FOOTER_FUNCTIONS && settings.status_position==WTOP_STATUS_BANNER);
+    assert(settings.frame_interval_ms==50 && settings.meter_width==25);
+    assert(read_text("ConfigVersion 2\nNextTabId 9\nTab0.Id 1\nTab1.Id 2\nFooterStyle compact\nStatusPosition bottom\nFrameInterval 80\nMeterWidth 36\nMeterStyle blocks\nCharacterSet ascii\n", &settings, &document, &error));
+    assert(settings.footer_style==WTOP_FOOTER_COMPACT && settings.status_position==WTOP_STATUS_BOTTOM);
+    assert(settings.frame_interval_ms==80 && settings.meter_width==36);
+    assert(settings.meter_style==WTOP_METER_BLOCKS && settings.character_set==WTOP_CHARSET_ASCII);
+    serialized = NULL;
+    {
+        size_t length=0;
+        assert(wtop_settings_serialize(&settings,&document,&serialized,&length,&error));
+        assert(length && strstr(serialized,"FooterStyle compact"));
+    }
+    wtop_settings_defaults(&copy);
+    assert(read_text(serialized,&copy,&other,&error));
+    assert(copy.footer_style==settings.footer_style && copy.meter_width==settings.meter_width);
+    assert(!read_text("FrameInterval 0\n",&copy,&other,&error));
+    assert(copy.frame_interval_ms==80);
+    assert(!read_text("MeterWidth 32767\n",&copy,&other,&error));
+    assert(!read_text("StatusPosition automatic\n",&copy,&other,&error));
+    free(serialized); wtop_config_document_free(&document); wtop_config_document_free(&other);
+}
+
 int main(void)
 {
+    beta2_presentation();
     defaults_and_overrides();
     preservation_and_layout();
     malformed_is_transactional();

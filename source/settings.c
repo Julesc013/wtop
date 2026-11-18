@@ -17,12 +17,13 @@ static const char *const row_names[WTOP_HEADER_ROWS] = {
 };
 static const char *const base_names[] = {
     "ConfigVersion", "Theme", "Keymap", "Mouse", "FunctionBar", "ShowTabs",
-    "HeaderRows", "RedrawInterval", "TabCount", "ActiveTab", "NextTabId"
+    "HeaderRows", "RedrawInterval", "TabCount", "ActiveTab", "NextTabId",
+    "FooterStyle", "StatusPosition", "FrameInterval", "MeterWidth", "MeterStyle", "CharacterSet"
 };
 static const char *const tab_names[] = {
     "Name", "Filter", "Visible", "Sort", "Descending", "Tree", "Columns", "Id"
 };
-#define BASE_KEYS 11
+#define BASE_KEYS 17
 #define TAB_FIELDS 8
 #define TAB_KEY_BASE (BASE_KEYS + WTOP_COLOR_COUNT)
 #define KEY_COUNT (TAB_KEY_BASE + WTOP_MAX_TABS * TAB_FIELDS)
@@ -99,6 +100,35 @@ const char *wtop_color_name(int value)
 {
     return value >= 0 && value < WTOP_COLOR_COUNT ? color_names[value] : "invalid";
 }
+static const char *const footer_names[] = { "functions", "compact", "status" };
+static const char *const status_names[] = { "banner", "bottom", "hidden" };
+static const char *const meter_names[] = { "bars", "blocks", "text" };
+static const char *const charset_names[] = { "ascii", "unicode" };
+const char *wtop_footer_style_name(int v) { return v >= 0 && v < 3 ? footer_names[v] : "invalid"; }
+const char *wtop_status_position_name(int v) { return v >= 0 && v < 3 ? status_names[v] : "invalid"; }
+const char *wtop_meter_style_name(int v) { return v >= 0 && v < 3 ? meter_names[v] : "invalid"; }
+const char *wtop_character_set_name(int v) { return v >= 0 && v < 2 ? charset_names[v] : "invalid"; }
+static int named_value(const char *text, const char *const *names, int count, int *value)
+{
+    int i;
+    for (i = 0; i < count; ++i) if (equal(text, names[i])) { *value = i; return 1; }
+    return 0;
+}
+int wtop_parse_footer_style(const char *text, wtop_footer_style *value)
+{
+    int v; if (!named_value(text, footer_names, 3, &v)) return 0;
+    *value = (wtop_footer_style)v; return 1;
+}
+int wtop_parse_status_position(const char *text, wtop_status_position *value)
+{
+    int v; if (!named_value(text, status_names, 3, &v)) return 0;
+    *value = (wtop_status_position)v; return 1;
+}
+int wtop_parse_character_set(const char *text, wtop_character_set *value)
+{
+    int v; if (!named_value(text, charset_names, 2, &v)) return 0;
+    *value = (wtop_character_set)v; return 1;
+}
 int wtop_parse_keymap(const char *text, wtop_keymap *value)
 {
     if (equal(text, "htop")) *value = WTOP_KEYMAP_HTOP;
@@ -158,6 +188,12 @@ void wtop_settings_defaults(wtop_settings *settings)
     memset(settings, 0, sizeof(*settings));
     wtop_settings_set_theme(settings, WTOP_THEME_HTOP);
     settings->interval_ms = 1000;
+    settings->frame_interval_ms = 50;
+    settings->footer_style = WTOP_FOOTER_FUNCTIONS;
+    settings->status_position = WTOP_STATUS_BANNER;
+    settings->meter_width = 25;
+    settings->meter_style = WTOP_METER_BARS;
+    settings->character_set = WTOP_CHARSET_UNICODE;
     settings->keymap = WTOP_KEYMAP_HTOP;
     settings->mouse = WTOP_MOUSE_AUTO;
     settings->show_function_bar = 1;
@@ -208,7 +244,13 @@ int wtop_settings_validate(const wtop_settings *settings, const char **error)
         settings->mouse < WTOP_MOUSE_AUTO || settings->mouse > WTOP_MOUSE_OFF ||
         settings->interval_ms < 50 || settings->interval_ms > 60000 ||
         settings->show_function_bar < 0 || settings->show_function_bar > 1 ||
-        settings->show_tabs < 0 || settings->show_tabs > 1) {
+        settings->show_tabs < 0 || settings->show_tabs > 1 ||
+        settings->footer_style < WTOP_FOOTER_FUNCTIONS || settings->footer_style > WTOP_FOOTER_STATUS ||
+        settings->status_position < WTOP_STATUS_BANNER || settings->status_position > WTOP_STATUS_HIDDEN ||
+        settings->meter_style < WTOP_METER_BARS || settings->meter_style > WTOP_METER_TEXT ||
+        settings->character_set < WTOP_CHARSET_ASCII || settings->character_set > WTOP_CHARSET_UNICODE ||
+        settings->frame_interval_ms < 16 || settings->frame_interval_ms > 1000 ||
+        settings->meter_width < 8 || settings->meter_width > 80) {
         *error = "invalid general setting"; return 0;
     }
     for (i = 0; i < WTOP_COLOR_COUNT; ++i) if (settings->colors[i] > 255) {
@@ -283,6 +325,19 @@ int wtop_settings_apply_options(wtop_settings *settings, const wtop_options *opt
     }
     if (options->mouse_mode != -1) candidate.mouse = (wtop_mouse)options->mouse_mode;
     if (options->show_function_bar != -1) candidate.show_function_bar = options->show_function_bar;
+    if (options->footer_style) {
+        if (equal(options->footer_style, "hidden")) candidate.show_function_bar = 0;
+        else if (!wtop_parse_footer_style(options->footer_style, &candidate.footer_style)) {
+            *error = "invalid footer style"; return 0;
+        } else candidate.show_function_bar = 1;
+    }
+    if (options->status_position && !wtop_parse_status_position(options->status_position, &candidate.status_position)) {
+        *error = "invalid status position"; return 0;
+    }
+    if (options->character_set && !wtop_parse_character_set(options->character_set, &candidate.character_set)) {
+        *error = "invalid character set"; return 0;
+    }
+    if (options->frame_interval_ms) candidate.frame_interval_ms = options->frame_interval_ms;
     if (options->interval_set) candidate.interval_ms = options->interval_ms;
     if (options->sort_column && !wtop_parse_column(options->sort_column, &candidate.tabs[candidate.active_tab].sort_column)) {
         *error = "invalid sort column"; return 0;
@@ -644,6 +699,19 @@ static int apply_key(wtop_settings *settings, int id, char *value)
         if (!wtop_parse_unsigned(value, 0, WTOP_TAB_ID_MAX, 10, &number)) return 0;
         settings->next_tab_id = number;
         return 1;
+    case 11: return wtop_parse_footer_style(value, &settings->footer_style);
+    case 12: return wtop_parse_status_position(value, &settings->status_position);
+    case 13:
+        if (!wtop_parse_unsigned(value, 16, 1000, 10, &number)) return 0;
+        settings->frame_interval_ms = number; return 1;
+    case 14:
+        if (!wtop_parse_unsigned(value, 8, 80, 10, &number)) return 0;
+        settings->meter_width = (int)number; return 1;
+    case 15: {
+        int v; if (!named_value(value, meter_names, 3, &v)) return 0;
+        settings->meter_style = (wtop_meter_style)v; return 1;
+    }
+    case 16: return wtop_parse_character_set(value, &settings->character_set);
     }
     return 0;
 }
@@ -889,6 +957,12 @@ static int write_value(writer *out, const wtop_settings *settings, int id)
     case 8: return write_number(out, (unsigned long)settings->tab_count, 0);
     case 9: return write_number(out, (unsigned long)settings->active_tab, 0);
     case 10: return write_number(out, settings->next_tab_id, 0);
+    case 11: return write_text(out, wtop_footer_style_name(settings->footer_style));
+    case 12: return write_text(out, wtop_status_position_name(settings->status_position));
+    case 13: return write_number(out, settings->frame_interval_ms, 0);
+    case 14: return write_number(out, (unsigned long)settings->meter_width, 0);
+    case 15: return write_text(out, wtop_meter_style_name(settings->meter_style));
+    case 16: return write_text(out, wtop_character_set_name(settings->character_set));
     }
     return 0;
 }

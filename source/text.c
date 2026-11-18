@@ -99,3 +99,19 @@ size_t wtop_text_ascii_offset(const char *input, size_t length, size_t cell)
     }
     return offset;
 }
+
+unsigned short wtop_text_cell_glyph(unsigned long scalar, int unicode, unsigned *flags)
+{
+    if (scalar >= 0x20UL && scalar <= 0x7eUL) return (unsigned short)scalar;
+    if (unicode && ((scalar >= 0x00a0UL && scalar <= 0x02ffUL && scalar != 0x00adUL) ||
+        (scalar >= 0x0370UL && scalar <= 0x052fUL && !(scalar >= 0x0483UL && scalar <= 0x0489UL)) ||
+        (scalar >= 0x2500UL && scalar <= 0x259fUL))) return (unsigned short)scalar;
+    if (flags) {
+        *flags |= WTOP_TEXT_LOSSY;
+        if (scalar < 0x20UL || (scalar >= 0x7fUL && scalar <= 0x9fUL) ||
+            (scalar >= 0x202aUL && scalar <= 0x202eUL) ||
+            (scalar >= 0x2066UL && scalar <= 0x2069UL)) *flags |= WTOP_TEXT_CONTROL;
+        if (scalar > 0x10ffffUL || (scalar >= 0xd800UL && scalar <= 0xdfffUL)) *flags |= WTOP_TEXT_INVALID;
+    }
+    return '?';
+}

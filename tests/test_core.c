@@ -179,8 +179,23 @@ static void json_test(void)
     assert(!fclose(output));
 }
 
+static void presentation_arguments(void)
+{
+    const char *args[]={"wtop","--footer=compact","--status-position","bottom","--character-set=ascii","--frame-interval=80"};
+    const char *bad[]={"wtop","--footer=bogus"};
+    const char *fast[]={"wtop","--frame-interval=0"};
+    const char *error;
+    wtop_options options;
+    assert(wtop_parse_options(6,args,&options,&error));
+    assert(!strcmp(options.footer_style,"compact") && !strcmp(options.status_position,"bottom"));
+    assert(!strcmp(options.character_set,"ascii") && options.frame_interval_ms==80);
+    assert(!wtop_parse_options(2,bad,&options,&error));
+    assert(!wtop_parse_options(2,fast,&options,&error));
+}
+
 int main(void)
 {
+    presentation_arguments();
     options_test();
     compatibility_test();
     command_test();

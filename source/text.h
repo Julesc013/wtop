@@ -36,4 +36,8 @@ wtop_text_result wtop_text_ascii(const char *input, size_t length,
 /* Map a cell boundary under that same profile to an input-byte boundary.
    Out-of-range cell positions map to length. Never splits valid UTF-8. */
 size_t wtop_text_ascii_offset(const char *input, size_t length, size_t cell);
+/* A deliberately narrow one-cell repertoire, not general Unicode width.
+   Supports Latin/Greek/Cyrillic letters and console box/block glyphs. Complex,
+   combining, bidi/control and wide scalars are replaced; raw text is untouched. */
+unsigned short wtop_text_cell_glyph(unsigned long scalar, int unicode, unsigned *flags);
 #endif

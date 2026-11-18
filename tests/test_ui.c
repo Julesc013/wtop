@@ -250,10 +250,41 @@ static void live_status(void)
     assert(wtop_ui_status_format(&status, 80, NULL, 0, &flags) == 0);
 }
 
+static void chrome_layout(void)
+{
+    wtop_ui_chrome c;
+    wtop_ui_context_options context;
+    int h, visible, style, position, prompt;
+    wtop_ui_chrome_layout(25, 1, WTOP_FOOTER_FUNCTIONS, WTOP_STATUS_BANNER, 0, &c);
+    assert(c.footer == 24 && c.status == -1 && c.content_end == 24 && c.banner_status);
+    wtop_ui_chrome_layout(25, 1, WTOP_FOOTER_FUNCTIONS, WTOP_STATUS_BOTTOM, 0, &c);
+    assert(c.footer == 24 && c.status == 23 && c.content_end == 23 && !c.banner_status);
+    wtop_ui_chrome_layout(25, 1, WTOP_FOOTER_STATUS, WTOP_STATUS_BOTTOM, 0, &c);
+    assert(c.footer == -1 && c.status == 24 && c.content_end == 24);
+    wtop_ui_chrome_layout(25, 0, WTOP_FOOTER_FUNCTIONS, WTOP_STATUS_BANNER, 0, &c);
+    assert(c.footer == -1 && c.status == -1 && c.content_end == 25);
+    for(h=0; h<100; ++h) for(visible=0; visible<2; ++visible)
+    for(style=0; style<3; ++style) for(position=0; position<3; ++position)
+    for(prompt=0; prompt<2; ++prompt) {
+        wtop_ui_chrome_layout(h,visible,style,position,prompt,&c);
+        assert(c.content_end >= 0 && c.content_end <= h);
+        assert(c.footer < h && c.status < h && c.prompt < h);
+        if(c.footer>=0) assert(c.footer>=c.content_end);
+        if(c.status>=0) assert(c.status>=c.content_end);
+        if(c.prompt>=0) assert(c.prompt>=c.content_end);
+        if(c.footer>=0 && c.status>=0) assert(c.footer!=c.status && position==WTOP_STATUS_BOTTOM);
+        if(position!=WTOP_STATUS_BOTTOM) assert(h-c.content_end<=1);
+    }
+    wtop_ui_context_defaults(&context,WTOP_CONTEXT_PROCESS);
+    assert(wtop_ui_context_key_action(&context,WTOP_KEYMAP_HTOP,'Z',0)==WTOP_UI_PAUSE);
+    context.context=WTOP_CONTEXT_CONFIRM;
+    assert(wtop_ui_context_key_action(&context,WTOP_KEYMAP_HTOP,'Z',0)==WTOP_UI_NONE);
+}
+
 int main(void)
 {
     keymaps(); action_bar(); columns(); metric_units();
-    contexts(); availability(); live_status();
+    contexts(); availability(); live_status(); chrome_layout();
     puts("portable UI contracts passed");
     return 0;
 }

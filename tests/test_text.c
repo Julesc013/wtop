@@ -122,9 +122,24 @@ static void byte_sequences(void)
     }
 }
 
+static void one_cell_repertoire(void)
+{
+    unsigned flags=0;
+    assert(wtop_text_cell_glyph(0x00e9,1,&flags)==0x00e9 && !flags);
+    assert(wtop_text_cell_glyph(0x0416,1,&flags)==0x0416 && !flags);
+    assert(wtop_text_cell_glyph(0x2588,1,&flags)==0x2588 && !flags);
+    assert(wtop_text_cell_glyph(0x00e9,0,&flags)=='?' && (flags&WTOP_TEXT_LOSSY));
+    flags=0;
+    assert(wtop_text_cell_glyph(0x0301,1,&flags)=='?' && (flags&WTOP_TEXT_LOSSY));
+    assert(wtop_text_cell_glyph(0x4e2d,1,&flags)=='?');
+    assert(wtop_text_cell_glyph(0x1f600,1,&flags)=='?');
+    flags=0; assert(wtop_text_cell_glyph(0x202e,1,&flags)=='?' && (flags&WTOP_TEXT_CONTROL));
+    flags=0; assert(wtop_text_cell_glyph(0xd800,1,&flags)=='?' && (flags&WTOP_TEXT_INVALID));
+}
+
 int main(void)
 {
-    decoding(); display_policy(); bounds(); byte_sequences();
+    decoding(); display_policy(); bounds(); byte_sequences(); one_cell_repertoire();
     puts("portable text contracts passed");
     return 0;
 }

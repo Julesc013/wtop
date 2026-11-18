@@ -340,7 +340,7 @@ def is_main(frame):
 
 
 def editor_contains(frame, text):
-    return any(row.lstrip().startswith(text) for row in frame["rows"][-3:])
+    return any(text in row for row in frame["rows"][-3:])
 
 
 def tab_position(frame, name):
@@ -368,9 +368,14 @@ def visible_pids(frame, pids, selected_only=False):
 
 
 def function_slot(frame, number):
-    start = frame["width"] * (number - 1) // 10
-    end = frame["width"] * number // 10
-    return start, end, frame["rows"][-1][start:end], frame["attributes"][-1][start:end]
+    row = frame["rows"][-1]
+    matches = list(re.finditer(r"F(10|[1-9])(?=[A-Za-z?+\\-])", row))
+    for index, match in enumerate(matches):
+        if int(match.group(1)) == number:
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else frame["width"]
+            return start, end, row[start:end], frame["attributes"][-1][start:end]
+    return 0, 0, "", []
 
 
 def assert_function(frame, number, label, enabled=True):
@@ -512,8 +517,8 @@ def setup_contract(console, exe, directory, pids, observations):
     bounded_ascii_frame(frame)
     click_function(console, 9, "Apply")
     frame = console.wait(lambda f: shown_name in setup_rows(f) and function_ready(f, 9, "Save")
-                         and text_contains(f, "ASCII substitution"), "renamed view remains in Setup")
-    assert text_contains(frame, "ASCII substitution"), "lossy display was not disclosed"
+                         and text_contains(f, "glyph substitution"), "renamed view remains in Setup")
+    assert text_contains(frame, "glyph substitution"), "lossy display was not disclosed"
     console.key(0x76)
     console.wait(lambda f: setup_rows(f) == ["Main", shown_name, expected_new, "I/O"], "F7 reorders selected stable view")
     click_function(console, 8, "Move+")
@@ -693,6 +698,36 @@ def viewport_matrix_contract(console, exe, directory, pids, observations):
     observations["checks"].append("native viewport matrix, tiny fallback, keyboard recovery and unchanged settings")
 
 
+def retained_frame_contract(console, exe, directory, pids, observations):
+    config = directory / "retained-frame.conf"
+    new_config(exe, config)
+    for style in ("functions", "compact", "status"):
+        console.start(exe, config, pids, "--footer", style, "--status-position", "banner", interval=50)
+        frame = console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids), "buffered " + style)
+        assert not frame["rows"][-2].startswith("age "), "default leaked a second footer"
+        if style == "status":
+            assert "view " in frame["rows"][-1]
+        else:
+            assert has_bar(frame)
+        samples = 0
+        deadline = time.monotonic() + 0.8
+        while time.monotonic() < deadline:
+            actual = console.frame()
+            assert actual["rows"][0].startswith("Wtop "), "observed intermediate clear during steady refresh"
+            assert visible_pids(actual, pids) == set(pids), "process rows disappeared during steady refresh"
+            samples += 1
+        console.type("Z")
+        console.wait(lambda f: text_contains(f, "PAUSED"), "pause remains visible")
+        console.type("Z")
+        console.wait(lambda f: not text_contains(f, "PAUSED"), "resume")
+        console.stop()
+        observations.setdefault("buffered_frames", []).append({"style": style, "sampled_frames": samples})
+    console.start(exe, config, pids, "--footer", "functions", "--status-position", "bottom")
+    console.wait(lambda f: has_bar(f) and "view " in f["rows"][-2], "explicit two-row opt-in")
+    console.stop()
+    observations["checks"].append("one footer default, three styles, explicit dual-row opt-in, pause/resume and no observed intermediate blank refresh")
+
+
 def worker(exe, output):
     console = None
     fixtures = []
@@ -779,12 +814,12 @@ def worker(exe, output):
             observations["checks"].append("mouse actions cancel commands and preserve filter ownership across tabs")
 
             console.type("B")
-            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][-1]
-                         and "view " in f["rows"][-1], "hidden function bar retains a live status row")
+            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][0]
+                         and "view " in f["rows"][0], "hidden function bar retains banner telemetry without another footer")
             console.type("B")
             console.wait(lambda f: is_main(f) and has_bar(f), "keyboard recovery of hidden function bar")
             console.type("B")
-            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][-1], "live status retained after bar is hidden again")
+            console.wait(lambda f: is_main(f) and not has_bar(f) and "age " in f["rows"][0], "banner telemetry retained after bar is hidden again")
             console.key(0x71)  # F2
             console.wait(lambda f: overlay_contains(f, "Setup"), "setup before explicit save")
             before = config.read_bytes()
@@ -860,6 +895,7 @@ def worker(exe, output):
             assert all(p.poll() is None for p in fixtures), "input after quit mutated an owned process"
             observations["checks"].append("queued actions after quit are discarded before mutation")
             viewport_matrix_contract(console, exe, Path(temp), pids, observations)
+            retained_frame_contract(console, exe, Path(temp), pids, observations)
             sampling_click_contract(console, exe, Path(temp), pids, observations)
             setup_contract(console, exe, Path(temp), pids, observations)
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
