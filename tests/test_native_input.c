@@ -256,6 +256,103 @@ static void pending_sample_selection(void)
     }
 }
 
+static void frame_text(int row, char *text, size_t capacity)
+{
+    assert(row >= 0 && row < Height && capacity > (size_t)Width);
+    for(int column = 0; column < Width; ++column)
+        text[column] = (char)Screen.cells.back[(size_t)row * Width + column].glyph;
+    text[Width] = 0;
+}
+
+static void diagnostic_keeps_controls(void)
+{
+    reset();
+    Width = 120;
+    ReadOnlyMode = TRUE;
+    assert(!SavePresentationSettings());
+    key(VK_F2, 0, 0);
+    compose();
+    char line[121];
+    assert(Overlay == OVERLAY_SETUP && FunctionBarRow == Height - 1 && StatusRow == -1);
+    assert(Chrome.content_end == Height - 1); /* No second default footer. */
+    frame_text(2, line, sizeof(line));
+    assert(strstr(line, "Configuration writes disabled by --readonly"));
+    frame_text(Height - 1, line, sizeof(line));
+    assert(strstr(line, "F9Save") && strstr(line, "F10Quit"));
+    for(int x = FooterStarts[8]; x < FooterStarts[8] + FooterWidths[8]; ++x)
+        assert(Screen.cells.back[(size_t)(Height - 1) * Width + x].attribute == 0x08);
+
+    MOUSE_EVENT_RECORD mouse = {0};
+    BOOL redraw = FALSE;
+    mouse.dwMousePosition.X = (SHORT)(FooterStarts[8] + FooterWidths[8] / 2);
+    mouse.dwMousePosition.Y = (SHORT)FunctionBarRow;
+    mouse.dwButtonState = FROM_LEFT_1ST_BUTTON_PRESSED;
+    HandleMouse(&mouse, &redraw);
+    assert(redraw && Overlay == OVERLAY_SETUP);
+    compose();
+    frame_text(2, line, sizeof(line));
+    assert(strstr(line, "Save: read-only"));
+    frame_text(Height - 1, line, sizeof(line));
+    assert(strstr(line, "F9Save") && strstr(line, "F10Quit"));
+
+    /* A hidden title/status preference still has a bounded, reserved banner
+       for the error; neither diagnostics nor controls overwrite process rows. */
+    for(int style = WTOP_FOOTER_FUNCTIONS; style <= WTOP_FOOTER_COMPACT; ++style) {
+        reset(); Width = 120; Settings.footer_style = (wtop_footer_style)style;
+        Settings.status_position = WTOP_STATUS_HIDDEN;
+        Settings.header_count = 0;
+        SetViMessage(VI_ERROR, _T("Fixture persistent diagnostic"));
+        compose();
+        assert(Chrome.banner_status && Chrome.content_end == Height - 1);
+        assert(FunctionBarRow == Height - 1 && StatusRow == -1);
+        assert(ProcessWindowPosY > 0);
+        frame_text(0, line, sizeof(line));
+        assert(strstr(line, "Fixture persistent diagnostic"));
+        frame_text(Height - 1, line, sizeof(line));
+        assert(strstr(line, "F1Help") && strstr(line, "F9Kill") && strstr(line, "F10Quit"));
+        for(int i = 0; i < 10; ++i) if(FooterWidths[i]) {
+            assert(FooterStarts[i] >= 0 && FooterStarts[i] + FooterWidths[i] <= Width);
+            assert(Screen.cells.back[(size_t)FunctionBarRow * Width + FooterStarts[i]].glyph == 'F');
+        }
+    }
+
+    reset();
+    Settings.status_position = WTOP_STATUS_BOTTOM;
+    SetViMessage(VI_ERROR, _T("Bottom diagnostic"));
+    compose();
+    assert(StatusRow == Height - 2 && FunctionBarRow == Height - 1);
+    frame_text(StatusRow, line, sizeof(line));
+    assert(strstr(line, "Bottom diagnostic"));
+
+    for(int status_only = 0; status_only < 2; ++status_only) {
+        reset();
+        Settings.show_function_bar = status_only;
+        Settings.footer_style = status_only ? WTOP_FOOTER_STATUS : WTOP_FOOTER_FUNCTIONS;
+        SetViMessage(VI_ERROR, _T("Visible diagnostic without buttons"));
+        compose();
+        assert(FunctionBarRow == -1 && StatusRow == Height - 1);
+        frame_text(StatusRow, line, sizeof(line));
+        assert(strstr(line, "Visible diagnostic without buttons"));
+        for(int i = 0; i < 10; ++i) assert(!FooterWidths[i]);
+    }
+
+    reset(); Width = 40; Height = 10;
+    SetViMessage(VI_ERROR, _T("Narrow error"));
+    compose();
+    assert(Chrome.content_end == 9 && FunctionBarRow == 9 && StatusRow == -1);
+    frame_text(0, line, sizeof(line));
+    assert(strstr(line, "Narrow error"));
+    for(int i = 0; i < 10; ++i) assert(FooterWidths[i] == 4 && FooterStarts[i] == i * 4);
+    Width = 39; Height = 9;
+    compose();
+    assert(RenderInvalidated && !RenderedRowCount);
+    frame_text(0, line, sizeof(line));
+    assert(strstr(line, "Resize to at least"));
+    frame_text(1, line, sizeof(line));
+    assert(strstr(line, "Narrow error"));
+    for(int i = 0; i < 10; ++i) assert(!FooterWidths[i]);
+}
+
 static void interrupt_every_context(void)
 {
     for(int map = WTOP_KEYMAP_HTOP; map <= WTOP_KEYMAP_EMACS; ++map) {
@@ -296,6 +393,7 @@ int main(void)
     escape_layers();
     pending_samples_do_not_drop_hits();
     pending_sample_selection();
+    diagnostic_keeps_controls();
     interrupt_every_context();
     CancelEditor(); CloseOverlay();
     ViDestroy();

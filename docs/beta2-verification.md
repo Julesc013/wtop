@@ -18,6 +18,19 @@ executed merge revision `29f606e`. Its x64 CTest result was **19/20**, with
 “mouse help cancels command editor”. The earlier description of two remaining
 failures was stale. The viewport precheck was already present at `440b289`.
 
+The first completion run at `b8db7aa442414dae6dffad784399b245b91d948e`
+([checks](https://github.com/Julesc013/wtop/actions/runs/44218367528),
+[portable release checks](https://github.com/Julesc013/wtop/actions/runs/44218367519))
+passed the portable suite and 20 of 21 native suites across the new lanes. The
+new input and actual viewport fixtures passed. Native TUI execution exposed a
+later read-only Setup regression: its configuration diagnostic occupied the whole
+footer and hid the common action labels. This failure is retained as evidence;
+it is not turned into a pass by removing the existing assertion.
+The follow-up keeps the complete configured function footer and moves non-editor
+diagnostics to the existing banner/status area or reserved overlay row. Dedicated
+native cases cover hidden titles/status, compact/hidden/status-only footers,
+read-only Save hit regions and tiny windows; the external assertion is retained.
+
 ## Changes and independent oracles
 
 | Area | Intended behavior | Regression oracle |

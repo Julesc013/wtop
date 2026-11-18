@@ -3059,7 +3059,11 @@ static void DrawOverlay(void)
         }
     }
     StatusRow = Chrome.prompt >= 0 ? Chrome.prompt : Chrome.status;
-    if(StatusRow < 0 && (DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID))) { SetConCursorPos(0, 2); ConPrintf(_T("glyph substitution; raw text preserved")); }
+    /* Row 2 is reserved between the overlay description and its content.
+       Persistent diagnostics belong here when the configured footer contains
+       controls; replacing that footer would hide recovery and disabled reasons. */
+    if(StatusRow < 0 && ViMessageActive()) { ClearRow(2); WriteStatusAt(2, 0); }
+    else if(StatusRow < 0 && (DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID))) { SetConCursorPos(0, 2); ConPrintf(_T("glyph substitution; raw text preserved")); }
     if(StatusRow >= 0) { ClearRow(StatusRow); if(InInputMode) DrawEditorStatus(); else WriteVi(); }
     DrawFunctionBar();
     RenderedRowCount = 0;
@@ -3131,14 +3135,24 @@ static int DrawCoreRows(int Row)
 static void ComposeFrame(void)
 {
     DisplayTextFlags = 0;
+    memset(FooterWidths, 0, sizeof(FooterWidths));
+    BOOL MessageActive = ViMessageActive();
+    BOOL HasFunctionBar = Settings.show_function_bar && Settings.footer_style != WTOP_FOOTER_STATUS;
+    /* Only a text editor shares/replaces visible controls. A non-editor
+       diagnostic uses the existing status/banner area (or reserved overlay
+       row), so a persistent error never removes the configured function bar.
+       Hidden/status-only bars still expose their sole transient prompt row. */
     wtop_ui_chrome_layout(Height, Settings.show_function_bar, Settings.footer_style,
-        Settings.status_position, InInputMode || ViMessageActive(), &Chrome);
+        Settings.status_position, InInputMode || (MessageActive && !HasFunctionBar), &Chrome);
+    if(MessageActive && !InInputMode && HasFunctionBar && Settings.status_position != WTOP_STATUS_BOTTOM)
+        Chrome.banner_status = TRUE;
     FunctionBarRow = Chrome.footer;
     StatusRow = Chrome.prompt >= 0 ? Chrome.prompt : Chrome.status;
     if(InInputMode && Settings.show_function_bar && Settings.footer_style != WTOP_FOOTER_STATUS)
         FunctionBarRow = StatusRow;
     if(Width < 40 || Height < 10) {
         ClearRow(0); ConPrintf(_T("Resize to at least 40x10; F10 quits."));
+        if(MessageActive && Height > 1) { ClearRow(1); WriteStatusAt(1, 0); }
         VisibleProcessCount = RenderedRowCount = 0;
         DisplayedProcessID = 0; DisplayedCreationTime = 0;
         RenderInvalidated = TRUE; return;
