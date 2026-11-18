@@ -1,0 +1,72 @@
+name: Wtop verified source transfer
+on:
+  push:
+    branches: [transfer/wtop-beta2-source-20261118]
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify data-only patch and import exact Git objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, subprocess, tempfile, urllib.request
+          from pathlib import Path
+          base='f0d02559a5795361c28170d2f75417ff2d73096a'
+          expected='1049b67c19347a4450df3ac28b20514b82d40c9e'
+          packed=base64.b64decode(''.join(Path('transfer/renderer-%d.txt'%i).read_text().strip() for i in range(1,6)),validate=True)
+          assert hashlib.sha256(packed).hexdigest()=='c9f30f27d9ba4bea7bde13489914e38aff762fdfd14e96b1695a63049fa1c94a'
+          decoder=lzma.LZMADecompressor(memlimit=128*1024*1024)
+          raw=decoder.decompress(packed,max_length=1024*1024)
+          assert decoder.eof and not decoder.unused_data and len(raw)==87942
+          packet=json.loads(raw)
+          assert packet['base']==base and packet['tree']==expected
+          def git(root,*args,data=None):
+              return subprocess.run(['git','-c','core.hooksPath=/dev/null','-C',str(root),*args],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=60).stdout
+          def api(path,data):
+              request=urllib.request.Request('https://api.github.com/repos/Julesc013/wtop/git/'+path,data=json.dumps(data).encode(),method='POST',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','Accept':'application/vnd.github+json','User-Agent':'wtop-source-transfer'})
+              with urllib.request.urlopen(request,timeout=45) as response:return json.load(response)
+          assert os.environ['GITHUB_REPOSITORY']=='Julesc013/wtop'
+          with tempfile.TemporaryDirectory() as temporary:
+              root=Path(temporary)/'source'
+              subprocess.run(['git','clone','--no-checkout','--no-hardlinks','.',str(root)],check=True,timeout=60)
+              git(root,'checkout','--detach',base)
+              git(root,'apply','--index','-',data=packet['patch'].encode())
+              assert git(root,'write-tree').decode().strip()==expected
+              paths=git(root,'diff','--cached','--name-only','-z').split(b'\0')
+              entries=[]
+              for rawpath in paths:
+                  if not rawpath:continue
+                  path=rawpath.decode()
+                  assert path.startswith(('source/','tests/','spec/')) or path=='CMakeLists.txt'
+                  item=git(root,'ls-files','--stage','--',path).decode().strip()
+                  assert item
+                  metadata,listed=item.split('\t');mode,sha,stage=metadata.split()
+                  assert listed==path and mode=='100644' and stage=='0'
+                  data=git(root,'cat-file','blob',sha)
+                  assert api('blobs',{'content':base64.b64encode(data).decode(),'encoding':'base64'})['sha']==sha
+                  entries.append({'path':path,'mode':mode,'type':'blob','sha':sha})
+              tree=api('trees',{'base_tree':git(root,'rev-parse',base+'^{tree}').decode().strip(),'tree':entries})
+              assert tree['sha']==expected
+              commit=api('commits',{'message':'fix(tui): retain complete frames and unify configurable single-row chrome\n\nReplace live clears and streaming output with a bounded portable frame and Win32 block presenter. Add explicit footer/status placement, separate paint cadence, pause and single-cell charset policy. Portable C90 suites pass; native qualification follows on the work branch.','tree':expected,'parents':[base]})
+              result={'base':base,'tree':expected,'commit':commit['sha'],'remote_refs_modified':False}
+              Path('import-result.json').write_text(json.dumps(result,indent=2)+'\n')
+              print(json.dumps(result))
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: wtop-beta2-source-import-${{ github.sha }}
+          path: import-result.json
+          retention-days: 14
+          if-no-files-found: error
+# Temporary transport only: source bytes are hash-bound; no product reference,
+# installation, repository setting, release or tag is changed by this job.
