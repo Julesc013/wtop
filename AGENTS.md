@@ -22,6 +22,8 @@ Read `spec/START-HERE.md`, `spec/index.md`, `README.md` and the work unit select
 by `python tools/specctl.py next`. The specification records intended behavior;
 the implementation/evidence status records what actually exists. A declared
 target, passing validator or successful build is not a native support claim.
+Read `docs/current-work.md` for the latest continuation checkpoint, then verify
+its branch, pull request and checks against live Git before resuming.
 
 ## Work discipline
 
@@ -29,6 +31,14 @@ target, passing validator or successful build is not a native support claim.
   Inspect the worktree and current upstream revision before changing anything.
 - Keep one bounded work unit active per writer. Parallel writers must have
   disjoint files and an agreed interface; integrate and review their changes.
+- Commit and push each coherent work unit before starting another substantial
+  unit. Preserve unfinished or failing work on its task branch with a draft PR
+  and an explicit failure record; do not wait for the whole feature or chat to
+  finish before putting the work on GitHub.
+- Merge checked, reviewed increments promptly through pull requests. Update
+  `docs/current-work.md` with the exact tested revision, remaining failure and
+  next concrete action at each integration or handoff. Git is the continuation
+  record; chat history and local-only files are not a delivery checkpoint.
 - Preserve the working NTop-derived TUI while extracting responsibility-sized
   modules. Do not perform a speculative complete rewrite or clone an application
   directory for every Windows release.
