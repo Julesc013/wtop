@@ -44,6 +44,18 @@ def cleanup_preserving_failure(cleanup):
         primary.fixture_cleanup_failure = traceback.format_exc()
 
 
+def record_installer_context(observations, key):
+    """Optional diagnostics must not replace lifecycle failure or completion."""
+    try:
+        from installer_diagnostics import installer_context
+        observations[key] = installer_context()
+    except Exception as error:
+        # Keep import/programming failures too. This boundary affects only
+        # diagnostics; it never changes any installer assertion or exit code.
+        observations[key] = {"observation_failed": True, "error": str(error),
+                             "traceback": traceback.format_exc()}
+
+
 def install_scope_arguments(scope):
     # ALLUSERS=1 explicitly selects machine scope and ignores the package's
     # MSIINSTALLPERUSER default. Avoid an empty property whose required literal
@@ -56,6 +68,21 @@ def install_scope_arguments(scope):
 
 
 class InstallScopeArguments(unittest.TestCase):
+    def test_diagnostic_error_cannot_replace_the_actual_installer_failure(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        def broken_observer():
+            raise NameError("diagnostic sentinel")
+
+        observations = {"failure": "original MSI assertion", "failure_traceback": "original trace"}
+        with patch.dict(sys.modules, {"installer_diagnostics": SimpleNamespace(installer_context=broken_observer)}):
+            record_installer_context(observations, "installer_context_after_failure")
+        self.assertEqual(observations["failure"], "original MSI assertion")
+        self.assertEqual(observations["failure_traceback"], "original trace")
+        self.assertTrue(observations["installer_context_after_failure"]["observation_failed"])
+        self.assertIn("diagnostic sentinel", observations["installer_context_after_failure"]["traceback"])
+
     def test_explicit_machine_scope_has_no_inherited_user_selector(self):
         self.assertEqual(subprocess.list2cmdline(install_scope_arguments("machine")), "ALLUSERS=1")
         self.assertEqual(install_scope_arguments("user"), ["ALLUSERS=2", "MSIINSTALLPERUSER=1"])
@@ -604,7 +631,8 @@ def run_standard_account(candidate, manifest, observations):
     observations["standard_user_fixture"] = diagnostics
     source_files = ("tests/test_native_install.py", "tools/package_candidate.py",
                     "tools/inspect_pe.py", "tools/release_metadata.py",
-                    "spec/catalog/targets.json", "packaging/native_token.py")
+                    "spec/catalog/targets.json", "packaging/native_token.py",
+                    "packaging/installer_diagnostics.py")
 
     def copy_exact(source, destination, bound):
         require(source.is_file() and not source.is_symlink(), "staged input is not a regular file: " + str(source))
@@ -729,6 +757,7 @@ def main(argv=None) -> int:
         sys.path.insert(0, str(ROOT / "packaging"))
         from native_token import current_token_context
         observations["token_context"] = token = current_token_context()
+        record_installer_context(observations, "installer_context_before")
         if args.require_ordinary_token:
             require(not token["is_user_an_admin"] and token["integrity_rid"] == 8192,
                     "restricted stress child is not medium integrity without administrator membership")
@@ -795,6 +824,8 @@ def main(argv=None) -> int:
         observations["failure_traceback"] = traceback.format_exc()
         if hasattr(exc, "fixture_cleanup_failure"):
             observations["cleanup_failure_traceback"] = exc.fixture_cleanup_failure
+        # Diagnostics cannot replace the original failed assertion or traceback.
+        record_installer_context(observations, "installer_context_after_failure")
         traceback.print_exc()
         return 1
     finally:
