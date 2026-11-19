@@ -2,7 +2,7 @@ name: Wtop portable prerelease draft
 
 on:
   push:
-    branches: [master, 'work/public-beta-*']
+    branches: [master]
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -21,8 +21,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: wtop-beta-${{ github.ref }}
-  cancel-in-progress: false
+  # Superseded validation can stop without cancelling an explicit delivery.
+  # Stage and publish share the delivery group so they cannot run together.
+  group: wtop-beta-${{ github.event_name == 'workflow_dispatch' && 'delivery' || 'validation' }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   build:
@@ -150,7 +152,7 @@ jobs:
 
   stage-draft:
     needs: assemble
-    if: github.repository == 'Julesc013/wtop' && github.ref == 'refs/heads/master' && (github.event_name == 'push' || inputs.operation == 'stage')
+    if: github.repository == 'Julesc013/wtop' && github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && inputs.operation == 'stage'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

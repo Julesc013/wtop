@@ -2,7 +2,7 @@ name: Wtop checks
 
 on:
   push:
-    branches: [master, 'work/**']
+    branches: [master]
   pull_request:
     branches: [master]
   workflow_dispatch:

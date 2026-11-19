@@ -16,13 +16,35 @@ class PublicationOperations(unittest.TestCase):
         for key,value in [('draft',False),('prerelease',False),('target_commitish','b'*40),('tag_name','v0.4.0-beta.2')]:
             changed=copy.deepcopy(draft);changed[key]=value
             with self.subTest(key=key),self.assertRaises(BetaError):publish.existing_draft(changed,manifest)
-    def test_source_push_cannot_publicly_publish(self):
-        with patch.dict(os.environ,{'GITHUB_REPOSITORY':'Julesc013/wtop','GITHUB_REF':'refs/heads/master','GITHUB_EVENT_NAME':'push'},clear=True),patch.object(publish,'publish') as action:
-            self.assertEqual(publish.main(['publish','v0.4.0-beta.1']),2);action.assert_not_called()
-    def test_fork_or_work_branch_cannot_stage(self):
-        for repo,ref in [('other/wtop','refs/heads/master'),('Julesc013/wtop','refs/heads/work/test')]:
-            with patch.dict(os.environ,{'GITHUB_REPOSITORY':repo,'GITHUB_REF':ref},clear=True),patch.object(publish,'stage') as action:
-                self.assertEqual(publish.main(['stage','unused']),2);action.assert_not_called()
+    def test_automatic_or_missing_event_cannot_change_releases(self):
+        for command, argument in [('stage', 'unused'), ('publish', 'v0.4.0-beta.1')]:
+            for event in ('push', 'pull_request', 'workflow_run', None):
+                environment = {'GITHUB_REPOSITORY': 'Julesc013/wtop', 'GITHUB_REF': 'refs/heads/master'}
+                if event is not None:
+                    environment['GITHUB_EVENT_NAME'] = event
+                with self.subTest(command=command, event=event), \
+                     patch.dict(os.environ, environment, clear=True), patch.object(publish, command) as action:
+                    self.assertEqual(publish.main([command, argument]), 2)
+                    action.assert_not_called()
+
+    def test_explicit_dispatch_reaches_the_requested_operation(self):
+        environment = {'GITHUB_REPOSITORY': 'Julesc013/wtop', 'GITHUB_REF': 'refs/heads/master',
+                       'GITHUB_EVENT_NAME': 'workflow_dispatch'}
+        for command, argument, expected in [('stage', 'unused', Path('unused')),
+                                             ('publish', 'v0.4.0-beta.1', 'v0.4.0-beta.1')]:
+            with self.subTest(command=command), patch.dict(os.environ, environment, clear=True), \
+                 patch.object(publish, command) as action:
+                self.assertEqual(publish.main([command, argument]), 0)
+                action.assert_called_once_with(expected)
+
+    def test_dispatch_cannot_mutate_from_fork_or_work_branch(self):
+        for repo, ref in [('other/wtop', 'refs/heads/master'), ('Julesc013/wtop', 'refs/heads/work/test')]:
+            environment = {'GITHUB_REPOSITORY': repo, 'GITHUB_REF': ref, 'GITHUB_EVENT_NAME': 'workflow_dispatch'}
+            for command, argument in [('stage', 'unused'), ('publish', 'v0.4.0-beta.1')]:
+                with self.subTest(repo=repo, ref=ref, command=command), \
+                     patch.dict(os.environ, environment, clear=True), patch.object(publish, command) as action:
+                    self.assertEqual(publish.main([command, argument]), 2)
+                    action.assert_not_called()
     def test_invalid_tag_never_calls_network(self):
         for tag in ['v0.4.0','v0.4.0-beta.01','--anything','v0.4.0-beta.1;echo bad']:
             with patch.object(publish,'release_for') as network,self.assertRaises(BetaError):publish.publish(tag)

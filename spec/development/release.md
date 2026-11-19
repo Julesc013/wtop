@@ -106,8 +106,11 @@ alpha/beta publication after automatic gates. Human desktop review is valuable
 but is not a mandatory alpha/beta prerequisite. Stable publication still requires
 ordinary-user desktop evidence, human interaction review and final-byte approval.
 This change is an authorized channel policy, not an automatically synthesized
-human receipt. The present task requests a **draft**; no automatic master push
-may publicly publish it.
+human receipt. Automatic pull-request and master-push runs validate and retain
+artifacts bound to their exact source revision. Draft staging and public promotion
+each require explicit `workflow_dispatch` from canonical `master`, with their
+existing exact-payload gates. The Beta 2 task requested a draft; source integration
+does not request public publication.
 
 A draft may record a missing optional observation or unavailable security scanner
 truthfully. Failed required tests, changed payloads, invalid signatures or a

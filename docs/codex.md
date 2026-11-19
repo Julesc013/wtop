@@ -28,6 +28,26 @@ replace working modules. Before writing, identify the gap, the existing owner of
 that behavior and the smallest compatible change. Parallel writers need disjoint
 files and agreed interfaces, followed by an integrated review.
 
+## Keep progress in Git
+
+Open a draft pull request after the first coherent checkpoint. Commit and push
+each bounded, reviewable increment before beginning another work unit or waiting
+for native CI. Updates to an open PR run both validation workflows once each;
+there is no duplicate work-branch push run. A branch without a PR can be checked
+through workflow dispatch.
+
+Record the pushed source identity, PR, actual check outcomes and next concrete
+action in [the continuation checkpoint](current-work.md), with detailed evidence
+in the relevant verification record. Merge once review and applicable checks
+pass, then synchronize the local integration checkout. Unfinished or failed work
+stays recoverable on its pushed branch with its real remaining gate recorded.
+
+Automatic PR/master validation retains exact-source artifacts. Stage a versioned
+draft only through an explicit prerelease workflow dispatch from `master`; public
+promotion is another explicit operation with its own gates. Do not change an
+existing version's source or assets to accommodate later checkpoints. See the
+[draft and publication policy](beta-publication.md).
+
 ## Responsibility boundaries
 
 All application code and inherited build/configuration/packaging inputs live in

@@ -3,9 +3,9 @@
 
 Uses the caller's GitHub CLI authentication. Never requests broader permissions,
 changes repository policy, overwrites assets or publishes from a normal source
-edit. Only the dedicated workflow may stage on master; public promotion requires
-an explicit invocation and the recorded channel's exact-payload gates. Alpha and
-beta human review is optional; this tool cannot publish a stable release.
+edit. Staging and public promotion require explicit workflow dispatch on master
+and the recorded channel's exact-payload gates. Alpha and beta human review is
+optional; this tool cannot publish a stable release.
 """
 from __future__ import annotations
 import argparse
@@ -189,11 +189,10 @@ def main(argv=None):
     try:
         if os.environ.get('GITHUB_REPOSITORY')!=REPOSITORY or os.environ.get('GITHUB_REF')!='refs/heads/master':
             raise BetaError('publication tooling runs only in the canonical repository on master')
+        if os.environ.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
+            raise BetaError('draft staging and public promotion require explicit workflow_dispatch')
         if args.command=='stage':stage(args.directory)
-        else:
-            if os.environ.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
-                raise BetaError('public promotion requires explicit workflow_dispatch')
-            publish(args.tag)
+        else:publish(args.tag)
         return 0
     except (OSError,ValueError,KeyError,subprocess.SubprocessError) as error:
         print('Release operation blocked: '+str(error),file=sys.stderr);return 2
