@@ -28,6 +28,9 @@ typedef struct wtop_options {
     int command_line; /* Sensitive command arguments are strictly opt-in. */
     int services;
     int per_core;
+    int image_path;
+    int threads;
+    int affinity; /* Read-only inspection; mutations require explicit TUI confirmation. */
     unsigned long sample_limit; /* Zero: no count bound; log requires a time/count bound. */
     unsigned long duration_ms;
     unsigned long max_bytes;

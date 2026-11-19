@@ -14,12 +14,20 @@ from pathlib import Path
 from inspect_pe import PEError, inspect_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
-from release_metadata import SEMVER
+from release_metadata import SEMVER, metadata
 REVISION = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
 
 class PackageError(ValueError):
     pass
+
+
+def third_party_notices_required(version: str) -> bool:
+    """Keep immutable Beta 1/2 carriers readable; Beta 3 links utf8proc."""
+    info = metadata(version)
+    core = tuple(info['native_version'][:3])
+    return core > (0, 4, 0) or (core == (0, 4, 0) and not
+        (info['channel'] == 'beta' and info['ordinal'] <= 2))
 
 
 def sha256(data: bytes) -> str:
@@ -118,6 +126,13 @@ def package(executable: Path, output: Path, profile: str, provenance: dict,
     entries = {"wtop.exe": data, "LICENSE": (root / "LICENSE").read_bytes(),
                "payload.json": json_bytes(payload), "PORTABLE.txt": portable_notes,
                "wtop.conf.example": (root / "source/wtop.conf").read_bytes()}
+    if third_party_notices_required(version):
+        notices = (root / 'THIRD-PARTY-NOTICES.md').read_bytes()
+        if not notices:
+            raise PackageError('third-party notices must not be empty')
+        entries['THIRD-PARTY-NOTICES.md'] = notices
+        payload['legal_files'] = [{'name': 'THIRD-PARTY-NOTICES.md', 'size': len(notices), 'sha256': sha256(notices)}]
+        entries['payload.json'] = json_bytes(payload)
     archive_name = f"wtop-{version}-{profile}-portable.zip"
     for name, content in entries.items():
         (output / name).write_bytes(content)
@@ -177,6 +192,8 @@ def verify(directory: Path) -> dict:
             with zipfile.ZipFile(directory / name) as archive:
                 members = archive.namelist()
                 expected = {"wtop.exe", "LICENSE", "payload.json", "PORTABLE.txt", "wtop.conf.example"}
+                if third_party_notices_required(payload['version']):
+                    expected.add('THIRD-PARTY-NOTICES.md')
                 if len(members) != len(expected) or set(members) != expected:
                     raise PackageError("unexpected ZIP member set")
                 if any(item.file_size > 64 * 1024 * 1024 for item in archive.infolist()):
@@ -187,6 +204,11 @@ def verify(directory: Path) -> dict:
                     raise PackageError("ZIP payload provenance differs")
                 if archive.read("LICENSE") != (directory / "LICENSE").read_bytes():
                     raise PackageError("ZIP license differs")
+                if third_party_notices_required(payload['version']):
+                    notices = (directory / 'THIRD-PARTY-NOTICES.md').read_bytes()
+                    if (not notices or archive.read('THIRD-PARTY-NOTICES.md') != notices or
+                            payload.get('legal_files') != [{'name': 'THIRD-PARTY-NOTICES.md', 'size': len(notices), 'sha256': sha256(notices)}]):
+                        raise PackageError('third-party notice bytes/provenance differ')
     if exe_count != 1 or zip_count != 1:
         raise PackageError("candidate requires exactly one standalone EXE and portable ZIP")
     expected_checksums = "".join(

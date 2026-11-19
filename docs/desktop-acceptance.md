@@ -26,3 +26,37 @@ The owned-console CI matrix also tests 40x25, 80x25, 40x10 and 39x9 recovery.
 80x50 is tested there only if the native host permits it; a host-limited result
 does not replace the required desktop human review. No configuration is saved
 implicitly by resizing or quitting.
+
+## Additional Beta 3 desktop cases
+
+Use the exact Beta 3 EXE that the receipt hashes. In addition to the script's
+prompts, record these observations with the terminal version, font, theme and
+actual display dimensions. Do not fill human answers from CI or source review.
+
+1. Start with a fresh configuration, then with explicitly saved views. Both must
+   restore display preferences without restoring a process action target.
+2. Hover and navigate to obtain grey focus. Click or Enter confirms dark cyan;
+   move focus to another row and verify the confirmed identity remains clear.
+   Escape unwinds any editor/panel first, then confirmation to focus, then none.
+   With no target, mutation controls must not act on a hidden current row.
+3. Repeat with conventional dark yellow and an explicitly black selection
+   background. Test readable text on both light and dark host palettes. Check
+   `BackgroundMode terminal` with host transparency enabled where available;
+   Wtop must not change the host palette or opacity. Record classic-console
+   palette fallback separately from modern terminal-default behaviour.
+4. Open details, threads and affinity for an owned disposable process. Check
+   observation age, F5 refresh, scrolling, denied/unsupported fields, readonly
+   refusal and the separate affinity confirmation/outcome. Collapse a subtree,
+   sort/filter and let its process exit; no replacement lifetime may inherit it.
+5. Enter combining accents, CJK, a regional-indicator flag, an Indic conjunct and
+   an emoji ZWJ sequence in a tab name. Inspect clipping and caret/delete/backspace
+   at the left/right edges and after resize. Verify saved raw text independently.
+   Record font/shaping/bidi/width limitations instead of treating the 766-case
+   segmentation corpus as visual certification. Repeat with ASCII fallback.
+6. Exercise Ctrl+C in the main view, each panel, Setup, editors and confirmations
+   with htop, Vi/Vim and Emacs maps. Verify process retirement and restoration of
+   the invoking console. Record any emergency own-process exit distinctly.
+
+The restricted-medium-token resource fixture supplements this review with
+bounded automated observations. It does not complete these visual/usability
+cases or fresh-account, UAC and installation acceptance.

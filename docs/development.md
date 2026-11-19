@@ -66,7 +66,12 @@ console events and filesystem replacement stay with the native adapter.
 `settings_store_nt`, `providers_nt` and `output_nt` own native configuration
 transactions, isolated optional work and complete-record logging respectively.
 `console_frame_nt` presents the composed cell frame and validates viewport changes
-before reusing its front-buffer cache.
+before reusing its front-buffer cache. Beta 3 adds `features_nt` for bounded
+identity-checked details/threads/affinity and `tui_inspection_nt` for owned
+asynchronous panel reads/actions. Unicode 17 grapheme segmentation lives in
+`grapheme.c` and pinned `vendor/utf8proc`; those isolated targets use C99 while
+the established portable policy core retains its C90 profile. The modern build
+statically includes Unicode data and ships the corresponding third-party notices.
 Historical capability probes live under `source/legacy/`, with separate build
 and evidence profiles; see [historical backends](historical-backends.md).
 
@@ -180,8 +185,8 @@ Windows Win32/x64/ARM64 candidates. Win32 executes under WoW64 on the hosted
 x64 Windows Server runner; ARM64 executes on `windows-11-arm`. A runner label is
 not a receipt: inspect each actual run's OS, architecture, token and test results.
 These lanes do not certify historical Windows. Artifacts retain exact identities
-and explicit limits. Automatic runs retain checked candidates and assembled beta
-bundles without staging a release. Only explicit
+and explicit limits. Automatic runs retain checked candidates, assembled beta
+bundles and offline channel preparation without staging a release. Only explicit
 dispatch from canonical `master` can stage or publish after the applicable gates.
 Superseded automatic prerelease validation can be cancelled without cancelling
 an in-progress explicit delivery, which uses a separate concurrency group.

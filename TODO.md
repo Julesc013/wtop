@@ -1,7 +1,7 @@
 # Wtop TODO
 
-Beta 2 work: [implementation and verification](docs/beta2-verification.md),
-[supplied plan](docs/beta2-plan.md), and [release policy](docs/beta-publication.md).
+Beta 3 work: [implementation, qualification and remaining work](docs/beta3-verification.md),
+[interaction comparison](docs/interaction-comparison.md), and [release policy](docs/beta-publication.md).
 Automated prerelease gates and stable human qualification are separate.
 
 This is the contributor checklist for the complete currently agreed product scope.
@@ -21,7 +21,7 @@ criteria; some already have candidate code and need evidence rather than rewriti
 
 ## 0. Current implementation and first-release gates
 
-The current application is **0.4.0-beta.2 (prerelease candidate)**. The earlier
+The current application is **0.4.0-beta.3 (prerelease candidate)**. The earlier
 [17 November source audit](docs/wtop-release-readiness-2026-11-17.md) describes
 `1ca153b77e7df203b9f6d1f8cfb2ff472318bc27`; the
 [current implementation record](docs/implementation-verification-2026-11-17.md)
@@ -52,7 +52,12 @@ acceptance or a supported release.
 Beta 2 adds composed changed-cell frames, a single default footer, pause/resume,
 explicit empty startup selection, process-lifetime selection and contextual
 Escape/global Ctrl+C. [The Beta 2 record](docs/beta2-verification.md) owns their
-exact evidence. The following broader stable and platform gates remain open:
+exact evidence. Beta 3 adds separate lifetime-bound focus/confirmation, hover, terminal-default
+backgrounds, Unicode 17 boundaries/cell layout, bounded detail/thread providers,
+confirmed affinity editing and collapsible subtrees. Candidate installer upgrade/
+rollback/restricted-user fixtures and offline package preparation are added.
+[Its report](docs/beta3-verification.md) owns the exact scope and remaining gaps.
+The following broader stable and platform gates remain open:
 
 Remaining first-release blockers and evidence work:
 
@@ -68,7 +73,7 @@ Remaining first-release blockers and evidence work:
   unelevated scope behavior and optional exactly owned PATH integration.
 - [ ] Establish release version mapping, signing/source correspondence, actual
   download verification and WinGet publication only after payload qualification.
-- [ ] Implement remaining CLI mutations/detail/thread/affinity/provider scope and
+- [ ] Complete typed CLI mutations, sampled thread rates, group-aware affinity/provider scope and
   historical monitoring capabilities toward the complete 1.0 goal.
 - [ ] Map full acceptance cases to complete native evidence before promoting the
   work/target registries. A narrower passing fixture does not close a broad case.
@@ -134,10 +139,11 @@ References: [governance](spec/foundation/governance.md),
   uncollected CPU subcategories or relabel commit as swap for visual similarity.
 - [ ] Verify confirmed termination and supported Windows priority-class actions
   against the exact displayed process lifetime, including denied rights and exits.
-- [ ] Add remaining htop-tier capabilities as distinct changes: thread/detail
-  views, supported affinity, branch collapse and richer meters. Pause is now
-  implemented; qualification remains scoped to its recorded fixtures.
-  Do not advertise them merely because corresponding keys exist in upstream htop.
+- [ ] Qualify Beta 3's captured detail/thread panels, confirmed single-group
+  affinity editing and lifetime-bound branch collapse. Add sampled thread CPU,
+  mixed process/thread sorting, CPU Sets/group-aware affinity and richer meters
+  as separate capabilities. Pause and these candidate panels still need the
+  broader host/human acceptance beyond their recorded fixtures.
 
 References: WT-AC-031-01 through WT-AC-031-07 in
 [acceptance](spec/catalog/acceptance.json), [TUI contract](spec/interfaces/tui.md).
@@ -242,10 +248,12 @@ References: [command catalog](spec/catalog/commands.json),
   locked executables and interrupted install/uninstall.
 - [ ] Keep preferences outside WinGet/MSI payload ownership; provide explicit
   remove-settings behavior without deleting arbitrary parent directories.
-- [ ] Define stable/prerelease/artifact names, version-to-MSI mapping and source
-  correspondence; reject collisions or unsupported version ranges.
-- [ ] Create exact-architecture WinGet manifests only after the acquired payload
-  is qualified. Do not repeat NTop's inspected neutral/x64 mismatch.
+- [ ] Qualify the implemented shared stable/prerelease/artifact version ledger,
+  MSI mapping and corresponding-source delivery across the actual release set;
+  retain collision/range refusal and signing/acquisition boundaries.
+- [ ] Validate prepared WinGet/Scoop/Chocolatey inputs with their native clients
+  and actual acquired payloads, including scope, aliases and removal. Preparation
+  uses exact architectures; no listing, bucket or feed is published by this work.
 - [ ] Document GitHub downloads with exact profile/digest and offline-copy paths
   for historical hosts. Do not require remote-script evaluation to install.
 - [ ] Retire or explicitly replace inherited `source/ntop.nuspec` before any

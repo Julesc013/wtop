@@ -15,7 +15,7 @@ on:
       tag:
         description: 'Existing draft tag, required only for publish'
         type: string
-        default: v0.4.0-beta.2
+        default: v0.4.0-beta.3
 
 permissions:
   contents: read
@@ -72,6 +72,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build out/beta-windows --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record and package the immutable application candidate
+        id: candidate
+        shell: pwsh
+        run: |
+          python packaging/record_build.py out/beta-windows out/beta-provenance.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py create --exe out/beta-windows/Release/wtop.exe --output out/beta-candidate --profile ${{ matrix.profile }} --provenance out/beta-provenance.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_candidate.py verify out/beta-candidate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Execute final native and TUI tests on the declared host
         shell: pwsh
         run: |
@@ -80,10 +90,6 @@ jobs:
       - name: Record unchanged final bytes and native receipts
         shell: pwsh
         run: |
-          python packaging/record_build.py out/beta-windows out/beta-provenance.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/package_candidate.py create --exe out/beta-windows/Release/wtop.exe --output out/beta-candidate --profile ${{ matrix.profile }} --provenance out/beta-provenance.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item out/beta-windows/native-tests.xml out/beta-candidate/native-tests.xml
           python packaging/native_receipt.py out/beta-candidate --junit out/beta-candidate/native-tests.xml --output out/beta-candidate/native-receipt.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -91,12 +97,39 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/package_candidate.py verify out/beta-candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build exact-payload experimental MSI and exercise its lifecycle
+        # Exercise the independent installer boundary even when native runtime
+        # tests failed. A failed native/MSI step still fails this entire job;
+        # assembly and publication retain their successful-build dependency.
+        if: ${{ !cancelled() && steps.candidate.outcome == 'success' && matrix.arch != 'Win32' }}
+        shell: pwsh
+        env:
+          DOTNET_ROLL_FORWARD: Major
+        run: |
+          dotnet tool install wix --tool-path out/wix --version 4.0.6
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python packaging/build_msi.py --candidate out/beta-candidate --stage out/beta-msi-stage --wix out/wix/wix.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Server's unmanaged-install policy is verified, never changed. The
+          # Windows 11 ARM64 client must pass under a fresh standard account.
+          $contextArgs = @('--standard-user')
+          if ('${{ matrix.arch }}' -eq 'x64') { $contextArgs = @('--restricted-user', '--expect-restricted-user-policy-refusal') }
+          python tests/test_native_install.py out/beta-candidate --disposable-host --machine @contextArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain exact profile inputs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wtop-beta-input-${{ matrix.profile }}-${{ github.sha }}
           path: out/beta-candidate/
           if-no-files-found: error
+          retention-days: 30
+      - name: Retain experimental MSI and failed or successful lifecycle evidence
+        if: always() && matrix.arch != 'Win32'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wtop-msi-candidate-${{ matrix.profile }}-${{ github.sha }}
+          path: out/beta-candidate/
+          if-no-files-found: warn
           retention-days: 30
       - name: Retain failed and successful native observations
         if: always()
@@ -108,9 +141,12 @@ jobs:
             out/beta-windows/Testing/Temporary/LastTest.log
             out/beta-windows/native-tui-observations.json
             out/beta-windows/native-provider-observations.json
+            out/beta-windows/native-resource-observations.json
             out/beta-provenance.json
             out/beta-candidate/native-receipt.json
             out/beta-candidate/security-scan.json
+            out/beta-candidate/native-install-observations*.json
+            out/beta-candidate/native-install-logs*/
           if-no-files-found: warn
           retention-days: 30
 
@@ -140,13 +176,22 @@ jobs:
           for profile in win-nt-x86 win-nt-x64 win-nt-arm64; do
             gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "wtop-beta-input-$profile-$SOURCE_SHA" --dir "out/profiles/$profile"
           done
-          python tools/release_bundle.py assemble --input out/profiles/win-nt-x86 --input out/profiles/win-nt-x64 --input out/profiles/win-nt-arm64 --notes docs/beta2-changes.md --output out/beta
+          python tools/release_bundle.py assemble --input out/profiles/win-nt-x86 --input out/profiles/win-nt-x64 --input out/profiles/win-nt-arm64 --notes docs/beta3-changes.md --output out/beta
           python tools/release_bundle.py verify out/beta
+          python tools/prepare_distribution.py prepare --bundle out/beta --output out/distribution-preparation
+          python tools/prepare_distribution.py verify --bundle out/beta --output out/distribution-preparation
       - name: Retain verified draft package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wtop-beta-${{ github.sha }}
           path: out/beta/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain offline channel preparation without publishing listings
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wtop-distribution-preparation-${{ github.sha }}
+          path: out/distribution-preparation/
           if-no-files-found: error
           retention-days: 30
 

@@ -30,7 +30,7 @@ jobs:
           python tools/specctl.py validate
           python tools/command_help.py --check
           python -m unittest discover -s tests -p 'test_*.py' -v
-      - name: Build portable C90 core with sanitizers
+      - name: Build portable C90 core and isolated Unicode adapter with sanitizers
         run: |
           cmake -S . -B out/host -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS='-Wall -Wextra -Wpedantic -fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
           cmake --build out/host --parallel 2
@@ -84,6 +84,7 @@ jobs:
           path: |
             out/windows/native-tui-observations.json
             out/windows/native-provider-observations.json
+            out/windows/native-resource-observations.json
             out/windows/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
           retention-days: 14
@@ -98,7 +99,7 @@ jobs:
           python tools/package_candidate.py verify out/candidate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build pinned modern MSI candidate
-        if: matrix.arch == 'x64'
+        if: matrix.arch != 'Win32'
         shell: pwsh
         env:
           DOTNET_ROLL_FORWARD: Major
@@ -108,10 +109,14 @@ jobs:
           python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Qualify direct MSI ownership and refusal fixtures
-        if: matrix.arch == 'x64'
+        if: matrix.arch != 'Win32'
         shell: pwsh
         run: |
-          python tests/test_native_install.py out/candidate --disposable-host --machine
+          # Server's unmanaged-install policy is verified, never changed. The
+          # Windows 11 ARM64 client must pass under a fresh standard account.
+          $contextArgs = @('--standard-user')
+          if ('${{ matrix.arch }}' -eq 'x64') { $contextArgs = @('--restricted-user', '--expect-restricted-user-policy-refusal') }
+          python tests/test_native_install.py out/candidate --disposable-host --machine @contextArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify candidate cannot be promoted as a supported release
         shell: pwsh

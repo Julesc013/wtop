@@ -55,6 +55,17 @@ uses the actual module path, not `argv[0]`. A writable directory is not proof of
 portable ownership or managed installation. Explicit portable selection precedes
 registration. `--no-config` overrides an accompanying portable selection.
 
+## Beta 3 additive presentation keys
+
+Settings schema2 adds `BackgroundMode terminal|palette` (compiled default
+terminal), `FocusForeground`, `FocusBackground`, `SelectionForeground` and
+`SelectionBackground` (palette indices0..15). Default focus is15/8, selection0/3;
+selection background6 gives conventional darkyellow. An explicit legacy BGColor
+without BackgroundMode retains palette behaviour. Old BGHighlightColor supplies
+selection roles only when new roles are absent. Focus/selection lifetimes are
+never stored. Existing role keys retain meaning; field ownership, conflict
+checking and explicit-save rules below still apply.
+
 ## Ownership and native path resolution
 
 The native candidate reads up to 128 child records from

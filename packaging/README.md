@@ -17,6 +17,7 @@ python tools/package_candidate.py verify out/candidate
 ```
 
 The directory contains the unchanged EXE, a deterministic ZIP, license,
+third-party notices (required since Beta 3),
 `wtop.conf.example`, portable instructions, `payload.json`, `candidate.json` and
 `SHA256SUMS`. The ZIP's payload record is separate from wrapper records, avoiding
 a self-referential hash. The verifier independently reparses the final PE and
@@ -40,13 +41,15 @@ MSVC and CMake:
 ```powershell
 dotnet tool install wix --tool-path out/wix --version 4.0.6
 $env:DOTNET_ROLL_FORWARD = 'Major'
-python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe --msi-version 0.0.2
+python packaging/build_msi.py --candidate out/candidate --stage out/msi-stage --wix out/wix/wix.exe
 ```
 
-The numeric MSI version is an explicit candidate-only identity. SemVer suffixes
+The numeric MSI version uses the shared `wtop.version/1` ledger by default:
+`0.4.0-beta.2` maps to `0.4.402`, and `0.4.0-beta.3` to `0.4.403`. SemVer suffixes
 are never silently dropped, and four numeric fields/out-of-range fields are
-rejected. CI uses its bounded run number in `0.0.N`; a production collision-free
-mapping is still a release gate. The package defaults to user scope. MSI 5.0
+rejected. The optional command-line version override remains candidate-only and
+is recorded as a promotion blocker; CI does not derive identity from run numbers.
+The package defaults to user scope. MSI 5.0
 single-package authoring redirects its program-files and HKMU registrations:
 
 ```powershell
@@ -58,8 +61,10 @@ The second command explicitly requests machine scope and may require elevation.
 With `ALLUSERS=1`, Windows Installer ignores the per-user selector authored as
 the package's default. This also avoids shell-dependent empty-value quoting.
 The candidate does not add PATH tokens, startup entries, services, scheduled tasks or
-an updater. Use the full executable path. Optional owned PATH integration remains
-unimplemented. MSI is not a delivery mechanism for DOS, Win16, CE or ordinary
+an updater. `ADDTOPATH=1` is explicitly refused instead of being silently ignored.
+Use the full executable path. Optional owned PATH/command-alias integration remains
+unimplemented in MSI. Package-manager preparation uses each manager's owned shim
+or portable alias. MSI is not a delivery mechanism for DOS, Win16, CE or ordinary
 WinPE images. A Windows Installer mechanism floor is not Wtop's qualified floor.
 
 The owned record is
@@ -72,7 +77,10 @@ the MSI carries no active `wtop.conf` and deletes no user data.
 ### Preservation and its current boundary
 
 An embedded, synchronous native DLL checks the actual destination and exact
-hashes inside the MSI execution sequence before `InstallInitialize`. It runs
+hashes inside the MSI execution sequence before `InstallInitialize`. It also
+passes bounded immutable context to deferred read-only checks before
+`RemoveRegistryValues` (while the existing owner record is available) and before
+`InstallFiles`. It runs
 for direct installation, repair and uninstall, including callers that bypass
 the acquisition script. It refuses existing payload-name collisions, missing or
 changed ownership records, changed owned EXE/license files, inaccessible files,
@@ -81,16 +89,32 @@ can repair or remove an otherwise verified installation. Unknown filenames and
 foreign registry values are never put into deletion tables. No recursive folder
 deletion or wildcard RemoveFile action is authored.
 
-**The guard is a preflight, not atomic compare-and-delete/replace.** Another
-actor can change a path after validation and before MSI operates. Running-image
-locks, hostile path replacement, interruption/rollback, unelevated users,
-side-by-side scopes and the native target matrix are still qualification work.
-Consequently MSI metadata always says `qualified: false`, and promotion fails
-even if the basic install fixtures pass. A bootstrapper-only check would not fix
-this boundary. Automatic upgrades are explicitly refused; a safe transaction is
-not implemented. Restore/preserve changed files and resolve the conflict before
-requesting maintenance again; the installer does not delete them to unblock
-itself.
+Machine destinations must lie under the actual Program Files folder for that
+architecture, independent of caller-supplied MSI directory properties. Existing
+directories must have a trusted owner (SYSTEM, Administrators, or TrustedInstaller)
+and no nonprivileged write ACL. Reparse parents and unsupported ACL forms are
+refused. Wtop never changes an existing directory's owner/ACL to make it pass.
+Restart Manager checks for live users of each payload file. Maintenance refuses
+when a file is in use or cannot be checked; it requests neither shutdown nor
+restart. Windows Installer's automatic Restart Manager closure is disabled.
+
+Major upgrades now use `RemoveExistingProducts` **after `InstallInitialize`**, so
+old-owner removal participates in rollback. A new package accepts exactly one
+older registered owner with its cached MSI present, and that old MSI's embedded
+guard must authorize removal of its own hashes. Downgrades and another product
+claiming the same version are refused. Upgrades must remain in the same install
+context. Windows Installer rollback cannot be disabled for this candidate.
+
+**The checks are not atomic compare-and-delete/replace.** A hostile same-user
+actor can still change a path after a check and before a standard MSI file action.
+Machine ACL restrictions and a deferred recheck narrow the exposed cases; they
+do not prove hostile-race safety. Power loss/restart recovery, prior-release
+application-version upgrades, independent scope coexistence and the native target
+matrix remain qualification work. Consequently MSI metadata says `qualified:
+false`, and promotion fails even when fixture transactions pass. Preserve changed
+files and resolve conflicts before maintenance; the installer does not delete
+them to unblock itself. MSI is retained as a CI candidate, not included among the
+portable prerelease's supported download assets.
 
 The guard is embedded in the MSI Binary table, not installed beside the app. Its
 build may use extra build-time tools, while the installed payload remains the
@@ -102,15 +126,92 @@ same single EXE. The guard's callback, ownership and retirement rules are in
 Only on a disposable Windows VM/runner with no existing profile registration:
 
 ```powershell
-python tests/test_native_install.py out/candidate --disposable-host --machine
+python tests/test_native_install.py out/candidate --disposable-host --machine --standard-user
 ```
 
-This directly exercises both scopes, exact payload hashes, registration, a
-related-upgrade refusal, changed-payload repair/removal refusal, unchanged
-removal, foreign-file/registry retention, fresh collision refusal, and user-data
-retention. It records the actual token/OS and preserves installer logs. An
-elevated CI runner is not evidence of a standard-user UAC test. Unittest discovery
-does not run this mutating harness.
+This harness exercises both scopes, exact application/legal-file hashes,
+registration, rollback-disabled refusal, protected machine destinations,
+missing-file repair, changed-payload repair/removal refusal, running-image refusal,
+major upgrade, downgrade/same-version refusal, rollback after actual payload and
+registration writes, foreign-file/registry retention, fresh collision refusal and user-data
+retention. It checks both raw user/machine PATH values remain byte-for-byte unchanged.
+
+Upgrade and rollback probes are explicitly marked local MSI copies with changed
+product/version identities and unchanged application bytes; they are never
+uploaded. They isolate wrapper transaction behavior, and cannot stand in for a
+real Beta 2-to-Beta 3 file-version/OS matrix. Failure injection is authored only
+into the disposable copy, never into the distributable MSI. A checked deferred
+guard failure executes after `PublishProduct` within normal `InstallFinalize`;
+the fixture does not add another `InstallExecute` phase. Its oracle requires
+preceding actual file/registry writes, the failed new product to be unregistered,
+the original product fully registered, exact restored payload/legal bytes and
+no skipped failed rollback operations.
+
+`--standard-user` requires a disposable host and a fresh local standard account,
+separate profile, exact copied candidate and independently checked token state.
+The account/profile/staging and processes have explicit test ownership and
+cleanup; credentials are not command arguments or log fields. This is automated
+fresh-account coverage, not interactive UAC or human desktop review. The native
+receipt must establish both lifecycle and cleanup outcomes.
+
+`--restricted-user` instead uses the existing account with administrator
+membership disabled, privileges removed and medium integrity. It remains a
+stress/policy context: it can retain `TokenElevation=true` and prior same-user
+installer ACLs. It must not be labelled genuine ordinary-user installation.
+Version-2 installer observations distinguish actual token elevation, enabled
+administrator membership and integrity, correcting the earlier receipt's
+misnamed `token_elevated` membership field. Failed commands/logs are retained.
+Unittest discovery does not run this mutating harness.
+
+The x64 Windows Server runner rejects unmanaged, non-elevated MSI installation
+under its effective `DisableMSI=1` policy. CI passes
+`--expect-restricted-user-policy-refusal` only on that host: a distinct probe must
+observe error 1625, the specific policy denial and unchanged payload/ownership/
+PATH. That receipt is a verified refusal, not a successful per-user installation.
+No fixture changes the machine policy. The Windows 11 ARM64 client job builds its
+own MSI and requires the full fresh-standard-user lifecycle without that exception.
+Exact receipts govern the result; x64 client, fresh-account/UAC and broader host
+acceptance remain open even if the ARM64 standard-account test passes.
+
+## Offline package-manager preparation
+
+After assembling a verified portable bundle:
+
+```powershell
+python tools/prepare_distribution.py prepare --bundle out/beta --output out/distribution-preparation
+python tools/prepare_distribution.py verify --bundle out/beta --output out/distribution-preparation
+```
+
+This emits three WinGet manifests, a Scoop manifest, a new Wtop Chocolatey nuspec
+and checksum-pinned download script, instructions and a source/hash-bound receipt.
+It has no network or publication operation. Architecture and URL inventories come
+only from the verified release profiles; no missing architecture is invented.
+The original `source/ntop.nuspec` remains historical attribution, not a Wtop feed
+identity. Proposed identities are `Julesc013.Wtop`, `wtop`, and `wtop.portable`.
+They are not reserved or accepted listings.
+
+The explicit Chocolatey package version maps `0.4.0-beta.3` to
+`0.4.0-beta0003` because the community repository still documents a dotted
+prerelease compatibility restriction. The receipt retains the original SemVer.
+Native client schema checks, public acquisition, upgrade/uninstall preservation,
+scope and alias collision review remain required before submission. Generated
+preparation is retained separately in CI, not uploaded into a community channel.
+
+On 18 November 2026 the generator's synthetic three-profile WinGet documents
+passed JSON Schema validation against Microsoft's `winget-cli` **1.12.0** schemas:
+installer blob `2f634646d9bd1b291616e317adcfb26ec8f7e2ed`, defaultLocale blob
+`5d96d684e80205ac83afc848e3b6fff581d647eb`, and version blob
+`2e4a2c86712a3c2345bcadb29822688939e150ad`. This is structural generator evidence;
+it does not validate a final release's downloads, execute the WinGet client, or
+qualify installation/uninstallation. Repeat validation on the exact generated
+preparation and retain the native acquisition/lifecycle gates.
+
+The synthetic Scoop manifest also passed the official Draft-7 schema (blob
+`9457c391e7f418231ef8187fc12af663a42a4da5`). The Chocolatey nuspec passed the
+client's NuGet XSD (blob `e6f11e7023c6bc00dc20e7e0a8c0ea5ac3d487ea`) after the
+client's missing-namespace normalization, reviewed at manifest-reader blob
+`f0f1e0badffe9b8b6b289cabb59b83d73470505f`. These are likewise structural
+preparation checks, not native installation or community acceptance.
 
 `acquire.ps1` accepts an exact GitHub release asset URL and independently supplied
 SHA256, stages it, verifies bytes, and optionally invokes that same MSI. It does
@@ -119,13 +220,21 @@ integrity relative to that digest; obtain it through a trusted channel. No
 release, GitHub tag, WinGet submission, signing key operation or public upload is
 performed by these scripts.
 
-## Primary references checked 2026-11-17
+## Primary references checked 2026-11-18
 
 - [Microsoft: single-package authoring and HKMU redirection](https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring)
 - [Microsoft: MSIINSTALLPERUSER and explicit ALLUSERS selection](https://learn.microsoft.com/en-us/windows/win32/msi/msiinstallperuser)
+- [Microsoft: DisableMSI policy and non-elevated per-user installation](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi)
 - [Microsoft: custom-action sequencing](https://learn.microsoft.com/en-us/windows/win32/msi/sequencing-custom-actions)
 - [Microsoft: file versioning rules](https://learn.microsoft.com/en-us/windows/win32/msi/file-versioning-rules)
 - [Microsoft: rollback custom actions](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-custom-actions)
+- [Microsoft: major upgrades and installation context](https://learn.microsoft.com/en-us/windows/win32/msi/major-upgrades)
+- [Microsoft: deferred execution custom actions](https://learn.microsoft.com/en-us/windows/win32/msi/deferred-execution-custom-actions)
+- [Microsoft: automatic rollback installation](https://learn.microsoft.com/en-us/windows/win32/msi/rollback-installation)
 - [Microsoft: ProductVersion limits](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)
 - [WiX: package scope](https://docs.firegiant.com/wix/schema/wxs/packagescopetype/)
 - [WiX: embedded custom actions](https://docs.firegiant.com/wix/schema/wxs/customaction/)
+- [Microsoft: WinGet manifests](https://learn.microsoft.com/en-us/windows/package-manager/package/manifest)
+- [Scoop: app manifests](https://github.com/ScoopInstaller/Scoop/wiki/App-Manifests)
+- [Chocolatey: checked ZIP downloads](https://docs.chocolatey.org/en-us/create/functions/install-chocolateyzippackage/)
+- [Chocolatey: SemVer 2 and community repository limitation](https://docs.chocolatey.org/en-us/guides/upgrading-to-chocolatey-v2-v6/)

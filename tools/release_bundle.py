@@ -16,9 +16,9 @@ import sys
 import zipfile
 from beta_release import (BetaError, GIT, MAX_FILE, ROOT, SHA, archive_tree,
                           checked_file, load_json, native_tests, source_archive,
-                          validate_native, verify as verify_legacy)
+                          validate_native, verify as verify_legacy, required_tests)
 from inspect_pe import inspect_bytes
-from package_candidate import json_bytes, sha256, verify as verify_candidate
+from package_candidate import json_bytes, sha256, verify as verify_candidate, third_party_notices_required
 from release_metadata import PROFILES, asset_label, metadata
 
 ARCHITECTURES = {'win-nt-x86':'x86', 'win-nt-x64':'x64', 'win-nt-arm64':'arm64'}
@@ -28,6 +28,15 @@ OMITTED = ['MSI/per-user/system installation: lifecycle qualification remains op
            'WinGet/Scoop/Chocolatey publication: no community package acceptance claimed',
            'DOS, Win16, Win9x, older NT, RT, CE, OS/2 and ReactOS: not qualified by these profiles',
            'GUI and a new setup EXE: outside Beta 2 scope']
+
+
+def omitted_deliverables(version):
+    if not third_party_notices_required(version):
+        return OMITTED
+    return ['MSI/per-user/system installation: hardened candidate and native lifecycle fixtures remain separate from release qualification',
+            'WinGet/Scoop/Chocolatey publication: offline preparation only; no listing or channel acceptance claimed',
+            'DOS, Win16, Win9x, older NT, RT, CE, OS/2 and ReactOS: not qualified by these profiles',
+            'GUI and a new setup EXE: outside this portable prerelease scope']
 
 
 def profile_names(version, profile):
@@ -108,7 +117,7 @@ def release_notes(changes: str, version: str, profiles: list[dict]) -> bytes:
         authored = authored[1:]
     lines += authored
     lines += ['', '## Known limitations', '']
-    lines += ['- ' + item + '.' for item in OMITTED]
+    lines += ['- ' + item + '.' for item in omitted_deliverables(version)]
     lines += ['- Human desktop acceptance and ordinary-user coverage are separate from these automated receipts.',
               '- Unsigned binaries are identified as such. A digest proves byte identity and does not identify a trusted publisher.',
               '- Report reproducible problems at https://github.com/Julesc013/wtop/issues; never include private process command lines.',
@@ -139,7 +148,7 @@ def assemble(inputs: list[Path], notes: Path, output: Path, root=ROOT):
         if payload['source'] != source or payload['version'] != version or checked_file(candidate/'LICENSE') != license_data:
             raise BetaError('all profiles must use the same exact source/version/license')
         native = load_json(candidate/'native-receipt.json'); validate_execution(native, payload)
-        if native['tests'] != native_tests(candidate/'native-tests.xml'):
+        if native['tests'] != native_tests(candidate/'native-tests.xml', required_tests(payload['version'])):
             raise BetaError('JUnit bytes differ from the native receipt')
         scan = load_json(candidate/'security-scan.json'); validate_scan(scan, payload)
         entry = {'payload':payload, 'native':native, 'security_scan':scan}
@@ -150,6 +159,11 @@ def assemble(inputs: list[Path], notes: Path, output: Path, root=ROOT):
                        names['payload']:json_bytes(payload), names['native']:json_bytes(native),
                        names['junit']:checked_file(candidate/'native-tests.xml'), names['scan']:json_bytes(scan)})
     profiles.sort(key=lambda item:item['payload']['profile'])
+    if third_party_notices_required(version):
+        notices = checked_file(inputs[0] / 'THIRD-PARTY-NOTICES.md')
+        if any(checked_file(candidate / 'THIRD-PARTY-NOTICES.md') != notices for candidate in inputs):
+            raise BetaError('third-party notices differ between profiles')
+        assets['THIRD-PARTY-NOTICES.md'] = notices
     current = subprocess.run(['git','-C',str(root),'rev-parse','HEAD'],check=True,capture_output=True,text=True).stdout.strip()
     if current != source['revision']:
         raise BetaError('source checkout differs from native payload source')
@@ -157,6 +171,8 @@ def assemble(inputs: list[Path], notes: Path, output: Path, root=ROOT):
     tree, entries = archive_tree(archive)
     if tree != source['tree'] or entries.get('VERSION',b'').decode().strip() != version or entries.get('LICENSE') != license_data:
         raise BetaError('corresponding source/license/version mismatch')
+    if third_party_notices_required(version) and entries.get('THIRD-PARTY-NOTICES.md') != assets['THIRD-PARTY-NOTICES.md']:
+        raise BetaError('corresponding third-party notices differ')
     assets.update({f'wtop-{version}-source.tar.gz':archive, 'LICENSE':license_data,
                    'RELEASE-NOTES.md':release_notes(checked_file(notes,1024*1024).decode('utf-8'), version, profiles)})
     primary = next((entry['payload'] for entry in profiles if entry['payload']['profile'] == 'win-nt-x64'), profiles[0]['payload'])
@@ -164,7 +180,7 @@ def assemble(inputs: list[Path], notes: Path, output: Path, root=ROOT):
                 'metadata':metadata(version), 'channel':'prerelease', 'stable_supported':False,
                 'payload':primary, 'profiles':profiles, 'policy':POLICY,
                 'omitted_profiles':sorted(set(ARCHITECTURES)-{p['payload']['profile'] for p in profiles}),
-                'omitted_deliverables':OMITTED,
+                'omitted_deliverables':omitted_deliverables(version),
                 'assets':[{'name':name,'size':len(body),'sha256':sha256(body)} for name,body in sorted(assets.items())]}
     if output.exists() and any(output.iterdir()):
         raise BetaError('release output must be empty; existing artifacts are immutable')
@@ -184,7 +200,7 @@ def verify(directory: Path):
     if (manifest.get('schema') != 'wtop.beta/2' or manifest.get('metadata') != info
             or info['channel'] not in ('alpha','beta') or manifest.get('tag') != info['tag']
             or manifest.get('channel') != 'prerelease' or manifest.get('stable_supported') is not False
-            or manifest.get('policy') != POLICY or manifest.get('omitted_deliverables') != OMITTED):
+            or manifest.get('policy') != POLICY or manifest.get('omitted_deliverables') != omitted_deliverables(version)):
         raise BetaError('release metadata, channel or qualification policy mismatch')
     profiles = manifest.get('profiles', [])
     if not isinstance(profiles,list) or not 1 <= len(profiles) <= 3:
@@ -198,6 +214,8 @@ def verify(directory: Path):
     if manifest.get('payload') != primary:
         raise BetaError('primary profile/source mismatch')
     expected = {f'wtop-{version}-source.tar.gz', 'LICENSE', 'RELEASE-NOTES.md'}
+    if third_party_notices_required(version):
+        expected.add('THIRD-PARTY-NOTICES.md')
     for profile in identifiers:
         expected.update(profile_names(version,profile).values())
     listed = manifest.get('assets',[])
@@ -216,6 +234,8 @@ def verify(directory: Path):
     tree, entries = archive_tree(data[f'wtop-{version}-source.tar.gz'])
     if tree != primary['source']['tree'] or entries.get('VERSION',b'').decode().strip() != version or entries.get('LICENSE') != data['LICENSE']:
         raise BetaError('source tree/version/license differs from payload')
+    if third_party_notices_required(version) and entries.get('THIRD-PARTY-NOTICES.md') != data['THIRD-PARTY-NOTICES.md']:
+        raise BetaError('source third-party notices differ from release')
     for entry in profiles:
         payload = entry['payload']; validate_payload(payload)
         if payload['version'] != version or payload['source'] != primary['source']:
@@ -227,14 +247,22 @@ def verify(directory: Path):
         if sha256(exe) != payload['executable']['sha256'] or len(exe) != payload['executable']['size'] or inspect_bytes(exe) != payload['pe']:
             raise BetaError('PE/provenance mismatch')
         with zipfile.ZipFile(io.BytesIO(data[names['portable']])) as archive:
-            if (len(archive.namelist()) != 5 or set(archive.namelist()) != {'wtop.exe','LICENSE','payload.json','PORTABLE.txt','wtop.conf.example'}
+            members = {'wtop.exe','LICENSE','payload.json','PORTABLE.txt','wtop.conf.example'}
+            if third_party_notices_required(version):
+                members.add('THIRD-PARTY-NOTICES.md')
+            if (len(archive.namelist()) != len(members) or set(archive.namelist()) != members
                     or any(i.file_size > MAX_FILE for i in archive.infolist())):
                 raise BetaError('unexpected portable members')
             if archive.read('wtop.exe') != exe or archive.read('LICENSE') != data['LICENSE'] or archive.read('payload.json') != json_bytes(payload):
                 raise BetaError('ZIP payload differs from standalone')
+            if third_party_notices_required(version):
+                notices = data['THIRD-PARTY-NOTICES.md']
+                if (archive.read('THIRD-PARTY-NOTICES.md') != notices or payload.get('legal_files') !=
+                        [{'name': 'THIRD-PARTY-NOTICES.md', 'size': len(notices), 'sha256': sha256(notices)}]):
+                    raise BetaError('ZIP third-party notices/provenance differ')
         native = load_json(directory/names['native']); validate_execution(native,payload)
         scan = load_json(directory/names['scan']); validate_scan(scan,payload)
-        if native != entry['native'] or scan != entry['security_scan'] or native['tests'] != native_tests(directory/names['junit']):
+        if native != entry['native'] or scan != entry['security_scan'] or native['tests'] != native_tests(directory/names['junit'], required_tests(version)):
             raise BetaError('native/scan/actual JUnit receipt mismatch')
     return manifest
 

@@ -17,18 +17,22 @@ the ZIP payload, recorded hashes and actual PE architecture, imports, subsystem
 and other loader metadata. Passing these checks proves neither runtime support
 nor signature trust.
 
-The ZIP contains `wtop.exe`, `LICENSE`, `payload.json`, `PORTABLE.txt` and
-`wtop.conf.example`. The example is not an active configuration file, and the
+The Beta 3 ZIP contains `wtop.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.md`,
+`payload.json`, `PORTABLE.txt` and `wtop.conf.example`. The example is not an
+active configuration file, and the
 current ZIP does not contain a `wtop.portable` marker. Select portable ownership
 with `--portable`, an explicit `--portable-root`, or a marker you deliberately
 place beside the executable. Running a bare EXE is also supported by the current
 candidate without installation; its settings ownership rules differ below.
 
 A product version, target profile and package role are separate identities.
-Candidate MSI generation requires an explicit numeric version; it does not strip
-SemVer suffixes or silently truncate fields. Production version mapping, signing,
-corresponding-source delivery, exact-host qualification and channel acquisition
-are unfinished release gates. Candidate promotion deliberately fails. MSI is not
+Candidate MSI generation derives its numeric version from the shared version
+ledger (`0.4.0-beta.3` becomes `0.4.403`); it does not strip SemVer suffixes or
+silently truncate fields. A candidate-only numeric override is recorded as a
+promotion blocker. Signing, exact-host qualification and channel acquisition
+remain independent release gates. Corresponding-source archives and exact-byte
+receipts are assembled by the portable prerelease workflow. Candidate promotion
+deliberately fails. MSI is not
 a delivery route for DOS, Win16, CE or ordinary WinPE images.
 
 ## Choose and inspect settings ownership
@@ -173,21 +177,29 @@ records these boundaries and acceptance cases.
 ## Candidate MSI and CLI acquisition
 
 The current WiX 4.0.6 authoring defaults to per-user scope and can request machine
-scope through Windows Installer. It installs only the unchanged EXE and license
+scope through Windows Installer. It installs only the unchanged EXE and legal notices
 under the profile's programs directory, plus owned MSI metadata. It carries no
 active `wtop.conf`, changes no PATH token and installs no service, updater,
 startup entry or scheduled task. Use the full executable path. Optional owned
-PATH integration is unfinished.
+PATH integration is unfinished; `ADDTOPATH=1` is explicitly refused.
 
 Its settings record follows the schema above and also stores `Owner=msi`,
 `ProductCode` and `PayloadSha256` as strings. An embedded synchronous guard checks
 ownership, destination collisions and exact owned-file hashes before the MSI
-transaction, including direct repair/uninstall. Automatic upgrades are refused.
-This guard is a preflight, not atomic compare-and-delete/replace: another actor
-can change paths after validation. The package remains explicitly unqualified;
-passing basic install fixtures does not establish safe interruption, UAC, every
+transaction, including direct repair/uninstall, and repeats bounded checks before
+file actions. Major upgrades accept exactly one older registered owner in the
+same install context, require its cached MSI, and remove it after
+`InstallInitialize` so removal participates in rollback. The old package checks
+its own payload hashes. Downgrades, another product with the same version,
+disabled rollback, unsupported directory ownership and running payloads are
+refused. Wtop does not automatically close the running application.
+
+These checks are not atomic compare-and-delete/replace: another actor can change
+paths after validation. The package remains explicitly unqualified. The lifecycle
+fixtures use changed MSI identities with unchanged application bytes; they do not
+establish a real prior-release file-version upgrade, safe interruption, UAC, every
 scope combination or a target support floor. See the packaging document for
-build commands and disposable-host tests.
+build commands, precise limits and disposable-host tests.
 
 `packaging/acquire.ps1` accepts an exact tagged Wtop GitHub release asset URL, an
 independently supplied SHA256 and a new destination under an existing staging
@@ -197,6 +209,21 @@ release URL or install a package-manager listing. A matching digest establishes
 integrity relative to that digest; obtain the digest through a trusted channel.
 There is no published-release claim in this script. Older environments can
 receive already verified files copied from another machine.
+
+## Prepared package-manager delivery
+
+`tools/prepare_distribution.py` consumes a verified portable release bundle and
+produces offline WinGet, Scoop and Chocolatey inputs. Proposed identities are
+`Julesc013.Wtop`, `wtop` and `wtop.portable`; none is a published or reserved
+listing. Each input binds the actual architecture, release URL and ZIP hash.
+The manager owns its command alias/shim and removal. Wtop does not edit a shared
+PATH string or create a parallel Wtop MSI owner record for these portable inputs.
+
+The archives contain neither an active configuration nor a portable marker, so
+ordinary manager installation uses the user's roaming `Wtop` settings. Deliberate
+portable overrides retain the rules above. Native client validation, alias
+collisions, upgrades/uninstall and channel acceptance remain separate gates.
+No package-manager submission or hosting is performed by this preparation.
 
 ## WinGet and the inherited NTop package
 
@@ -243,7 +270,7 @@ erasure of Windows' own event records, download history or security logs.
 
 The following external references support platform behavior, not qualification
 of Wtop's candidates. The inherited NTop/WinGet audit above is dated 2026-11-16;
-MSI candidate implementation references were checked on 2026-11-17 in the
+MSI candidate implementation references were checked on 2026-11-18 in the
 [packaging notes](../packaging/README.md).
 
 - [WinGet documentation](https://learn.microsoft.com/en-us/windows/package-manager/winget/)

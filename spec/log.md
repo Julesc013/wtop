@@ -3,6 +3,21 @@
 
 ## 2026-11-18
 
+### Beta 3 focus, inspection, Unicode and delivery revision
+
+- Split focused navigation from confirmed lifetime-bound action selection;
+  specified grey focus, configurable selection roles and two-stage main Escape.
+- Added terminal-default VT backgrounds, inherited-palette legacy fallback,
+  pinned Unicode17 grapheme boundaries, width policy and cluster-safe editing.
+- Added bounded details/thread/affinity providers, independent observations,
+  captured/manual-refresh panels, confirmed actions and collapsible lifetimes.
+- Extended CLI inspection additively without changing inherited aliases or
+  implying command-line collection; retained typed exact counters/masks.
+- Added MSI lifecycle and restricted-token/resource fixtures and offline package
+  preparation. No public package channel is published; no human desktop pass,
+  stable support claim or formal acceptance completion is inferred.
+
+
 ### Beta 2 interaction and delivery revision
 
 - Preserved Beta 1 and the original eight implementation streams. Added composed

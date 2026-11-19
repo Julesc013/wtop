@@ -38,6 +38,7 @@
 #include "metrics.h"
 #include "actions.h"
 #include "providers_nt.h"
+#include "tui_inspection_nt.h"
 #include "output_nt.h"
 #include "console_frame_nt.h"
 #include <io.h>
@@ -151,56 +152,72 @@ static size_t NativeAscii(const TCHAR *Text, char *Output, size_t Capacity)
     return Rendered.cells;
 }
 
-static size_t NativeCells(const TCHAR *Text, TCHAR *Output, size_t Capacity)
+static int NativeTextProfile(void)
 {
-    size_t input = 0, cells = 0;
-    if(!Capacity) return 0;
-    while(Text[input] && cells + 1 < Capacity) {
-        unsigned long Scalar = (unsigned short)Text[input++];
-#ifdef UNICODE
-        if(Scalar >= 0xd800 && Scalar <= 0xdbff && Text[input] >= 0xdc00 && Text[input] <= 0xdfff)
-            Scalar = 0x10000UL + ((Scalar - 0xd800UL) << 10) + ((unsigned short)Text[input++] - 0xdc00UL);
-#endif
-        Output[cells++] = (TCHAR)wtop_text_cell_glyph(Scalar, Settings.character_set == WTOP_CHARSET_UNICODE, &DisplayTextFlags);
+    return Settings.character_set == WTOP_CHARSET_UNICODE ? (Screen.grapheme_enabled ? 2 : 1) : 0;
+}
+
+/* No format buffer: provider strings can be longer than a screen, and a
+   combining-rich cluster must never be truncated by a code-unit printf width. */
+static int ConWriteSpan(const TCHAR *Text, size_t Units)
+{
+    size_t Offset = 0;
+    int Cells = 0;
+    if(!InteractiveMode) {
+        if(!WriteTText(ConsoleHandle, Text, Units)) RequestShutdown();
+        return (int)Units;
     }
-    Output[cells] = 0;
-    if(Text[input]) DisplayTextFlags |= WTOP_TEXT_CLIPPED;
-    return cells;
+    while(Offset < Units) {
+        wtop_text_cluster Cluster;
+        if(!wtop_text_next_utf16((const unsigned short *)Text + Offset, Units - Offset,
+            NativeTextProfile(), &Cluster)) break;
+        DisplayTextFlags |= Cluster.flags;
+        if(Cluster.cells > (size_t)max(0, Width - RenderColumn)) {
+            DisplayTextFlags |= WTOP_TEXT_CLIPPED; break;
+        }
+        if(!wtop_frame_put_cluster(&Screen.cells, RenderColumn, RenderRow, Cluster.text,
+            Cluster.output_units, (int)Cluster.cells, CurrentColor)) {
+            DisplayTextFlags |= WTOP_TEXT_CAPACITY | WTOP_TEXT_LOSSY;
+            wtop_frame_put(&Screen.cells, RenderColumn, RenderRow, '?', CurrentColor);
+            Cluster.cells = 1;
+        }
+        Offset += Cluster.input_units;
+        RenderColumn += (int)Cluster.cells; Cells += (int)Cluster.cells;
+    }
+    return Cells;
 }
 
 static int ConPrintf(const TCHAR *Fmt, ...)
 {
-    TCHAR Buffer[4096], Cells[4096];
+    TCHAR Buffer[4096];
     va_list Args;
     va_start(Args, Fmt);
     int Written = _vsntprintf_s(Buffer, _countof(Buffer), _TRUNCATE, Fmt, Args);
     va_end(Args);
-    if(Written < 0) Written = (int)_tcslen(Buffer);
-    if(!InteractiveMode) {
-        if(!WriteTText(ConsoleHandle, Buffer, (size_t)Written)) RequestShutdown();
-        return Written;
+    if(Written < 0) {
+        Written = (int)_tcslen(Buffer);
+        DisplayTextFlags |= WTOP_TEXT_CLIPPED;
+        /* Formatting is for bounded UI labels/numbers. Raw user/provider text
+           uses ConWriteSpan/DrawPaddedText and is never truncated here. */
     }
-    Written = (int)NativeCells(Buffer, Cells, _countof(Cells));
-    Written = min(Written, max(0, Width - RenderColumn));
-    for(int i = 0; i < Written; ++i)
-        wtop_frame_put(&Screen.cells, RenderColumn + i, RenderRow, (unsigned short)Cells[i], CurrentColor);
-    RenderColumn += Written;
-    return Written;
+    return ConWriteSpan(Buffer, (size_t)Written);
 }
 
 static void DrawPaddedText(const TCHAR *Text, int Cells)
 {
-    TCHAR Display[4096];
-    NativeCells(Text, Display, _countof(Display));
-    ConPrintf(_T("%-*.*s"), Cells, Cells, Display);
+    size_t Count = 0;
+    int Space = min(max(Cells, 0), max(0, Width - RenderColumn));
+    size_t Units = wtop_text_utf16_span((const unsigned short *)Text, _tcslen(Text),
+        (size_t)Space, NativeTextProfile(), &Count, &DisplayTextFlags);
+    ConWriteSpan(Text, Units);
+    if((size_t)Space > Count) {
+        int Padding = Space - (int)Count;
+        wtop_frame_fill(&Screen.cells, RenderColumn, RenderRow, Padding, ' ', CurrentColor);
+        RenderColumn += Padding;
+    }
 }
 
-static void ConPutc(TCHAR c)
-{
-    if(RenderColumn >= Width) return;
-    wtop_frame_put(&Screen.cells, RenderColumn++, RenderRow,
-        wtop_text_cell_glyph((unsigned short)c, Settings.character_set == WTOP_CHARSET_UNICODE, &DisplayTextFlags), CurrentColor);
-}
+static void ConPutc(TCHAR c) { ConWriteSpan(&c, 1); }
 
 #define FOREGROUND_WHITE (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
 #define FOREGROUND_CYAN (FOREGROUND_INTENSITY | FOREGROUND_GREEN | FOREGROUND_BLUE)
@@ -302,8 +319,11 @@ static BOOL ExportConfigFile(const char *Path, wtop_store_result *Result)
 
 static void SetColor(WORD Color)
 {
-	Color |= ColorOverride;
-	CurrentColor = Color;
+    Color |= ColorOverride;
+    if(Settings.background_mode == WTOP_BACKGROUND_TERMINAL &&
+       !(Color & 0x00f0) && !(Color & WTOP_ATTR_EXPLICIT_BACKGROUND))
+        Color |= WTOP_ATTR_DEFAULT_BACKGROUND;
+    CurrentColor = Color;
 
 }
 
@@ -456,6 +476,11 @@ static DWORD SelectedProcessIndex = MAXDWORD;
 static DWORD SelectedViewIndex = MAXDWORD;
 static BOOL SelectionActive;
 static process_identity SelectedIdentity;
+static DWORD FocusedProcessIndex = MAXDWORD, FocusedViewIndex = MAXDWORD;
+static BOOL FocusActive;
+static process_identity FocusedIdentity;
+static process_identity *CollapsedProcesses;
+static DWORD CollapsedCount, CollapsedCapacity;
 static DWORD *ViewIndices;
 static DWORD ViewCount, ViewCapacity;
 static process_identity *RenderedRows;
@@ -475,7 +500,22 @@ static void ClearSelection(void)
     SelectedProcessIndex = SelectedViewIndex = MAXDWORD;
     memset(&SelectedIdentity, 0, sizeof(SelectedIdentity));
     DisplayedProcessID = 0; DisplayedCreationTime = 0;
+}
+
+static void ClearFocus(void)
+{
+    FocusActive = FALSE;
+    FocusedProcessIndex = FocusedViewIndex = MAXDWORD;
+    memset(&FocusedIdentity, 0, sizeof(FocusedIdentity));
     FollowProcess = FALSE; FollowProcessID = 0; FollowCreationTime = 0;
+}
+
+static BOOL HasFocus(void)
+{
+    return FocusActive && FocusedViewIndex < ViewCount && FocusedProcessIndex < ProcessCount &&
+        ViewIndices[FocusedViewIndex] == FocusedProcessIndex &&
+        ProcessList[FocusedProcessIndex].ID == FocusedIdentity.ID &&
+        ProcessList[FocusedProcessIndex].CreationTime == FocusedIdentity.CreationTime;
 }
 
 static BOOL HasSelection(void)
@@ -763,6 +803,51 @@ static BOOL ContainsInsensitive(const TCHAR *Text, const TCHAR *Pattern)
 
 /* A display index is separate from collected process storage. Filtering never
    changes the collector's set or races its static command-line filters. */
+static int CompareCapturedIdentity(const void *Left, const void *Right)
+{
+    const process_identity *A = Left, *B = Right;
+    if(A->ID != B->ID) return A->ID > B->ID ? 1 : -1;
+    return (A->CreationTime > B->CreationTime) - (A->CreationTime < B->CreationTime);
+}
+
+static DWORD CollapsedPosition(const process_identity *Identity)
+{
+    DWORD Begin = 0, End = CollapsedCount;
+    while(Begin < End) {
+        DWORD Middle = Begin + (End - Begin) / 2;
+        if(CompareCapturedIdentity(&CollapsedProcesses[Middle], Identity) < 0) Begin = Middle + 1;
+        else End = Middle;
+    }
+    return Begin;
+}
+
+static BOOL IsCollapsed(const process *Process)
+{
+    process_identity Identity = { Process->ID, Process->CreationTime };
+    DWORD Index = CollapsedPosition(&Identity);
+    return Identity.CreationTime && Index < CollapsedCount &&
+        !CompareCapturedIdentity(&Identity, &CollapsedProcesses[Index]);
+}
+
+/* Expired collapse preferences are never applied to a reused PID. A temporary
+   sorted identity index bounds pruning to O(n log n + c log n), not c*n. */
+static void PruneCollapsed(void)
+{
+    if(!CollapsedCount) return;
+    process_identity *Live = malloc((size_t)max(1, ProcessCount) * sizeof(*Live));
+    if(!Live) return; /* Retained old identities remain safe, merely consume capacity. */
+    for(DWORD i = 0; i < ProcessCount; ++i) {
+        Live[i].ID = ProcessList[i].ID; Live[i].CreationTime = ProcessList[i].CreationTime;
+    }
+    qsort(Live, ProcessCount, sizeof(*Live), CompareCapturedIdentity);
+    DWORD Used = 0;
+    for(DWORD i = 0; i < CollapsedCount; ++i)
+        if(bsearch(&CollapsedProcesses[i], Live, ProcessCount, sizeof(*Live), CompareCapturedIdentity))
+            CollapsedProcesses[Used++] = CollapsedProcesses[i];
+    CollapsedCount = Used;
+    free(Live);
+}
+
 static void RebuildView(void)
 {
     if(ProcessCount > ViewCapacity) {
@@ -773,37 +858,59 @@ static void RebuildView(void)
     TCHAR *Filter = FromUtf8(ActiveTab()->filter);
     if(!Filter) { ViewCount = 0; CollectorError = ERROR_NOT_ENOUGH_MEMORY; RequestShutdown(); return; }
     ViewCount = 0;
-    DWORD Found = MAXDWORD;
+    DWORD Selected = MAXDWORD, Focused = MAXDWORD, SkipDepth = MAXDWORD;
     for(DWORD i = 0; i < ProcessCount; ++i) {
+        /* A search/filter reveals all matching rows; stored collapse preference
+           resumes when the filter is cleared. No descendants are fabricated. */
+        if(ProcessSortType == SORT_BY_TREE && !Filter[0]) {
+            if(SkipDepth != MAXDWORD && ProcessList[i].TreeDepth > SkipDepth) continue;
+            SkipDepth = IsCollapsed(&ProcessList[i]) ? ProcessList[i].TreeDepth : MAXDWORD;
+        }
         if(!ContainsInsensitive(ProcessList[i].ExeName, Filter)) continue;
         ViewIndices[ViewCount] = i;
         if(SelectionActive && ProcessList[i].ID == SelectedIdentity.ID &&
-            ProcessList[i].CreationTime == SelectedIdentity.CreationTime) Found = ViewCount;
+            ProcessList[i].CreationTime == SelectedIdentity.CreationTime) Selected = ViewCount;
+        if(FocusActive && ProcessList[i].ID == FocusedIdentity.ID &&
+            ProcessList[i].CreationTime == FocusedIdentity.CreationTime) Focused = ViewCount;
         ++ViewCount;
     }
     free(Filter);
     if(!ViewCount) ProcessIndex = 0;
-    if(Found == MAXDWORD) { ClearSelection(); return; }
-    SelectedViewIndex = Found;
-    SelectedProcessIndex = ViewIndices[Found];
+    if(Selected == MAXDWORD) ClearSelection();
+    else { SelectedViewIndex = Selected; SelectedProcessIndex = ViewIndices[Selected]; }
+    if(Focused == MAXDWORD) ClearFocus();
+    else { FocusedViewIndex = Focused; FocusedProcessIndex = ViewIndices[Focused]; }
 }
 
+static void FocusView(DWORD Index)
+{
+    if(!ViewCount) { ProcessIndex = 0; ClearFocus(); return; }
+    DWORD Visible = max(VisibleProcessCount, 1);
+    FocusedViewIndex = min(Index, ViewCount - 1);
+    FocusedProcessIndex = ViewIndices[FocusedViewIndex];
+    FocusedIdentity.ID = ProcessList[FocusedProcessIndex].ID;
+    FocusedIdentity.CreationTime = ProcessList[FocusedProcessIndex].CreationTime;
+    FocusActive = TRUE;
+    if(FocusedViewIndex < ProcessIndex) ProcessIndex = FocusedViewIndex;
+    if(FocusedViewIndex - ProcessIndex >= Visible) ProcessIndex = FocusedViewIndex - Visible + 1;
+}
+
+/* Only explicit click/Enter reaches this confirmation. Navigation and hover
+   own a separate focus and can never retarget a confirmed mutation target. */
 static void SelectView(DWORD Index)
 {
-    if(!ViewCount) { ProcessIndex = 0; ClearSelection(); return; }
-    DWORD Visible = max(VisibleProcessCount, 1);
-    SelectedViewIndex = min(Index, ViewCount - 1);
-    SelectedProcessIndex = ViewIndices[SelectedViewIndex];
-    SelectedIdentity.ID = ProcessList[SelectedProcessIndex].ID;
-    SelectedIdentity.CreationTime = ProcessList[SelectedProcessIndex].CreationTime;
-    SelectionActive = TRUE;
-    if(SelectedViewIndex < ProcessIndex) ProcessIndex = SelectedViewIndex;
-    if(SelectedViewIndex - ProcessIndex >= Visible) ProcessIndex = SelectedViewIndex - Visible + 1;
+    FocusView(Index);
+    if(!HasFocus()) { ClearSelection(); return; }
+    SelectedViewIndex = FocusedViewIndex; SelectedProcessIndex = FocusedProcessIndex;
+    SelectedIdentity = FocusedIdentity; SelectionActive = TRUE;
 }
 
-static void SelectProcess(DWORD Index)
+static void FocusProcess(DWORD Index, BOOL Confirm)
 {
-    for(DWORD i = 0; i < ViewCount; ++i) if(ViewIndices[i] == Index) { SelectView(i); return; }
+    for(DWORD i = 0; i < ViewCount; ++i) if(ViewIndices[i] == Index) {
+        if(Confirm) SelectView(i); else FocusView(i);
+        return;
+    }
 }
 
 static void ReadjustCursor(void)
@@ -812,7 +919,38 @@ static void ReadjustCursor(void)
     if(!ViewCount) return;
     DWORD Visible = max(VisibleProcessCount, 1);
     ProcessIndex = min(ProcessIndex, ViewCount > Visible ? ViewCount - Visible : 0);
-    if(HasSelection()) SelectView(SelectedViewIndex);
+    if(HasFocus()) FocusView(FocusedViewIndex);
+}
+
+static void SetFocusedCollapse(BOOL Collapse)
+{
+    if(ProcessSortType != SORT_BY_TREE || !HasFocus()) return;
+    process *Target = &ProcessList[FocusedProcessIndex];
+    if(!Target->CreationTime) { SetViMessage(VI_NOTICE, _T("Collapse requires a known process lifetime")); return; }
+    BOOL HasChildren = FocusedProcessIndex + 1 < ProcessCount &&
+        ProcessList[FocusedProcessIndex + 1].TreeDepth > Target->TreeDepth;
+    DWORD Position = CollapsedPosition(&FocusedIdentity);
+    BOOL Present = Position < CollapsedCount && !CompareCapturedIdentity(&CollapsedProcesses[Position], &FocusedIdentity);
+    if(Collapse && !Present && HasChildren) {
+        if(CollapsedCount == MAX_TAGGED_IDENTITIES) { SetViMessage(VI_NOTICE, _T("Collapse limit reached (4096 live process identities)")); return; }
+        if(CollapsedCount == CollapsedCapacity) {
+            DWORD Capacity = min(MAX_TAGGED_IDENTITIES, CollapsedCapacity + PROCLIST_BUF_INCREASE);
+            process_identity *Larger = realloc(CollapsedProcesses, (size_t)Capacity * sizeof(*Larger));
+            if(!Larger) { SetViMessage(VI_ERROR, _T("Cannot collapse tree: out of memory")); return; }
+            CollapsedProcesses = Larger; CollapsedCapacity = Capacity;
+        }
+        memmove(CollapsedProcesses + Position + 1, CollapsedProcesses + Position,
+            (CollapsedCount - Position) * sizeof(*CollapsedProcesses));
+        CollapsedProcesses[Position] = FocusedIdentity; ++CollapsedCount;
+    } else if(!Collapse && Present) {
+        memmove(CollapsedProcesses + Position, CollapsedProcesses + Position + 1,
+            (CollapsedCount - Position - 1) * sizeof(*CollapsedProcesses));
+        --CollapsedCount;
+    } else if(Collapse && Target->TreeDepth) {
+        for(DWORD i = FocusedProcessIndex; i > 0; --i)
+            if(ProcessList[i - 1].TreeDepth < Target->TreeDepth) { FocusProcess(i - 1, FALSE); break; }
+    } else if(!Collapse && HasChildren) FocusProcess(FocusedProcessIndex + 1, FALSE);
+    ReadjustCursor();
 }
 
 void SetPresentationFilter(const TCHAR *Pattern)
@@ -883,10 +1021,10 @@ static BOOLEAN SearchMatchesProcess(const process *Process)
 static void SearchNext(void)
 {
     if(!SearchActive || !ViewCount) return;
-    DWORD Start = HasSelection() ? SelectedViewIndex : ViewCount - 1;
+    DWORD Start = HasFocus() ? FocusedViewIndex : ViewCount - 1;
     for(DWORD Step = 1; Step <= ViewCount; ++Step) {
         DWORD View = (Start + Step) % ViewCount;
-        if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { SelectView(View); return; }
+        if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { FocusView(View); return; }
     }
     SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
 }
@@ -894,10 +1032,10 @@ static void SearchNext(void)
 static void SearchPrevious(void)
 {
     if(!SearchActive || !ViewCount) return;
-    DWORD Start = HasSelection() ? SelectedViewIndex : 0;
+    DWORD Start = HasFocus() ? FocusedViewIndex : 0;
     for(DWORD Step = 1; Step <= ViewCount; ++Step) {
         DWORD View = (Start + ViewCount - Step) % ViewCount;
-        if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { SelectView(View); return; }
+        if(SearchMatchesProcess(&ProcessList[ViewIndices[View]])) { FocusView(View); return; }
     }
     SetViMessage(VI_ERROR, _T("Pattern not found: %s"), SearchPattern);
 }
@@ -1292,9 +1430,11 @@ static BOOL AdoptPendingSample(void)
     /* A PID without a known lifetime is display-only within this observation.
        It cannot be safely carried across samples or upgraded to a new target. */
     if(SelectionActive && !SelectedIdentity.CreationTime) ClearSelection();
+    if(FocusActive && !FocusedIdentity.CreationTime) ClearFocus();
     free(ProcessList);
     ProcessList = Sample->rows; Sample->rows = NULL;
     ProcessCount = Sample->count;
+    PruneCollapsed();
     ObservedProcessCount = Sample->observed_count;
     UnresolvedOwnerFilterCount = Sample->unresolved_owner_filter;
     SampleComplete = Sample->complete;
@@ -1420,7 +1560,7 @@ static void PollSystemInfo(void)
     memset(&Performance, 0, sizeof(Performance));
     Performance.cb = sizeof(Performance);
     if(GetPerformanceInfo(&Performance, sizeof(Performance))) {
-        wtop_counter Bytes, Limit;
+        wtop_counter Bytes = {0, 0}, Limit = {0, 0};
         wtop_counter PageSize = CounterValue((ULONGLONG)Performance.PageSize);
         if(PageSize.high) SystemCommitState = WTOP_METRIC_CAPACITY;
         else SystemCommitState = wtop_commit_bytes(CounterValue((ULONGLONG)Performance.CommitTotal),
@@ -1536,7 +1676,7 @@ static void RestoreConsole(void)
 	SetConsoleActiveScreenBuffer(OldConsoleHandle);
 }
 
-static void WriteProcessInfo(const process *Process, BOOL Highlighted)
+static void WriteProcessInfo(const process *Process, BOOL Focused, BOOL Selected)
 {
     ULONGLONG Now = GetTickCount64();
     metric_state Cpu = FreshMetricState(Process->CpuState, Process->CpuObservedTick, Now);
@@ -1544,8 +1684,11 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
     metric_state Io = FreshMetricState(Process->IoState, Process->ObservedTick, Now);
     metric_state Age = FreshMetricState(Process->AgeState, Process->ObservedTick, Now);
     WORD Color = (WORD)Settings.colors[WTOP_COLOR_FG];
-    if(IsProcessTagged(Process)) Color = (WORD)Settings.colors[WTOP_COLOR_TAG];
-    if(Highlighted) Color = (WORD)Settings.colors[FollowProcess ? WTOP_COLOR_FOLLOW : WTOP_COLOR_BG_HIGHLIGHT];
+    if(Settings.background_mode == WTOP_BACKGROUND_TERMINAL) Color |= WTOP_ATTR_DEFAULT_BACKGROUND;
+    if(IsProcessTagged(Process)) Color = (WORD)Settings.colors[WTOP_COLOR_TAG] |
+        (Settings.background_mode == WTOP_BACKGROUND_TERMINAL ? WTOP_ATTR_DEFAULT_BACKGROUND : 0);
+    if(Focused) Color = (WORD)(Settings.colors[WTOP_COLOR_FG_FOCUS] | (Settings.colors[WTOP_COLOR_BG_FOCUS] << 4) | WTOP_ATTR_EXPLICIT_BACKGROUND);
+    if(Selected) Color = (WORD)(Settings.colors[WTOP_COLOR_FG_SELECTED] | (Settings.colors[WTOP_COLOR_BG_SELECTED] << 4) | WTOP_ATTR_EXPLICIT_BACKGROUND);
     SetColor(Color);
     int Row = RenderRow;
     wtop_frame_fill(&Screen.cells, 0, Row, Width, ' ', Color);
@@ -1600,6 +1743,11 @@ static void WriteProcessInfo(const process *Process, BOOL Highlighted)
         if(Span->id == WTOP_COLUMN_PROCESS && ProcessSortType == SORT_BY_TREE) {
             DWORD Depth = min(Process->TreeDepth, (DWORD)max(0, (Space - 1) / 3));
             for(DWORD d = 0; d < Depth; ++d) { ConPrintf(_T("|  ")); Space -= 3; }
+            if(Space > 3) {
+                DWORD Raw = (DWORD)(Process - ProcessList);
+                BOOL Children = Raw + 1 < ProcessCount && ProcessList[Raw + 1].TreeDepth > Process->TreeDepth;
+                ConPrintf(Children ? (IsCollapsed(Process) ? _T("[+] ") : _T("[-] ")) : _T("    ")); Space -= 4;
+            }
         }
         DrawPaddedText(Text, Space);
     }
@@ -1614,19 +1762,19 @@ static void DoScroll(scroll_type Type, BOOL *Redraw)
     if(!ViewCount) return;
     FollowProcess = FALSE;
     DWORD Page = max(VisibleProcessCount, 1);
-    if(!HasSelection()) {
-        /* The first navigation gesture selects a visible row, without silently
+    if(!HasFocus()) {
+        /* The first navigation gesture highlights a visible row, without silently
            advancing past it. PageDown starts at the bottom of this page. */
         DWORD Initial = min(ProcessIndex, ViewCount - 1);
         if(Type == SCROLL_PAGE_DOWN) Initial += min(Page - 1, ViewCount - 1 - Initial);
-        SelectView(Initial); *Redraw = TRUE; return;
+        FocusView(Initial); *Redraw = TRUE; return;
     }
-    DWORD Index = SelectedViewIndex;
+    DWORD Index = FocusedViewIndex;
     if(Type == SCROLL_UP && Index) --Index;
     if(Type == SCROLL_DOWN && Index + 1 < ViewCount) ++Index;
     if(Type == SCROLL_PAGE_UP) Index = Index > Page ? Index - Page : 0;
     if(Type == SCROLL_PAGE_DOWN) Index += min(Page, ViewCount - 1 - Index);
-    SelectView(Index);
+    FocusView(Index);
     *Redraw = TRUE;
 }
 
@@ -1665,7 +1813,7 @@ static int PrintInformation(const wtop_options *Options)
         if(Options->json) printf("{\"schema\":1,\"name\":\"wtop\",\"version\":\"%s\",\"profile\":\"%s\"}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
         else printf("Wtop %s (%s)\nDerived from NTop; Copyright (c) 2019 Gian Sass and Wtop contributors.\nGPL-3.0-only. Historical OS support is not verified.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
     } else {
-        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"snapshot_schema\":2,\"tui\":true,\"snapshot\":true,\"query\":true,\"inspect\":true,\"log\":true,\"settings_schema\":2,\"optional_providers\":[\"command_line\",\"services\",\"per_core\",\"account_name\"],\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
+        if(Options->json) printf("{\"schema\":1,\"kind\":\"build-capabilities\",\"version\":\"%s\",\"profile\":\"%s\",\"runtime_probe\":false,\"snapshot_schema\":2,\"tui\":true,\"snapshot\":true,\"query\":true,\"inspect\":true,\"log\":true,\"settings_schema\":2,\"optional_providers\":[\"command_line\",\"services\",\"per_core\",\"account_name\",\"image_path\",\"threads\",\"affinity\"],\"gui\":false,\"install\":false,\"gpu\":false,\"native_gui\":false,\"encoding\":\"utf-8\",\"metrics\":[\"cpu_percent\",\"working_set_bytes\",\"io_read_write_bytes_per_second\",\"age_ms\",\"owner\"]}\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
         else printf("Wtop %s: build capabilities (%s; no runtime probe)\nTUI with htop/vi/Emacs keys, optional mouse, setup and explicit config save.\nText/JSON schema-2 snapshots, query/inspect, finite JSONL logging.\nOptional isolated command-line, service, account-name and per-core providers.\nVersion-2 settings, ownership/path reports, contextual Setup and action results.\nMetric access varies by process rights; unavailable fields carry status/null.\nNo self-install, GUI or GPU telemetry. Delivery candidates and historical probes\nare separate development tools; their target support is unqualified.\n", WTOP_VERSION_STRING, WTOP_BUILD_PROFILE);
     }
     return fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
@@ -1741,8 +1889,14 @@ static void WriteStatusAt(int Row, int Column)
     Status.age_ms = Age > ULONG_MAX ? ULONG_MAX : (unsigned long)Age;
     Status.stale = SampleSequence && LastSampleInterval && Age > LastSampleInterval * 3UL;
     Status.partial = CollectorError != 0 || !SampleComplete || UnresolvedOwnerFilterCount != 0;
-    char ProviderNotice[128];
-    _snprintf_s(ProviderNotice, sizeof(ProviderNotice), _TRUNCATE, "%s%s%s",
+    char Interaction[80];
+    if(HasSelection()) _snprintf_s(Interaction, sizeof(Interaction), _TRUNCATE, "target %lu; %lu tags; ", SelectedIdentity.ID, TaggedProcessListCount);
+    else if(TaggedProcessListCount) _snprintf_s(Interaction, sizeof(Interaction), _TRUNCATE, "%lu tagged targets; ", TaggedProcessListCount);
+    else if(HasFocus()) _snprintf_s(Interaction, sizeof(Interaction), _TRUNCATE, "focus %lu; Enter selects; ", FocusedIdentity.ID);
+    else strcpy_s(Interaction, sizeof(Interaction), "no target; ");
+    char ProviderNotice[256];
+    _snprintf_s(ProviderNotice, sizeof(ProviderNotice), _TRUNCATE, "%s%s%s%s",
+        Interaction,
         DisplayTextFlags & (WTOP_TEXT_LOSSY | WTOP_TEXT_INVALID) ? "glyph substitution; " : "",
         ReadOnlyMode ? "read-only; " : "",
         ProcessSortType == SORT_BY_TREE && TreeUnresolvedParentCount ? "unverified parents shown as roots" : "");
@@ -1924,7 +2078,7 @@ static void ResetCaret(void)
 static BOOL SelectionMatchesDisplay(void)
 {
     if(!HasSelection()) {
-        SetViMessage(VI_NOTICE, _T("No process selected; use navigation or click a process row"));
+        SetViMessage(VI_NOTICE, _T("No process selected; press Enter on the highlighted row or click a process row"));
         return FALSE;
     }
     if(!ProcessList[SelectedProcessIndex].CreationTime) {
@@ -1937,7 +2091,7 @@ static BOOL SelectionMatchesDisplay(void)
     return FALSE;
 }
 
-typedef enum overlay_type { OVERLAY_NONE, OVERLAY_HELP, OVERLAY_SETUP, OVERLAY_SORT, OVERLAY_KILL, OVERLAY_RESULTS, OVERLAY_TAB_DELETE } overlay_type;
+typedef enum overlay_type { OVERLAY_NONE, OVERLAY_HELP, OVERLAY_SETUP, OVERLAY_SORT, OVERLAY_KILL, OVERLAY_RESULTS, OVERLAY_TAB_DELETE, OVERLAY_DETAILS, OVERLAY_THREADS, OVERLAY_AFFINITY, OVERLAY_AFFINITY_CONFIRM } overlay_type;
 static overlay_type Overlay;
 static int SetupPage, SetupIndex, OverlayTop, SortChoice;
 static int EmacsPrefix;
@@ -1950,6 +2104,28 @@ static process_identity *PendingKills;
 static DWORD PendingKillCount;
 static DWORD LastMouseButtons;
 static int MouseWheelRemainder;
+static wtop_tui_inspection DetailWorker;
+static wtop_provider_result *DetailObservation;
+static process DetailSnapshot;
+static process_identity DetailIdentity;
+static ULONGLONG DetailSequence, AffinitySequence, AffinityMask;
+static BOOL DetailLoading, AffinityActionRunning, HaveAffinityOutcome;
+static wtop_affinity_outcome LastAffinityOutcome;
+static int DetailLineCount, AffinityChoice;
+static DWORD DetailSnapshotInterval;
+static BOOL DetailSnapshotInCurrentSample;
+static void BeginInspection(overlay_type Kind);
+static void RefreshInspection(void);
+static BOOL AdoptInspection(void);
+static void ReviewAffinity(void);
+static void ApplyAffinity(void);
+static void DrawInspection(void);
+static void ToggleAffinityChoice(void);
+static BOOL IsInspectionOverlay(void)
+{
+    return Overlay == OVERLAY_DETAILS || Overlay == OVERLAY_THREADS || Overlay == OVERLAY_AFFINITY || Overlay == OVERLAY_AFFINITY_CONFIRM;
+}
+
 
 static wtop_ui_context_options CurrentUiContext(void)
 {
@@ -1959,13 +2135,26 @@ static wtop_ui_context_options CurrentUiContext(void)
     else if(Overlay == OVERLAY_HELP) Kind = WTOP_CONTEXT_HELP;
     else if(Overlay == OVERLAY_SETUP) Kind = WTOP_CONTEXT_SETUP;
     else if(Overlay == OVERLAY_SORT) Kind = WTOP_CONTEXT_SORT;
-    else if(Overlay == OVERLAY_KILL || Overlay == OVERLAY_TAB_DELETE) Kind = WTOP_CONTEXT_CONFIRM;
+    else if(Overlay == OVERLAY_KILL || Overlay == OVERLAY_TAB_DELETE || Overlay == OVERLAY_AFFINITY_CONFIRM) Kind = WTOP_CONTEXT_CONFIRM;
+    else if(Overlay == OVERLAY_DETAILS) Kind = WTOP_CONTEXT_DETAILS;
+    else if(Overlay == OVERLAY_THREADS) Kind = WTOP_CONTEXT_THREADS;
+    else if(Overlay == OVERLAY_AFFINITY) Kind = WTOP_CONTEXT_AFFINITY;
     else if(Overlay == OVERLAY_RESULTS) Kind = WTOP_CONTEXT_RESULTS;
     wtop_ui_context_defaults(&Context, Kind);
     Context.readonly = ReadOnlyMode;
+    Context.has_focus = HasFocus();
+    Context.focus_identity_known = HasFocus() && FocusedIdentity.CreationTime;
     Context.has_selection = TaggedProcessListCount || HasSelection();
     Context.identity_known = TaggedProcessListCount || (HasSelection() && SelectedIdentity.CreationTime);
-    Context.kill_supported = Context.priority_supported = 1;
+    Context.kill_supported = Context.priority_supported = Context.affinity_supported = 1;
+    if(IsInspectionOverlay()) {
+        Context.has_focus = Context.focus_identity_known = DetailIdentity.CreationTime != 0;
+        Context.has_selection = HasSelection() && !CompareCapturedIdentity(&DetailIdentity, &SelectedIdentity);
+        Context.identity_known = Context.has_selection;
+        if(Overlay == OVERLAY_AFFINITY || Overlay == OVERLAY_AFFINITY_CONFIRM)
+            Context.affinity_supported = DetailObservation && DetailObservation->state == WTOP_PROVIDER_VALID &&
+                DetailObservation->data.affinity.status.state == WTOP_PROVIDER_VALID && !AffinityActionRunning;
+    }
     Context.save_available = !ConfigStore.disabled && ConfigStore.write_path[0];
     Context.setup_tabs = Overlay == OVERLAY_SETUP && SetupPage == 3;
     Context.can_add_tab = Settings.tab_count < WTOP_MAX_TABS && Settings.next_tab_id != 0;
@@ -1975,7 +2164,10 @@ static wtop_ui_context_options CurrentUiContext(void)
         (SetupIndex >= 0 && SetupIndex < Settings.tab_count) && (!Settings.tabs[SetupIndex].visible || VisibleViews > 1);
     Context.can_move_left = SetupIndex > 0;
     Context.can_move_right = SetupIndex + 1 < Settings.tab_count;
-    if(Overlay == OVERLAY_KILL) {
+    if(Overlay == OVERLAY_AFFINITY_CONFIRM) {
+        Context.has_selection = Context.identity_known = DetailIdentity.CreationTime != 0;
+        Context.kill_supported = Context.affinity_supported;
+    } else if(Overlay == OVERLAY_KILL) {
         Context.has_selection = PendingKillCount != 0;
         Context.identity_known = PendingKillCount != 0;
         for(DWORD i = 0; i < PendingKillCount; ++i)
@@ -2030,8 +2222,327 @@ int SavePresentationSettings(void)
 
 static void CloseOverlay(void)
 {
+    if(IsInspectionOverlay()) {
+        wtop_tui_inspection_cancel(&DetailWorker);
+        free(DetailObservation); DetailObservation = NULL; DetailLoading = FALSE; DetailSequence = 0;
+    }
     free(PendingKills); PendingKills = NULL; PendingKillCount = 0;
     Overlay = OVERLAY_NONE; OverlayTop = 0; RenderInvalidated = TRUE;
+}
+
+static FILETIME IdentityFileTime(process_identity Identity)
+{
+    FILETIME Result;
+    Result.dwLowDateTime = (DWORD)Identity.CreationTime;
+    Result.dwHighDateTime = (DWORD)(Identity.CreationTime >> 32);
+    return Result;
+}
+
+static void RefreshInspection(void)
+{
+    if(!IsInspectionOverlay() || Overlay == OVERLAY_AFFINITY_CONFIRM || AffinityActionRunning) return;
+    DetailSnapshotInCurrentSample = FALSE;
+    for(DWORD i = 0; i < ProcessCount; ++i) {
+        if(ProcessList[i].ID == DetailIdentity.ID && ProcessList[i].CreationTime == DetailIdentity.CreationTime) {
+            DetailSnapshot = ProcessList[i]; DetailSnapshot.Handle = NULL;
+            DetailSnapshotInterval = LastSampleInterval ? LastSampleInterval : (DWORD)Settings.interval_ms;
+            DetailSnapshotInCurrentSample = TRUE; break;
+        }
+    }
+    wtop_provider_request Request = {0};
+    Request.pid = DetailIdentity.ID; Request.creation = IdentityFileTime(DetailIdentity);
+    Request.kind = Overlay == OVERLAY_THREADS ? WTOP_PROVIDER_THREADS :
+        Overlay == OVERLAY_AFFINITY ? WTOP_PROVIDER_AFFINITY : WTOP_PROVIDER_PROCESS_DETAILS;
+    if(Request.kind == WTOP_PROVIDER_PROCESS_DETAILS) Request.detail_flags = WTOP_DETAIL_ALL;
+    ULONGLONG Sequence = wtop_tui_inspection_request(&DetailWorker, &Request);
+    if(!Sequence) { SetViMessage(VI_ERROR, _T("Inspection worker unavailable or action outcome pending; retry after completion")); return; }
+    DetailSequence = Sequence; DetailLoading = TRUE;
+    free(DetailObservation); DetailObservation = NULL;
+    OverlayTop = AffinityChoice = 0;
+    RenderInvalidated = TRUE;
+}
+
+static void BeginInspection(overlay_type Kind)
+{
+    process_identity Identity;
+    process Snapshot;
+    if(IsInspectionOverlay()) { Identity = DetailIdentity; Snapshot = DetailSnapshot; }
+    else {
+        DWORD Index;
+        if(Kind == OVERLAY_AFFINITY) {
+            if(!SelectionMatchesDisplay()) return;
+            Index = SelectedProcessIndex;
+        } else {
+            if(!HasFocus() || !FocusedIdentity.CreationTime) return;
+            Index = FocusedProcessIndex;
+        }
+        Snapshot = ProcessList[Index];
+        Identity.ID = Snapshot.ID; Identity.CreationTime = Snapshot.CreationTime;
+    }
+    CloseOverlay();
+    DetailIdentity = Identity; DetailSnapshot = Snapshot;
+    DetailSnapshotInterval = LastSampleInterval ? LastSampleInterval : (DWORD)Settings.interval_ms;
+    DetailSnapshot.Handle = NULL; /* Borrowed model handles never escape collection. */
+    Overlay = Kind; DetailLineCount = 1;
+    RefreshInspection();
+}
+
+static BOOL AdoptInspection(void)
+{
+    ULONGLONG Sequence = 0;
+    wtop_provider_result *Result = wtop_tui_inspection_poll(&DetailWorker, &Sequence);
+    BOOL Changed = FALSE;
+    if(Sequence && Sequence == DetailSequence && IsInspectionOverlay()) {
+        DetailLoading = FALSE; Changed = TRUE;
+        if(!Result) SetViMessage(VI_ERROR, _T("Inspection unavailable: allocation failed"));
+        else if(Result->pid == DetailIdentity.ID && FileTimeValue(&Result->creation) == DetailIdentity.CreationTime) {
+            free(DetailObservation); DetailObservation = Result; Result = NULL;
+            if(Overlay == OVERLAY_AFFINITY && DetailObservation->state == WTOP_PROVIDER_VALID &&
+                DetailObservation->data.affinity.status.state == WTOP_PROVIDER_VALID)
+                AffinityMask = DetailObservation->data.affinity.process_mask;
+        } else SetViMessage(VI_ERROR, _T("Inspection identity no longer matches the captured process"));
+    }
+    free(Result);
+    wtop_affinity_outcome Outcome;
+    Sequence = 0;
+    if(wtop_tui_inspection_poll_action(&DetailWorker, &Outcome, &Sequence)) {
+        LastAffinityOutcome = Outcome; HaveAffinityOutcome = TRUE;
+        if(Sequence == AffinitySequence) AffinityActionRunning = FALSE;
+        SetViMessage(Outcome.verified ? VI_NOTICE : VI_ERROR,
+            _T("Affinity PID %lu: %hs; applied=%d verified=%d (error %lu)"),
+            Outcome.pid, wtop_provider_state_name(Outcome.status.state), Outcome.applied,
+            Outcome.verified, Outcome.status.native_error);
+        Changed = TRUE;
+        if(Overlay == OVERLAY_AFFINITY && Outcome.pid == DetailIdentity.ID &&
+            FileTimeValue(&Outcome.creation) == DetailIdentity.CreationTime && Outcome.verified && DetailObservation) {
+            DetailObservation->data.affinity = Outcome.after;
+            AffinityMask = Outcome.after.process_mask;
+        }
+    }
+    if(Changed) RenderInvalidated = TRUE;
+    return Changed;
+}
+
+static void ToggleAffinityChoice(void)
+{
+    if(ReadOnlyMode || DetailLoading || AffinityActionRunning || !DetailObservation ||
+        DetailObservation->state != WTOP_PROVIDER_VALID ||
+        DetailObservation->data.affinity.status.state != WTOP_PROVIDER_VALID ||
+        AffinityChoice < 0 || AffinityChoice >= 64) return;
+    ULONGLONG Bit = (ULONGLONG)1 << AffinityChoice;
+    if(!(DetailObservation->data.affinity.system_mask & Bit)) {
+        SetViMessage(VI_NOTICE, _T("This logical processor is outside the available system mask")); return;
+    }
+    AffinityMask ^= Bit;
+    RenderInvalidated = TRUE;
+}
+
+static BOOL AffinityObservationFresh(void)
+{
+    ULONGLONG Now = GetTickCount64();
+    if(!DetailObservation || !DetailObservation->observed_ms || Now < DetailObservation->observed_ms ||
+        Now - DetailObservation->observed_ms > 60000) {
+        SetViMessage(VI_ERROR, _T("Affinity observation is unavailable or older than 60 s; F5 refreshes and resets the draft mask"));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void ReviewAffinity(void)
+{
+    if(ReadOnlyMode || AffinityActionRunning || !DetailObservation ||
+        DetailObservation->state != WTOP_PROVIDER_VALID || DetailObservation->data.affinity.status.state != WTOP_PROVIDER_VALID) return;
+    if(!AffinityObservationFresh()) return;
+    if(!AffinityMask || (AffinityMask & ~DetailObservation->data.affinity.system_mask)) {
+        SetViMessage(VI_ERROR, _T("Choose at least one available logical processor")); return;
+    }
+    Overlay = OVERLAY_AFFINITY_CONFIRM; OverlayTop = 0;
+}
+
+static void ApplyAffinity(void)
+{
+    if(ReadOnlyMode || AffinityActionRunning || Overlay != OVERLAY_AFFINITY_CONFIRM) return;
+    if(!AffinityObservationFresh()) { Overlay = OVERLAY_AFFINITY; return; }
+    ULONGLONG Sequence = wtop_tui_inspection_apply(&DetailWorker, DetailIdentity.ID,
+        IdentityFileTime(DetailIdentity), AffinityMask, ReadOnlyMode);
+    if(!Sequence) { SetViMessage(VI_ERROR, _T("Affinity action not admitted; wait for inspection retirement and retry explicitly")); return; }
+    AffinitySequence = Sequence; AffinityActionRunning = TRUE;
+    Overlay = OVERLAY_AFFINITY;
+    SetViMessage(VI_NOTICE, _T("Applying captured affinity to PID %lu; Esc may leave the panel; outcome will be retained"), DetailIdentity.ID);
+}
+
+/* Rendering visits bounded provider records; it never queries the system. Text
+   wrapping is shared with the console grapheme profile. Every displayed line
+   starts and ends at a cluster boundary; full command lines remain reachable. */
+static void InspectionText(int *Line, const TCHAR *Text)
+{
+    size_t Length = _tcslen(Text), Offset = 0;
+    int Visible = max(0, Chrome.content_end - 3);
+    int Limit = max(1, min(Width, 4090));
+    do {
+        size_t Cells = 0;
+        unsigned Flags = 0;
+        size_t Span = Length ? wtop_text_utf16_span((const unsigned short *)Text + Offset, Length - Offset,
+            (size_t)Limit, NativeTextProfile(),
+            &Cells, &Flags) : 0;
+        if(Length && !Span) {
+            wtop_text_cluster Cluster;
+            if(wtop_text_next_utf16((const unsigned short *)Text + Offset, Length - Offset,
+                NativeTextProfile(), &Cluster))
+                Span = Cluster.input_units;
+            else Span = 1;
+            Flags |= WTOP_TEXT_LOSSY;
+        }
+        DisplayTextFlags |= Flags;
+        if(*Line >= OverlayTop && *Line - OverlayTop < Visible) {
+            SetConCursorPos(0, (SHORT)(3 + *Line - OverlayTop));
+            SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
+            if(Span) ConWriteSpan(Text + Offset, Span);
+        }
+        ++*Line; Offset += Span;
+    } while(Offset < Length);
+}
+
+static void InspectionLine(int *Line, const TCHAR *Format, ...)
+{
+    TCHAR Text[4096];
+    va_list Args; va_start(Args, Format);
+    _vsntprintf_s(Text, _countof(Text), _TRUNCATE, Format, Args);
+    va_end(Args); InspectionText(Line, Text);
+}
+
+static void InspectionStatus(int *Line, const TCHAR *Name, const wtop_provider_status *Status)
+{
+    InspectionLine(Line, _T("%s: %hs (domain %d, code %lu)"), Name,
+        wtop_provider_state_name(Status->state), (int)Status->error_domain, Status->native_error);
+}
+
+static metric_state DetailMetricState(metric_state State, ULONGLONG Observed, ULONGLONG Now)
+{
+    double Age = 0;
+    if(State != METRIC_OK) return State;
+    return wtop_sample_freshness(CounterValue(Now), CounterValue(Observed), DetailSnapshotInterval * 3UL, &Age);
+}
+
+static void DrawInspection(void)
+{
+    ConPrintf(_T("PID %lu / creation %llu | %s | Up/Down/PgUp/PgDn scroll; F5 refresh; Esc back"),
+        DetailIdentity.ID, (unsigned long long)DetailIdentity.CreationTime,
+        DetailLoading ? _T("collecting...") : _T("captured; manual F5"));
+    int Line = 0;
+    ULONGLONG Now = GetTickCount64();
+    if(Overlay == OVERLAY_AFFINITY_CONFIRM) {
+        InspectionLine(&Line, _T("Apply mask 0x%llx to captured PID %lu / creation %llu?"),
+            (unsigned long long)AffinityMask, DetailIdentity.ID, (unsigned long long)DetailIdentity.CreationTime);
+        InspectionLine(&Line, _T("Press y to confirm; n or Esc returns to the editor. Enter/F9 cannot confirm."));
+        InspectionLine(&Line, _T("The native action revalidates this lifetime and the current system mask on the same process handle."));
+        DetailLineCount = Line; return;
+    }
+    if(Overlay == OVERLAY_AFFINITY) {
+        if(!DetailObservation) InspectionLine(&Line, DetailLoading ? _T("Reading process and system affinity...") : _T("No affinity observation available; F5 retries explicitly."));
+        else if(DetailObservation->state != WTOP_PROVIDER_VALID || DetailObservation->data.affinity.status.state != WTOP_PROVIDER_VALID) {
+            InspectionLine(&Line, _T("Affinity provider: %hs"), wtop_provider_state_name(DetailObservation->state));
+            if(DetailObservation->state == WTOP_PROVIDER_VALID) InspectionStatus(&Line, _T("Affinity"), &DetailObservation->data.affinity.status);
+            InspectionLine(&Line, _T("Limitation: %hs"), wtop_affinity_limit_name(DetailObservation->data.affinity.limitation));
+        } else {
+            const wtop_provider_affinity *Affinity = &DetailObservation->data.affinity;
+            int Visible = max(1, Chrome.content_end - 3);
+            AffinityChoice = max(0, min((int)Affinity->mask_bits - 1, AffinityChoice));
+            if(AffinityChoice < OverlayTop) OverlayTop = AffinityChoice;
+            if(AffinityChoice >= OverlayTop + Visible) OverlayTop = AffinityChoice - Visible + 1;
+            for(DWORD i = 0; i < Affinity->mask_bits && i < 64; ++i) {
+                ULONGLONG Bit = (ULONGLONG)1 << i;
+                if((int)i >= OverlayTop && (int)i - OverlayTop < Visible) {
+                    SetConCursorPos(0, (SHORT)(3 + (int)i - OverlayTop));
+                    WORD Color = (WORD)Settings.colors[WTOP_COLOR_FG];
+                    if((int)i == AffinityChoice) Color = (WORD)(Settings.colors[WTOP_COLOR_FG_FOCUS] | (Settings.colors[WTOP_COLOR_BG_FOCUS] << 4) | WTOP_ATTR_EXPLICIT_BACKGROUND);
+                    SetColor(Color);
+                    ConPrintf(_T("[%c] group %lu CPU %-2lu %s"), AffinityMask & Bit ? 'x' : ' ', Affinity->group, i,
+                        Affinity->system_mask & Bit ? _T("Space/click toggles; Enter/F9 reviews") : _T("unavailable"));
+                }
+            }
+            Line = (int)Affinity->mask_bits;
+        }
+        DetailLineCount = Line; return;
+    }
+    InspectionLine(&Line, _T("Executable: %s"), DetailSnapshot.ExeName);
+    InspectionLine(&Line, _T("Parent PID: %lu | base priority: %lu | sampled threads: %lu"),
+        DetailSnapshot.ParentPID, DetailSnapshot.BasePriority, DetailSnapshot.ThreadCount);
+    InspectionLine(&Line, _T("Owner: %s [%hs] | SID: %s [%hs]"), DetailSnapshot.UserName,
+        wtop_provider_state_name(DetailSnapshot.OwnerNameState), DetailSnapshot.OwnerSid, MetricStateName(DetailSnapshot.OwnerState));
+    double SnapshotAge = 0;
+    metric_state SnapshotFreshness = wtop_sample_freshness(CounterValue(Now), CounterValue(DetailSnapshot.ObservedTick),
+        DetailSnapshotInterval * 3UL, &SnapshotAge);
+    InspectionLine(&Line, _T("Captured snapshot age %.0f ms [%hs]; F5 explicitly refreshes. %s"), SnapshotAge,
+        MetricStateName(SnapshotFreshness), DetailSnapshotInCurrentSample ? _T("") : _T("Lifetime absent from the last process sample."));
+    InspectionLine(&Line, _T("At current age: CPU=%hs memory=%hs I/O=%hs; values below are retained at capture"),
+        MetricStateName(DetailMetricState(DetailSnapshot.CpuState, DetailSnapshot.CpuObservedTick, Now)),
+        MetricStateName(DetailMetricState(DetailSnapshot.MemoryState, DetailSnapshot.ObservedTick, Now)),
+        MetricStateName(DetailMetricState(DetailSnapshot.IoState, DetailSnapshot.ObservedTick, Now)));
+    if(DetailSnapshot.CpuState == METRIC_OK)
+        InspectionLine(&Line, _T("CPU: %.2f%% | measured %.3f ms | acquisition %.3f ms | %s normalization"),
+            DetailSnapshot.PercentProcessorTime, DetailSnapshot.CpuElapsedMs, DetailSnapshot.CpuAcquisitionMs,
+            CpuMachine ? _T("machine") : _T("one-core"));
+    if(DetailSnapshot.MemoryState == METRIC_OK)
+        InspectionLine(&Line, _T("Working set: %llu bytes"), (unsigned long long)DetailSnapshot.UsedMemory);
+    if(DetailSnapshot.IoState == METRIC_OK)
+        InspectionLine(&Line, _T("I/O transfers: %.2f bytes/s | read total %llu bytes | write total %llu bytes"),
+            DetailSnapshot.DiskUsage, (unsigned long long)DetailSnapshot.IoReadTotal, (unsigned long long)DetailSnapshot.IoWriteTotal);
+    if(DetailSnapshot.AgeState == METRIC_OK)
+        InspectionLine(&Line, _T("Process age: %llu ms at observation"), (unsigned long long)DetailSnapshot.UpTime);
+    if(DetailLoading) InspectionLine(&Line, _T("Optional details are collecting asynchronously; navigation and Ctrl-C remain responsive."));
+    if(!DetailObservation) { DetailLineCount = Line; return; }
+    double ProviderAge = 0;
+    metric_state ProviderFreshness = wtop_sample_freshness(CounterValue(Now), CounterValue(DetailObservation->observed_ms),
+        DetailSnapshotInterval * 3UL, &ProviderAge);
+    InspectionLine(&Line, _T("Provider: %hs | capture age %.0f ms [%hs] | acquisition %.1f ms | error %lu"),
+        wtop_provider_state_name(DetailObservation->state), ProviderAge,
+        DetailObservation->observed_ms ? MetricStateName(ProviderFreshness) : "unobserved",
+        DetailObservation->acquisition_ms, DetailObservation->native_error);
+    if(!DetailObservation->response_received || (DetailObservation->state != WTOP_PROVIDER_VALID && DetailObservation->state != WTOP_PROVIDER_CAPACITY)) { DetailLineCount = Line; return; }
+    if(Overlay == OVERLAY_THREADS) {
+        InspectionLine(&Line, _T("Threads: %lu returned / %lu observed; counters below are lifetime 100ns, not CPU percentages."),
+            DetailObservation->count, DetailObservation->total_count);
+        for(DWORD i = 0; i < DetailObservation->count && i < WTOP_PROVIDER_MAX_THREADS; ++i) {
+            const wtop_provider_thread *Thread = &DetailObservation->data.threads[i];
+            TCHAR Creation[32], Priority[24];
+            _tcscpy_s(Creation, _countof(Creation), _T("?")); _tcscpy_s(Priority, _countof(Priority), _T("?"));
+            if(Thread->identity_status.state == WTOP_PROVIDER_VALID)
+                _stprintf_s(Creation, _countof(Creation), _T("%llu"), (unsigned long long)FileTimeValue(&Thread->creation));
+            if(Thread->priority_status.state == WTOP_PROVIDER_VALID)
+                _stprintf_s(Priority, _countof(Priority), _T("%ld"), Thread->priority);
+            InspectionLine(&Line, _T("TID %lu | creation %s [%hs] | relative priority %s [%hs]"),
+                Thread->tid, Creation, wtop_provider_state_name(Thread->identity_status.state),
+                Priority, wtop_provider_state_name(Thread->priority_status.state));
+            if(Thread->times_status.state == WTOP_PROVIDER_VALID)
+                InspectionLine(&Line, _T("  kernel %llu; user %llu; observed %llu"),
+                    (unsigned long long)Thread->kernel_100ns, (unsigned long long)Thread->user_100ns,
+                    (unsigned long long)Thread->observed_ms);
+            else InspectionStatus(&Line, _T("  execution time"), &Thread->times_status);
+        }
+    } else {
+        const wtop_provider_details *Details = &DetailObservation->data.details;
+        InspectionStatus(&Line, _T("Image path"), &Details->image_status);
+        if(Details->image_status.state == WTOP_PROVIDER_VALID) InspectionText(&Line, Details->image_path);
+        InspectionStatus(&Line, _T("Command line"), &Details->command_status);
+        if(Details->command_status.state == WTOP_PROVIDER_VALID) InspectionText(&Line, Details->command_line);
+        InspectionStatus(&Line, _T("Services"), &Details->services_status);
+        InspectionLine(&Line, _T("Services: %lu returned / %lu observed"), Details->service_count, Details->service_total_count);
+        for(DWORD i = 0; i < Details->service_count && i < WTOP_PROVIDER_MAX_SERVICES; ++i) {
+            const wtop_provider_service *Service = &Details->services[i];
+            InspectionLine(&Line, _T("%s | %s | state %lu | identity %hs"), Service->name, Service->display_name,
+                Service->service_state, wtop_provider_state_name(Service->identity_state));
+        }
+        InspectionStatus(&Line, _T("Affinity"), &Details->affinity.status);
+        if(Details->affinity.status.state == WTOP_PROVIDER_VALID)
+            InspectionLine(&Line, _T("Group %lu | process mask 0x%llx | system mask 0x%llx"),
+                Details->affinity.group, (unsigned long long)Details->affinity.process_mask, (unsigned long long)Details->affinity.system_mask);
+        else InspectionLine(&Line, _T("Affinity limitation: %hs"), wtop_affinity_limit_name(Details->affinity.limitation));
+    }
+    if(HaveAffinityOutcome) InspectionLine(&Line, _T("Last affinity action PID %lu: applied=%d verified=%d state=%hs (error %lu)"),
+        LastAffinityOutcome.pid, LastAffinityOutcome.applied, LastAffinityOutcome.verified,
+        wtop_provider_state_name(LastAffinityOutcome.status.state), LastAffinityOutcome.status.native_error);
+    DetailLineCount = Line;
 }
 
 static void ShowActionResults(void)
@@ -2157,11 +2668,15 @@ static int HelpLineCount(void);
 static BOOL NavigateOverlay(wtop_ui_action Action)
 {
     if(Overlay != OVERLAY_HELP && Overlay != OVERLAY_RESULTS &&
-       Overlay != OVERLAY_SETUP && Overlay != OVERLAY_SORT) return FALSE;
-    int *Position = Overlay == OVERLAY_SETUP ? &SetupIndex : Overlay == OVERLAY_SORT ? &SortChoice : &OverlayTop;
+       Overlay != OVERLAY_SETUP && Overlay != OVERLAY_SORT &&
+       Overlay != OVERLAY_DETAILS && Overlay != OVERLAY_THREADS && Overlay != OVERLAY_AFFINITY) return FALSE;
+    int *Position = Overlay == OVERLAY_SETUP ? &SetupIndex : Overlay == OVERLAY_SORT ? &SortChoice :
+        Overlay == OVERLAY_AFFINITY ? &AffinityChoice : &OverlayTop;
     int Maximum = Overlay == OVERLAY_SETUP ? SetupCount() - 1 :
         Overlay == OVERLAY_SORT ? WTOP_MAX_COLUMNS - 1 :
-        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 : HelpLineCount() - 1;
+        Overlay == OVERLAY_RESULTS ? (int)LastActionCount - 1 :
+        Overlay == OVERLAY_AFFINITY ? (DetailObservation ? (int)DetailObservation->data.affinity.mask_bits - 1 : 0) :
+        (Overlay == OVERLAY_DETAILS || Overlay == OVERLAY_THREADS) ? DetailLineCount - max(1, Chrome.content_end - 3) : HelpLineCount() - 1;
     Maximum = max(0, Maximum);
     switch(Action) {
     case WTOP_UI_UP: --*Position; break;
@@ -2200,8 +2715,8 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
     case WTOP_UI_DOWN: DoScroll(SCROLL_DOWN, Redraw); break;
     case WTOP_UI_PAGE_UP: DoScroll(SCROLL_PAGE_UP, Redraw); break;
     case WTOP_UI_PAGE_DOWN: DoScroll(SCROLL_PAGE_DOWN, Redraw); break;
-    case WTOP_UI_TOP: FollowProcess = FALSE; SelectView(0); break;
-    case WTOP_UI_BOTTOM: FollowProcess = FALSE; SelectView(ViewCount ? ViewCount - 1 : 0); break;
+    case WTOP_UI_TOP: FollowProcess = FALSE; FocusView(0); break;
+    case WTOP_UI_BOTTOM: FollowProcess = FALSE; FocusView(ViewCount ? ViewCount - 1 : 0); break;
     case WTOP_UI_HELP: CloseOverlay(); Overlay = OVERLAY_HELP; break;
     case WTOP_UI_SETUP: CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = SetupIndex = 0; break;
     case WTOP_UI_SEARCH: StartEditor(_T('/')); break;
@@ -2221,16 +2736,24 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
                 Action == WTOP_UI_PRIORITY_UP ? WTOP_ACTION_PRIORITY_UP : WTOP_ACTION_PRIORITY_DOWN);
         }
         break;
+    case WTOP_UI_SELECT: if(HasFocus()) SelectView(FocusedViewIndex); break;
+    case WTOP_UI_COLLAPSE: SetFocusedCollapse(TRUE); break;
+    case WTOP_UI_EXPAND: SetFocusedCollapse(FALSE); break;
+    case WTOP_UI_DETAILS: BeginInspection(OVERLAY_DETAILS); break;
+    case WTOP_UI_THREADS: BeginInspection(OVERLAY_THREADS); break;
+    case WTOP_UI_AFFINITY: BeginInspection(OVERLAY_AFFINITY); break;
+    case WTOP_UI_REFRESH: RefreshInspection(); break;
+    case WTOP_UI_AFFINITY_APPLY: ReviewAffinity(); break;
     case WTOP_UI_KILL: BeginKill(); break;
     case WTOP_UI_QUIT: RequestShutdown(); break;
     case WTOP_UI_TAG:
-        if(SelectionMatchesDisplay()) { ToggleTaggedProcess(&ProcessList[SelectedProcessIndex]); DoScroll(SCROLL_DOWN, Redraw); }
+        if(HasFocus() && FocusedIdentity.CreationTime) { ToggleTaggedProcess(&ProcessList[FocusedProcessIndex]); DoScroll(SCROLL_DOWN, Redraw); }
         break;
     case WTOP_UI_UNTAG: TaggedProcessListCount = 0; break;
     case WTOP_UI_REVERSE: ActiveTab()->descending = !ActiveTab()->descending; MarkSettingsChanged(); ApplyActiveTab(); break;
     case WTOP_UI_FOLLOW:
-        if(SelectionMatchesDisplay()) {
-            FollowProcess = !FollowProcess; FollowProcessID = DisplayedProcessID; FollowCreationTime = DisplayedCreationTime;
+        if(HasFocus() && FocusedIdentity.CreationTime) {
+            FollowProcess = !FollowProcess; FollowProcessID = FocusedIdentity.ID; FollowCreationTime = FocusedIdentity.CreationTime;
         }
         break;
     case WTOP_UI_SEARCH_NEXT: SearchNext(); break;
@@ -2241,11 +2764,14 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
         Paused = !Paused; InterlockedExchange(&CollectionPaused, Paused); break;
     case WTOP_UI_BAR: Settings.show_function_bar = !Settings.show_function_bar; MarkSettingsChanged(); break;
     case WTOP_UI_CANCEL:
-        if(Overlay == OVERLAY_TAB_DELETE) { CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = 3; PendingDeleteTabId = 0; }
+        if(Overlay == OVERLAY_AFFINITY_CONFIRM) { Overlay = OVERLAY_AFFINITY; OverlayTop = 0; }
+        else if(Overlay == OVERLAY_TAB_DELETE) { CloseOverlay(); Overlay = OVERLAY_SETUP; SetupPage = 3; PendingDeleteTabId = 0; }
         else if(!WasEditing && Overlay != OVERLAY_NONE) CloseOverlay();
         else if(!WasEditing && !EmacsPrefix) {
-            ClearSelection(); TaggedProcessListCount = 0;
-            SearchActive = FALSE; SearchPattern[0] = 0;
+            if(HasSelection() || TaggedProcessListCount) {
+                if(HasSelection()) FocusView(SelectedViewIndex);
+                ClearSelection(); TaggedProcessListCount = 0;
+            } else { ClearFocus(); SearchActive = FALSE; SearchPattern[0] = 0; }
         }
         ClearViMessage(); EmacsPrefix = FALSE; break;
     case WTOP_UI_SORT_CPU: ChangeProcessSortType(SORT_BY_PROCESSOR_TIME); break;
@@ -2266,7 +2792,8 @@ static void DispatchAction(wtop_ui_action Action, BOOL *Redraw)
         else if(Overlay == OVERLAY_SORT) { ChangeProcessSortType((process_sort_type)SortChoice); CloseOverlay(); }
         break;
     case WTOP_UI_CONFIRM:
-        if(Overlay == OVERLAY_KILL) {
+        if(Overlay == OVERLAY_AFFINITY_CONFIRM) ApplyAffinity();
+        else if(Overlay == OVERLAY_KILL) {
             RunNativeActions(PendingKills, PendingKillCount, WTOP_ACTION_TERMINATE);
             TaggedProcessListCount = 0;
         } else if(Overlay == OVERLAY_TAB_DELETE) {
@@ -2319,7 +2846,7 @@ static void ToggleOrderedItem(int *Items, int *Count, int Selected, int Maximum,
 static int SetupCount(void)
 {
     switch(SetupPage) {
-    case 0: return 12;
+    case 0: return 13;
     case 1: return WTOP_HEADER_ROWS;
     case 2: return WTOP_MAX_COLUMNS;
     case 3: return Settings.tab_count;
@@ -2346,6 +2873,7 @@ static void SetupAdjust(int Direction, BOOL Activate)
         case 9: Settings.meter_width = max(8, min(80, Settings.meter_width + Direction)); break;
         case 10: Settings.meter_style = (wtop_meter_style)((Settings.meter_style + 3 + Direction) % 3); break;
         case 11: Settings.character_set = (wtop_character_set)(1 - Settings.character_set); break;
+        case 12: Settings.background_mode = (wtop_background_mode)(1 - Settings.background_mode); break;
         }
     } else if(SetupPage == 1 || SetupPage == 2) {
         int *Items = SetupPage == 1 ? Settings.header_rows : ActiveTab()->columns;
@@ -2369,13 +2897,17 @@ static void SetupAdjust(int Direction, BOOL Activate)
         }
         if(!Ok) { SetViMessage(VI_ERROR, _T("View unchanged: %hs"), Error); return; }
         ApplyActiveTab();
-    } else Settings.colors[SetupIndex] = (Settings.colors[SetupIndex] + 256 + Direction) % 256;
+    } else {
+        unsigned Limit = SetupIndex >= WTOP_COLOR_FG_FOCUS ? 16 : 256;
+        Settings.colors[SetupIndex] = (Settings.colors[SetupIndex] + Limit + Direction) % Limit;
+    }
     MarkSettingsChanged();
     RenderInvalidated = TRUE;
 }
 
 static void HandleOverlayKey(int Key, unsigned Modifiers, BOOL *Redraw)
 {
+    if(Overlay == OVERLAY_AFFINITY && !Modifiers && Key == ' ') { ToggleAffinityChoice(); *Redraw = TRUE; return; }
     wtop_ui_context_options Context = CurrentUiContext();
     DispatchAction(wtop_ui_context_key_action(&Context, Settings.keymap, Key, Modifiers), Redraw);
 }
@@ -2430,32 +2962,37 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
             if(Overlay == OVERLAY_SETUP) SetupIndex = max(0, min(SetupCount() - 1, SetupIndex + (Steps > 0 ? -1 : 1)));
             else if(Overlay == OVERLAY_SORT) SortChoice = max(0, min(WTOP_MAX_COLUMNS - 1, SortChoice + (Steps > 0 ? -1 : 1)));
             else if(Overlay == OVERLAY_NONE) DoScroll(Steps > 0 ? SCROLL_UP : SCROLL_DOWN, Redraw);
+            else NavigateOverlay(Steps > 0 ? WTOP_UI_UP : WTOP_UI_DOWN);
         }
         *Redraw = TRUE; return;
     }
-    if(!Click || X < 0 || X >= Width || Y < 0 || Y >= Height) return;
-    if(Y == FunctionBarRow) {
+    BOOL Hover = Mouse->dwEventFlags == MOUSE_MOVED && !Buttons;
+    if((!Click && !Hover) || X < 0 || X >= Width || Y < 0 || Y >= Height) return;
+    if(Click && Y == FunctionBarRow) {
         for(int i = 0; i < 10; ++i) if(FooterWidths[i] && X >= FooterStarts[i] && X - FooterStarts[i] < FooterWidths[i]) {
             DispatchFunction(i, Redraw); break;
         }
         return;
     }
-    if(Overlay == OVERLAY_SETUP && Y >= 3) {
+    if(Click && Overlay == OVERLAY_SETUP && Y >= 3) {
         int Index = OverlayTop + Y - 3;
         if(Index < SetupCount() && Y < Height - 2) { SetupIndex = Index; SetupAdjust(1, TRUE); *Redraw = TRUE; }
         return;
     }
-    if(Overlay == OVERLAY_SORT && Y >= 3 && Y < Height - 2 && OverlayTop + Y - 3 < WTOP_MAX_COLUMNS) {
+    if(Click && Overlay == OVERLAY_SORT && Y >= 3 && Y < Height - 2 && OverlayTop + Y - 3 < WTOP_MAX_COLUMNS) {
         ChangeProcessSortType((process_sort_type)(OverlayTop + Y - 3)); CloseOverlay(); *Redraw = TRUE; return;
     }
+    if(Click && Overlay == OVERLAY_AFFINITY && Y >= 3 && Y < Chrome.content_end) {
+        AffinityChoice = OverlayTop + Y - 3; ToggleAffinityChoice(); *Redraw = TRUE; return;
+    }
     if(Overlay != OVERLAY_NONE) return;
-    if(Y == TabsRow) {
+    if(Click && Y == TabsRow) {
         for(int i = 0; i < Settings.tab_count; ++i)
             if(RenderedTabWidth[i] && X >= RenderedTabStart[i] && X - RenderedTabStart[i] < RenderedTabWidth[i]) {
                 Settings.active_tab = i; MarkSettingsChanged(); ApplyActiveTab(); *Redraw = TRUE; return;
             }
     }
-    if(Y == ProcessHeaderRow) {
+    if(Click && Y == ProcessHeaderRow) {
         for(int i = 0; i < RenderedColumnCount; ++i) {
             const wtop_ui_column_span *Span = &RenderedColumns[i];
             if(X >= Span->start && X - Span->start < Span->width) {
@@ -2468,7 +3005,10 @@ static void HandleMouse(const MOUSE_EVENT_RECORD *Mouse, BOOL *Redraw)
         const process_identity *Identity = &RenderedRows[Y - ProcessWindowPosY];
         for(DWORD i = 0; i < ProcessCount; ++i) {
             if(ProcessList[i].ID == Identity->ID && ProcessList[i].CreationTime == Identity->CreationTime) {
-                FollowProcess = FALSE; SelectProcess(i); *Redraw = TRUE; return;
+                if(!HasFocus() || FocusedIdentity.ID != Identity->ID || FocusedIdentity.CreationTime != Identity->CreationTime || Click) {
+                    FollowProcess = FALSE; FocusProcess(i, Click); *Redraw = TRUE;
+                }
+                return;
             }
         }
         SetViMessage(VI_NOTICE, _T("Clicked process has exited; refresh before acting")); *Redraw = TRUE;
@@ -2626,6 +3166,7 @@ static void JsonMetricInteger(FILE *Output, const char *Name, metric_state State
 
 static wtop_provider_session InspectionProvider;
 static wtop_provider_result *CommandObservation, *ServicesObservation;
+static wtop_provider_result *ImageObservation, *ThreadObservation, *AffinityObservation;
 
 static int CollectInspection(const wtop_options *Options)
 {
@@ -2655,6 +3196,26 @@ static int CollectInspection(const wtop_options *Options)
         if(ShouldStop()) return 130;
         if(ServicesObservation->state != WTOP_PROVIDER_VALID) ExitCode = 3;
     }
+    const BOOL Requested[] = { Options->image_path, Options->threads, Options->affinity };
+    const wtop_provider_kind Kinds[] = { WTOP_PROVIDER_PROCESS_DETAILS, WTOP_PROVIDER_THREADS, WTOP_PROVIDER_AFFINITY };
+    wtop_provider_result **Observations[] = { &ImageObservation, &ThreadObservation, &AffinityObservation };
+    for(size_t i = 0; i < _countof(Requested); ++i) if(Requested[i]) {
+        wtop_provider_result *Observation = calloc(1, sizeof(*Observation));
+        if(!Observation) return 1;
+        *Observations[i] = Observation;
+        Request.kind = Kinds[i];
+        Request.detail_flags = Kinds[i] == WTOP_PROVIDER_PROCESS_DETAILS ? WTOP_DETAIL_IMAGE_PATH : 0;
+        wtop_provider_collect(&InspectionProvider, &Request, 2500, ShutdownEvent, Observation);
+        if(ShouldStop()) return 130;
+        if(Kinds[i] == WTOP_PROVIDER_PROCESS_DETAILS && Observation->state == WTOP_PROVIDER_VALID) {
+            /* This public image-only projection keeps its field's actual state,
+               while preserving worker retirement/error evidence in the wrapper. */
+            Observation->state = Observation->data.details.image_status.state;
+            Observation->error_domain = Observation->data.details.image_status.error_domain;
+            Observation->native_error = Observation->data.details.image_status.native_error;
+        }
+        if(Observation->state != WTOP_PROVIDER_VALID) ExitCode = 3;
+    }
     if(Options->per_core && (!CoreObservation || CoreObservation->state != WTOP_PROVIDER_VALID)) ExitCode = 3;
     return ExitCode;
 }
@@ -2680,9 +3241,25 @@ static BOOL WriteProvider(FILE *Output, const char *Name, const wtop_provider_re
         if(Result->state == WTOP_PROVIDER_VALID) {
             if(!JsonTString(Output, Result->data.command_line)) return FALSE;
         } else fputs("null", Output);
+    } else if(Result->kind == WTOP_PROVIDER_PROCESS_DETAILS) {
+        if(Result->state == WTOP_PROVIDER_VALID) {
+            if(!JsonTString(Output, Result->data.details.image_path)) return FALSE;
+        } else fputs("null", Output);
+    } else if(Result->kind == WTOP_PROVIDER_AFFINITY) {
+        const wtop_provider_affinity *Affinity = &Result->data.affinity;
+        fprintf(Output, "{\"status\":\"%s\",\"error_domain\":%d,\"native_error\":%lu,"
+            "\"mask_bits\":%lu,\"group\":%lu,\"process_group_count\":%lu,\"system_group_count\":%lu,\"limitation\":\"%s\",\"process_mask\":",
+            wtop_provider_state_name(Affinity->status.state), (int)Affinity->status.error_domain, Affinity->status.native_error,
+            Affinity->mask_bits, Affinity->group, Affinity->process_group_count, Affinity->system_group_count,
+            wtop_affinity_limit_name(Affinity->limitation));
+        if(Result->state == WTOP_PROVIDER_VALID && Affinity->status.state == WTOP_PROVIDER_VALID)
+            fprintf(Output, "\"0x%016llx\",\"system_mask\":\"0x%016llx\"}",
+                (unsigned long long)Affinity->process_mask, (unsigned long long)Affinity->system_mask);
+        else fputs("null,\"system_mask\":null}", Output);
     } else if(Result->state == WTOP_PROVIDER_VALID || Result->state == WTOP_PROVIDER_CAPACITY) {
         fputc('[', Output);
-        DWORD Limit = Result->kind == WTOP_PROVIDER_SERVICES ? WTOP_PROVIDER_MAX_SERVICES : WTOP_PROVIDER_MAX_CORES;
+        DWORD Limit = Result->kind == WTOP_PROVIDER_SERVICES ? WTOP_PROVIDER_MAX_SERVICES :
+            (Result->kind == WTOP_PROVIDER_THREADS ? WTOP_PROVIDER_MAX_THREADS : WTOP_PROVIDER_MAX_CORES);
         for(DWORD i = 0; i < Result->count && i < Limit; ++i) {
             if(i) fputc(',', Output);
             if(Result->kind == WTOP_PROVIDER_SERVICES) {
@@ -2694,6 +3271,23 @@ static BOOL WriteProvider(FILE *Output, const char *Name, const wtop_provider_re
                 if(Service->identity_state == WTOP_PROVIDER_VALID)
                     fprintf(Output, "\"%llu\"", (unsigned long long)FileTimeValue(&Service->creation));
                 else fputs("null", Output);
+            } else if(Result->kind == WTOP_PROVIDER_THREADS) {
+                const wtop_provider_thread *Thread = &Result->data.threads[i];
+                fprintf(Output, "{\"tid\":%lu,\"pid\":%lu,\"identity_status\":\"%s\",\"identity_error\":%lu,\"creation_filetime\":",
+                    Thread->tid, Thread->pid, wtop_provider_state_name(Thread->identity_status.state), Thread->identity_status.native_error);
+                if(Thread->identity_status.state == WTOP_PROVIDER_VALID)
+                    fprintf(Output, "\"%llu\"", (unsigned long long)FileTimeValue(&Thread->creation));
+                else fputs("null", Output);
+                fprintf(Output, ",\"times_status\":\"%s\",\"times_error\":%lu,\"kernel_100ns\":",
+                    wtop_provider_state_name(Thread->times_status.state), Thread->times_status.native_error);
+                if(Thread->times_status.state == WTOP_PROVIDER_VALID)
+                    fprintf(Output, "\"%llu\",\"user_100ns\":\"%llu\"", (unsigned long long)Thread->kernel_100ns, (unsigned long long)Thread->user_100ns);
+                else fputs("null,\"user_100ns\":null", Output);
+                fprintf(Output, ",\"priority_status\":\"%s\",\"priority_error\":%lu,\"priority\":",
+                    wtop_provider_state_name(Thread->priority_status.state), Thread->priority_status.native_error);
+                if(Thread->priority_status.state == WTOP_PROVIDER_VALID) fprintf(Output, "%ld", Thread->priority);
+                else fputs("null", Output);
+                fprintf(Output, ",\"observed_ms\":\"%llu\"", (unsigned long long)Thread->observed_ms);
             } else {
                 const wtop_provider_core *Core = &Result->data.cores[i];
                 fputs("{\"instance\":", Output); if(!JsonTString(Output, Core->instance)) return FALSE;
@@ -2779,7 +3373,10 @@ static int WriteSnapshot(FILE *Output, const wtop_options *Options)
         BOOL First = TRUE;
         if(!WriteProvider(Output, "command_line", CommandObservation, &First) ||
            !WriteProvider(Output, "services", ServicesObservation, &First) ||
-           !WriteProvider(Output, "per_core", CoreObservation, &First)) return 1;
+           !WriteProvider(Output, "per_core", CoreObservation, &First) ||
+           !WriteProvider(Output, "image_path", ImageObservation, &First) ||
+           !WriteProvider(Output, "threads", ThreadObservation, &First) ||
+           !WriteProvider(Output, "affinity", AffinityObservation, &First)) return 1;
         fprintf(Output, "},\"text_encoding_loss\":%s}\n", SnapshotTextFlags ? "true" : "false");
     } else {
         fprintf(Output, "Wtop %s - one snapshot (%llu ms measured; CPU normalization %s)\n", WTOP_VERSION_STRING, (unsigned long long)LastSampleElapsed, Normalization);
@@ -2814,7 +3411,10 @@ static int WriteSnapshot(FILE *Output, const wtop_options *Options)
             fputs("PROVIDERS\t{", Output); BOOL First = TRUE;
             if(!WriteProvider(Output, "command_line", CommandObservation, &First) ||
                !WriteProvider(Output, "services", ServicesObservation, &First) ||
-               !WriteProvider(Output, "per_core", CoreObservation, &First)) return 1;
+               !WriteProvider(Output, "per_core", CoreObservation, &First) ||
+           !WriteProvider(Output, "image_path", ImageObservation, &First) ||
+           !WriteProvider(Output, "threads", ThreadObservation, &First) ||
+           !WriteProvider(Output, "affinity", AffinityObservation, &First)) return 1;
             fputs("}\n", Output);
         }
     }
@@ -2867,7 +3467,8 @@ static int RunLog(const wtop_options *Options)
 
 static void ClearRow(int Row)
 {
-    wtop_frame_fill(&Screen.cells, 0, Row, Width, ' ', (WORD)Settings.colors[WTOP_COLOR_BG]);
+    wtop_frame_fill(&Screen.cells, 0, Row, Width, ' ', (WORD)Settings.colors[WTOP_COLOR_BG] |
+        (Settings.background_mode == WTOP_BACKGROUND_TERMINAL ? WTOP_ATTR_DEFAULT_BACKGROUND : 0));
     SetConCursorPos(0, (SHORT)Row);
     SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
 }
@@ -2921,7 +3522,9 @@ static const TCHAR *HelpLines[] = {
     _T("F1 Help   F2 Setup   F3 Search   F4 Filter   F5 Tree"),
     _T("F6 Sort   F7 Prio+   F8 Prio-   F9 Kill    F10 Quit"),
     _T("Arrows/PgUp/PgDn/Home/End navigate. Tab/Shift+Tab changes views."),
-    _T("Start with no process selected. Navigate, click or search to select one."),
+    _T("Start with no highlight or selection. Arrows/search/hover highlight; Enter/click selects."),
+    _T("Grey focus is read-only. Cyan selection or explicit tags are action targets."),
+    _T("d details; H thread rows; a affinity for a confirmed selection; Left/Right collapse/expand."),
     _T("Space tags a lifetime-identified process; U clears tags; F follows."),
     _T("Z pauses/resumes; I reverses sort; P sorts CPU; M sorts memory; B hides/shows the bar."),
     _T("htop: k opens Kill; N sorts PID; h/? helps; S/C opens Setup."),
@@ -2929,7 +3532,7 @@ static const TCHAR *HelpLines[] = {
     _T("Emacs: C-n/C-p move, C-v/M-v page, M-</M-> top/bottom."),
     _T("Emacs: C-s search, C-r previous match, C-g cancel, M-x commands."),
     _T("Emacs: C-x C-s saves. F10/Ctrl+C quit from every view and editor."),
-    _T("Esc cancels the current editor/dialog; on the main view it clears selection/tags/follow."),
+    _T("Esc closes editor/dialog; then selection/tags -> highlight; next Esc clears focus/search/follow."),
     _T("q quits outside text editors. No selection or process target is saved."),
     _T("/: search, \\: live name filter, : commands. Enter accepts, Esc closes."),
     _T("Editor: Left/Right/Home/End; C-a/C-e, C-u clear, C-w word erase."),
@@ -2959,7 +3562,9 @@ static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
         case 8: _stprintf_s(Text, Capacity, _T("Paint interval: %lu ms; input remains immediate"), Settings.frame_interval_ms); break;
         case 9: _stprintf_s(Text, Capacity, _T("Meter width: %d cells"), Settings.meter_width); break;
         case 10: _stprintf_s(Text, Capacity, _T("Meter style: %hs"), wtop_meter_style_name(Settings.meter_style)); break;
-        case 11: _stprintf_s(Text, Capacity, _T("Character set: %hs (complex glyphs retain safe fallback)"), wtop_character_set_name(Settings.character_set)); break;
+        case 11: _stprintf_s(Text, Capacity, _T("Character set: %hs (%s)"), wtop_character_set_name(Settings.character_set),
+            Screen.grapheme_enabled ? _T("host cluster-width probe passed") : _T("conservative host projection")); break;
+        case 12: _stprintf_s(Text, Capacity, _T("Normal background: %hs (terminal default or explicit palette)"), wtop_background_mode_name(Settings.background_mode)); break;
         }
     } else if(SetupPage == 1 || SetupPage == 2) {
         int Items[WTOP_MAX_COLUMNS];
@@ -2972,7 +3577,8 @@ static void SetupLine(int Index, TCHAR *Text, size_t Capacity)
         TCHAR *Name = FromUtf8(Settings.tabs[Index].name);
         _stprintf_s(Text, Capacity, _T("[%c] %s%s"), Settings.tabs[Index].visible ? 'x' : ' ', Name ? Name : _T("?"), Index == Settings.active_tab ? _T(" (active)") : _T(""));
         free(Name);
-    } else _stprintf_s(Text, Capacity, _T("%-24hs 0x%02X (+/- changes Windows color attribute)"), wtop_color_name(Index), Settings.colors[Index]);
+    } else _stprintf_s(Text, Capacity, _T("%-24hs 0x%02X (+/- %s)"), wtop_color_name(Index), Settings.colors[Index],
+        Index >= WTOP_COLOR_FG_FOCUS ? _T("changes palette index 0..15") : _T("changes Windows color attribute 0..255"));
 }
 
 static void DrawEditorStatus(void)
@@ -2984,22 +3590,33 @@ static void DrawEditorStatus(void)
         Prefix = ConPrintf(_T("%.*s | "), max(0, min(22, EditorWidth / 2)), ViMessage);
     }
     EditorWidth = max(1, EditorWidth - Prefix);
-    unsigned long Cursor = ViInputCursor();
-    unsigned long CursorCells = 0;
-    for(unsigned long i = 0; i < Cursor && CurrentInputStr[i]; ++i) {
-#ifdef UNICODE
-        if(CurrentInputStr[i] >= 0xd800 && CurrentInputStr[i] <= 0xdbff && i + 1 < Cursor &&
-           CurrentInputStr[i + 1] >= 0xdc00 && CurrentInputStr[i + 1] <= 0xdfff) ++i;
-#endif
-        ++CursorCells;
+    size_t Length = _tcslen(CurrentInputStr), Cursor = min(ViInputCursor(), (unsigned long)Length);
+    size_t CursorCells = 0, Start = 0, Skipped = 0;
+    /* The one-cell command/search prompt is chrome, not part of the user's
+       grapheme stream. Vi's boundaries likewise start after that prompt. A
+       leading combining mark must receive its own dotted-circle projection,
+       rather than attaching to ':' and shifting the displayed caret. */
+    if(Length) {
+        size_t BodyCells = 0;
+        if(Cursor < 1) Cursor = 1;
+        wtop_text_utf16_span((const unsigned short *)CurrentInputStr + 1, Cursor - 1,
+            (size_t)-1, NativeTextProfile(), &BodyCells, &DisplayTextFlags);
+        CursorCells = 1 + BodyCells;
     }
-    char Text[DEFAULT_STR_SIZE];
-    size_t Cells = NativeAscii(CurrentInputStr, Text, sizeof(Text));
-    if(CursorCells > Cells) CursorCells = (unsigned long)Cells;
-    unsigned long Start = CursorCells >= (unsigned long)EditorWidth ? CursorCells - (unsigned long)EditorWidth + 1 : 0;
+    while(Start < Cursor && CursorCells - Skipped >= (size_t)EditorWidth) {
+        wtop_text_cluster Cluster;
+        if(!Start && Length) { Start = 1; ++Skipped; continue; }
+        if(!wtop_text_next_utf16((const unsigned short *)CurrentInputStr + Start,
+            Length - Start, NativeTextProfile(), &Cluster)) break;
+        Start += Cluster.input_units; Skipped += Cluster.cells;
+    }
     SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
-    ConPrintf(_T("%.*hs"), EditorWidth, Text + Start);
-    wtop_frame_attribute(&Screen.cells, Prefix + (int)(CursorCells - Start), StatusRow,
+    int Available = EditorWidth;
+    if(!Start && Length) { ConWriteSpan(CurrentInputStr, 1); Start = 1; --Available; }
+    size_t Units = wtop_text_utf16_span((const unsigned short *)CurrentInputStr + Start,
+        Length - Start, (size_t)Available, NativeTextProfile(), NULL, &DisplayTextFlags);
+    ConWriteSpan(CurrentInputStr + Start, Units);
+    wtop_frame_attribute(&Screen.cells, Prefix + (int)(CursorCells - Skipped), StatusRow,
         (WORD)Settings.colors[WTOP_COLOR_BG_HIGHLIGHT]);
 }
 
@@ -3007,10 +3624,14 @@ static void DrawOverlay(void)
 {
     SetConCursorPos(0, 0);
     SetColor((WORD)Settings.colors[WTOP_COLOR_HEADER]);
-    const TCHAR *Title = Overlay == OVERLAY_HELP ? _T("Help") : Overlay == OVERLAY_SETUP ? _T("Setup") : Overlay == OVERLAY_SORT ? _T("Sort") : Overlay == OVERLAY_RESULTS ? _T("Actions") : Overlay == OVERLAY_TAB_DELETE ? _T("Delete view") : _T("Terminate");
+    const TCHAR *Title = Overlay == OVERLAY_HELP ? _T("Help") : Overlay == OVERLAY_SETUP ? _T("Setup") : Overlay == OVERLAY_SORT ? _T("Sort") : Overlay == OVERLAY_RESULTS ? _T("Actions") : Overlay == OVERLAY_TAB_DELETE ? _T("Delete view") :
+        Overlay == OVERLAY_DETAILS ? _T("Process details") : Overlay == OVERLAY_THREADS ? _T("Thread rows") :
+        Overlay == OVERLAY_AFFINITY ? _T("Affinity") : Overlay == OVERLAY_AFFINITY_CONFIRM ? _T("Confirm affinity") : _T("Terminate");
     ConPrintf(_T("%s - Wtop [%hs]%s"), Title, wtop_keymap_name(Settings.keymap), ConfigDirty ? _T(" * unsaved") : _T(""));
     SetConCursorPos(0, 1); SetColor((WORD)Settings.colors[WTOP_COLOR_FG]);
-    if(Overlay == OVERLAY_RESULTS) {
+    if(IsInspectionOverlay()) {
+        DrawInspection();
+    } else if(Overlay == OVERLAY_RESULTS) {
         ConPrintf(_T("Up/Down/PgUp/PgDn inspect; Enter/Esc returns. Requested means not yet confirmed."));
         for(DWORD i = (DWORD)OverlayTop; i < LastActionCount && i - (DWORD)OverlayTop < (DWORD)max(0, Height - 5); ++i) {
             const wtop_action_result *Result = &LastActionResults[i];
@@ -3202,7 +3823,7 @@ static void ComposeFrame(void)
         if(Index >= ViewCount) break;
         const process *Process = &ProcessList[ViewIndices[Index]];
         SetConCursorPos(0, (SHORT)(ProcessWindowPosY + (int)i));
-        WriteProcessInfo(Process, HasSelection() && Index == SelectedViewIndex);
+        WriteProcessInfo(Process, HasFocus() && Index == FocusedViewIndex, HasSelection() && Index == SelectedViewIndex);
         RenderedRows[RenderedRowCount].ID = Process->ID;
         RenderedRows[RenderedRowCount++].CreationTime = Process->CreationTime;
     }
@@ -3224,7 +3845,8 @@ static void ComposeFrame(void)
 static void DrawFrame(void)
 {
     if(!wtop_console_frame_begin(&Screen, ConsoleHandle, Width, Height,
-        ConsoleOriginX, ConsoleOriginY, (WORD)Settings.colors[WTOP_COLOR_BG])) {
+        ConsoleOriginX, ConsoleOriginY, (WORD)Settings.colors[WTOP_COLOR_BG] |
+        (Settings.background_mode == WTOP_BACKGROUND_TERMINAL ? WTOP_ATTR_DEFAULT_BACKGROUND : 0))) {
         CollectorError = Screen.error; RequestShutdown(); return;
     }
     RenderRow = RenderColumn = 0;
@@ -3357,6 +3979,9 @@ int _tmain(int argc, TCHAR *argv[])
         ScreenCreated = TRUE;
         if(!SetConsoleActiveScreenBuffer(ConsoleHandle)) { Result = 1; goto Cleanup; }
         SetConsoleMode(ConsoleHandle, ENABLE_PROCESSED_OUTPUT);
+        if(!wtop_console_frame_configure(&Screen, ConsoleHandle, SavedAttributes, TRUE)) {
+            Result = 1; goto Cleanup;
+        }
         InputModeChanged = TRUE; /* Restore the exact caller mode even after a partial setup failure. */
         ConfigureMouse();
         PollConsoleInfo();
@@ -3381,6 +4006,7 @@ int _tmain(int argc, TCHAR *argv[])
         ULONGLONG Now = GetTickCount64();
         BOOL FrameDue = InputRedraw || Now - LastDraw >= Settings.frame_interval_ms;
         if(AdoptFrameSamples(FrameDue)) Redraw = TRUE;
+        if(AdoptInspection()) Redraw = TRUE;
         if(!Paused && Now - LastSystemPoll >= Settings.interval_ms) {
             PollSystemInfo(); LastSystemPoll = Now; Redraw = TRUE;
         }
@@ -3394,7 +4020,7 @@ int _tmain(int argc, TCHAR *argv[])
 Cleanup:
     RequestShutdown();
     /* Restore caller-owned console state even if a native query cannot finish. */
-    if(ScreenCreated) { RestoreConsole(); CloseHandle(ConsoleHandle); ConsoleHandle = OldConsoleHandle; }
+    if(ScreenCreated) { wtop_console_frame_restore(&Screen); RestoreConsole(); CloseHandle(ConsoleHandle); ConsoleHandle = OldConsoleHandle; }
     if(InputModeChanged) SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), OriginalInputMode);
     if(ProcessListThread) {
         if(WaitForSingleObject(ProcessListThread, SHUTDOWN_GRACE_MS) != WAIT_OBJECT_0) {
@@ -3420,6 +4046,12 @@ Cleanup:
         }
         CloseHandle(PerCoreThread); PerCoreThread = NULL;
     }
+    if(!wtop_tui_inspection_stop(&DetailWorker, SHUTDOWN_GRACE_MS)) {
+        OutputDebugString(_T("wtop: inspection/action worker did not retire; own monitor exit 124; an in-flight target action may have completed.\n"));
+        TerminateProcess(GetCurrentProcess(), EXIT_FORCED_SHUTDOWN); ExitProcess(EXIT_FORCED_SHUTDOWN);
+    }
+    AdoptInspection(); /* Preserve a final queued/active action outcome after join. */
+    free(DetailObservation); DetailObservation = NULL;
     free(PendingCoreObservation); PendingCoreObservation = NULL;
     if(!wtop_provider_session_close(&OwnerProvider, 1000)) {
         fputs("wtop: owner-provider retirement not confirmed; exiting with owned job cleanup\n", stderr);
@@ -3430,6 +4062,9 @@ Cleanup:
     if(!wtop_provider_session_close(&InspectionProvider, 1000)) Result = EXIT_FORCED_SHUTDOWN;
     free(CommandObservation); CommandObservation = NULL;
     free(ServicesObservation); ServicesObservation = NULL;
+    free(ImageObservation); ImageObservation = NULL;
+    free(ThreadObservation); ThreadObservation = NULL;
+    free(AffinityObservation); AffinityObservation = NULL;
     wtop_console_frame_dispose(&Screen);
     ViDestroy();
     free(ViMessage); ViMessage = NULL;
@@ -3438,6 +4073,7 @@ Cleanup:
     free(TaggedProcessList); TaggedProcessList = NULL;
     free(ViewIndices); ViewIndices = NULL;
     free(RenderedRows); RenderedRows = NULL;
+    free(CollapsedProcesses); CollapsedProcesses = NULL; CollapsedCount = CollapsedCapacity = 0;
     free(PendingKills); PendingKills = NULL;
     free(LastActionResults); LastActionResults = NULL; LastActionCount = 0;
     if(Initialized) DeleteCriticalSection(&SyncLock);

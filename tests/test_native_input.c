@@ -32,7 +32,7 @@ static void compose(void)
 
 static void reset(void)
 {
-    CancelEditor(); CloseOverlay(); ClearViMessage(); ClearSelection();
+    CancelEditor(); CloseOverlay(); ClearViMessage(); ClearSelection(); ClearFocus();
     free(ProcessList);
     ProcessList = calloc(3, sizeof(*ProcessList));
     assert(ProcessList);
@@ -58,46 +58,56 @@ static void reset(void)
     MouseEnabled = TRUE; LastMouseButtons = 0;
     InteractiveMode = TRUE;
     ApplyActiveTab();
-    assert(!HasSelection() && SelectedViewIndex == MAXDWORD);
+    assert(!HasSelection() && !HasFocus() && SelectedViewIndex == MAXDWORD);
     compose();
 }
 
 static void no_implicit_target(void)
 {
     reset();
-    assert(!DisplayedProcessID && !DisplayedCreationTime);
+    assert(!DisplayedProcessID && !DisplayedCreationTime && !HasFocus());
     wtop_ui_context_options context = CurrentUiContext();
     wtop_ui_binding binding;
-    assert(!context.has_selection && !context.identity_known);
+    assert(!context.has_selection && !context.identity_known && !context.has_focus);
     wtop_ui_resolve_function(&context, 8, &binding);
     assert(!binding.enabled && binding.reason == WTOP_UI_NO_SELECTION);
     key(VK_F9, 0, 0);
     assert(Overlay == OVERLAY_NONE && !PendingKills && !PendingKillCount);
-    key(' ', ' ', 0);
-    key('F', 'F', 0);
+    key(' ', ' ', 0); key('F', 'F', 0);
     assert(!HasSelection() && !TaggedProcessListCount && !FollowProcess);
 
-    /* The first navigation gesture selects the first visible process rather
-       than moving past a row the user had never selected. */
     key(VK_DOWN, 0, 0);
+    assert(HasFocus() && FocusedIdentity.ID == 10 && !HasSelection());
+    compose();
+    assert(!DisplayedProcessID);
+    assert((Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute & 255) == 0x8f);
+    key(VK_F9, 0, 0);
+    assert(Overlay == OVERLAY_NONE && !PendingKills);
+    key(VK_RETURN, '\r', 0);
     assert(HasSelection() && SelectedIdentity.ID == 10);
     compose();
     assert(DisplayedProcessID == 10 && DisplayedCreationTime == 100);
-    assert(Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute == 0x30);
-    key(VK_ESCAPE, 27, 0);
-    assert(!HasSelection());
+    assert((Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute & 255) == 0x30);
+    key(VK_DOWN, 0, 0);
+    assert(HasFocus() && FocusedIdentity.ID == 11 && HasSelection() && SelectedIdentity.ID == 10);
     compose();
-    assert(Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute == 0x07);
-    key(VK_UP, 0, 0);
-    assert(HasSelection() && SelectedIdentity.ID == 10);
+    key(VK_ESCAPE, 27, 0);
+    assert(!HasSelection() && HasFocus() && FocusedIdentity.ID == 10);
+    compose();
+    assert((Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute & 255) == 0x8f);
+    key(VK_ESCAPE, 27, 0);
+    assert(!HasSelection() && !HasFocus());
+    compose();
+    assert(Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute & WTOP_ATTR_DEFAULT_BACKGROUND);
+    assert((Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute & 255) == 0x07);
 
-    ClearSelection(); VisibleProcessCount = 2;
+    VisibleProcessCount = 2;
     BOOL redraw = FALSE;
     DoScroll(SCROLL_PAGE_DOWN, &redraw);
-    assert(redraw && HasSelection() && SelectedIdentity.ID == 11);
-    ClearSelection();
+    assert(redraw && HasFocus() && FocusedIdentity.ID == 11 && !HasSelection());
+    ClearFocus();
     StartSearch(_T("fixture"));
-    assert(HasSelection() && SelectedIdentity.ID == 10);
+    assert(HasFocus() && FocusedIdentity.ID == 10 && !HasSelection());
 }
 
 static void lifetime_selection(void)
@@ -164,6 +174,37 @@ static void mouse_and_presented_identity(void)
     assert(!HasSelection());
 }
 
+static void hover_never_retargets_selection(void)
+{
+    reset();
+    MOUSE_EVENT_RECORD mouse = {0};
+    BOOL redraw = FALSE;
+    mouse.dwMousePosition.X = 1;
+    mouse.dwMousePosition.Y = (SHORT)(ProcessWindowPosY + 1);
+    mouse.dwEventFlags = MOUSE_MOVED;
+    HandleMouse(&mouse, &redraw);
+    assert(redraw && HasFocus() && FocusedIdentity.ID == 11 && !HasSelection());
+    compose();
+    key(VK_RETURN, '\r', 0); compose();
+    assert(SelectedIdentity.ID == 11 && SelectionMatchesDisplay());
+    mouse.dwMousePosition.Y = (SHORT)ProcessWindowPosY;
+    HandleMouse(&mouse, &redraw); compose();
+    assert(FocusedIdentity.ID == 10 && SelectedIdentity.ID == 11);
+    key(VK_F9, 0, 0);
+    assert(Overlay == OVERLAY_KILL && PendingKillCount == 1 && PendingKills[0].ID == 11);
+    key(VK_ESCAPE, 27, 0);
+    assert(HasSelection() && SelectedIdentity.ID == 11 && FocusedIdentity.ID == 10);
+    Settings.colors[WTOP_COLOR_FG_FOCUS] = 2;
+    Settings.colors[WTOP_COLOR_BG_FOCUS] = 5;
+    Settings.colors[WTOP_COLOR_FG_SELECTED] = 14;
+    Settings.colors[WTOP_COLOR_BG_SELECTED] = 0;
+    compose();
+    assert((Screen.cells.back[(size_t)ProcessWindowPosY * Width].attribute & 255) == 0x52);
+    WORD selected = Screen.cells.back[(size_t)(ProcessWindowPosY + 1) * Width].attribute;
+    assert((selected & 255) == 0x0e && (selected & WTOP_ATTR_EXPLICIT_BACKGROUND));
+    assert(!(selected & WTOP_ATTR_DEFAULT_BACKGROUND));
+}
+
 static void escape_layers(void)
 {
     reset();
@@ -192,10 +233,12 @@ static void escape_layers(void)
     ConfigDirty = TRUE;
     wtop_settings before = Settings;
     key(VK_ESCAPE, 27, 0);
-    assert(!HasSelection() && !TaggedProcessListCount && !FollowProcess && !SearchActive);
+    assert(!HasSelection() && !TaggedProcessListCount && HasFocus() && SearchActive);
     assert(ConfigDirty && !memcmp(&Settings, &before, sizeof(Settings)));
-    key(VK_ESCAPE, 27, 0); /* Idempotent recovery, never an implicit quit. */
-    assert(!HasSelection() && !ShouldStop());
+    key(VK_ESCAPE, 27, 0); /* Second main Escape retires highlight/search/follow. */
+    assert(!HasSelection() && !HasFocus() && !FollowProcess && !SearchActive && !ShouldStop());
+    key(VK_ESCAPE, 27, 0); /* Idempotent, never implicit quit. */
+    assert(!ShouldStop());
 
     key(VK_F4, 0, 0);
     key('X', 'x', 0);
@@ -280,7 +323,7 @@ static void diagnostic_keeps_controls(void)
     frame_text(Height - 1, line, sizeof(line));
     assert(strstr(line, "F9Save") && strstr(line, "F10Quit"));
     for(int x = FooterStarts[8]; x < FooterStarts[8] + FooterWidths[8]; ++x)
-        assert(Screen.cells.back[(size_t)(Height - 1) * Width + x].attribute == 0x08);
+        assert((Screen.cells.back[(size_t)(Height - 1) * Width + x].attribute & 255) == 0x08);
 
     MOUSE_EVENT_RECORD mouse = {0};
     BOOL redraw = FALSE;
@@ -413,12 +456,199 @@ static void overlays_keep_live_status(void)
     assert(strstr(line, "rows 2/6"));
 }
 
+static int frame_contains(const char *needle)
+{
+    char line[121];
+    assert(Width <= 120);
+    for(int row = 0; row < Height; ++row) {
+        frame_text(row, line, sizeof(line));
+        if(strstr(line, needle)) return 1;
+    }
+    return 0;
+}
+
+static void editor_grapheme_navigation(void)
+{
+    reset();
+    static const WCHAR combining[] = { L'e', 0x0301, L'Z', 0 };
+    static const WCHAR emoji[] = { 0xd83d, 0xdc69, 0x200d, 0xd83d, 0xdcbb, L'Z', 0 };
+    assert(ViSetInputText(L':', combining));
+    assert(ViInputCursor() == 4);
+    key(VK_LEFT, 0, 0); assert(ViInputCursor() == 3);
+    key(VK_LEFT, 0, 0); assert(ViInputCursor() == 1);
+    key(VK_RIGHT, 0, 0); assert(ViInputCursor() == 3);
+    key(VK_BACK, 0, 0); assert(ViInputCursor() == 1 && !wcscmp(CurrentInputStr, L":Z"));
+    key(VK_DELETE, 0, 0); assert(!wcscmp(CurrentInputStr, L":"));
+    assert(ViSetInputText(L':', emoji));
+    assert(ViInputCursor() == 7);
+    key(VK_LEFT, 0, 0); assert(ViInputCursor() == 6);
+    key(VK_LEFT, 0, 0); assert(ViInputCursor() == 1);
+    key(VK_RIGHT, 0, 0); assert(ViInputCursor() == 6);
+    key(VK_BACK, 0, 0); assert(ViInputCursor() == 1 && !wcscmp(CurrentInputStr, L":Z"));
+    key(VK_ESCAPE, 27, 0);
+    assert(!InInputMode && !HasSelection() && !HasFocus());
+    StartEditor(L':');
+    key('E', L'e', 0); key(VK_PACKET, 0x0301, 0);
+    assert(ViInputCursor() == 3);
+    key(VK_BACK, 0, 0);
+    assert(ViInputCursor() == 1 && !wcscmp(CurrentInputStr, L":"));
+    key(VK_ESCAPE, 27, 0);
+    {
+        static const WCHAR leading_mark[] = {0x0301, L'Z', 0};
+        static const WCHAR adjacent_emoji[] = {0xd83d,0xdc69,0xd83d,0xdcbb,0};
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        /* Prompt and body are separate grapheme streams. These assertions use
+           the actual composed frame and Vi caret, not a duplicate renderer. */
+        Screen.vt_enabled = 1;
+        Screen.grapheme_enabled = 1;
+        compose();
+        size_t row = (size_t)StatusRow * (size_t)Width;
+        assert(Screen.cells.back[row].glyph == ':' && !Screen.cells.back[row].cluster_units);
+        assert(Screen.cells.back[row + 1].glyph == 0x25cc && Screen.cells.back[row + 1].cluster_units == 2);
+        assert(Screen.cells.back[row + 2].glyph == 'Z');
+        assert((Screen.cells.back[row + 1].attribute & 255) == 0x30);
+        key(VK_RIGHT, 0, 0); compose();
+        assert(ViInputCursor() == 2 && (Screen.cells.back[row + 2].attribute & 255) == 0x30);
+        key(VK_HOME, 0, 0);
+        /* VT colours can remain available on a host that failed the native
+           cluster-width probe; rendering must still use the fallback. */
+        Screen.grapheme_enabled = 0;
+        compose();
+        assert(Screen.cells.back[row].glyph == ':' && Screen.cells.back[row + 1].glyph == '?');
+        assert(Screen.cells.back[row + 2].glyph == 'Z' && (Screen.cells.back[row + 1].attribute & 255) == 0x30);
+        Screen.vt_enabled = 0;
+        key('E', L'e', 0);
+        assert(ViInputCursor() == 3); /* Newly joined e+accent, not an interior caret. */
+        key(VK_BACK, 0, 0); assert(!wcscmp(CurrentInputStr, L":Z"));
+        assert(ViSetInputText(L':', adjacent_emoji)); key(VK_HOME, 0, 0); key(VK_RIGHT, 0, 0);
+        assert(ViInputCursor() == 3);
+        key(VK_PACKET, 0x200d, 0); /* Insertion joins both neighboring pictographs. */
+        assert(ViInputCursor() == 6);
+        key(VK_BACK, 0, 0); assert(!wcscmp(CurrentInputStr, L":"));
+        key(VK_ESCAPE, 27, 0);
+    }
+    {
+        static const WCHAR leading_mark[] = {0x0301, L'Z', 0};
+        static const WCHAR completed[] = {L':', 0xd83d, 0xde00, 0x0301, L'Z', 0};
+        static const WCHAR unmatched[] = {L':', 0xd83d, 0x0301, L'e', L'Z', 0};
+        /* Actual console input sends the surrogate units as separate records.
+           A following mark must not be moved between those raw UTF-16 units. */
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key(VK_PACKET, 0xde00, 0);
+        assert(!wcscmp(CurrentInputStr, completed) && ViInputCursor() == 4);
+        key(VK_LEFT, 0, 0); assert(ViInputCursor() == 1);
+        key(VK_RIGHT, 0, 0); assert(ViInputCursor() == 4);
+        key(VK_BACK, 0, 0); assert(!wcscmp(CurrentInputStr, L":Z"));
+
+        /* Interrupted pairs retain the unmatched raw unit. The next edit is
+           applied at the whole-cluster boundary, including attached marks. */
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key('E', L'e', 0);
+        assert(!wcscmp(CurrentInputStr, unmatched) && ViInputCursor() == 4);
+        key(VK_BACK, 0, 0); key(VK_BACK, 0, 0);
+        assert(!wcscmp(CurrentInputStr, L":Z") && ViInputCursor() == 1);
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key(VK_BACK, 0, 0);
+        assert(!wcscmp(CurrentInputStr, L":Z") && ViInputCursor() == 1);
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key(VK_HOME, 0, 0); key(VK_DELETE, 0, 0);
+        assert(!wcscmp(CurrentInputStr, L":Z") && ViInputCursor() == 1);
+
+        WCHAR full[DEFAULT_STR_SIZE - 2];
+        for(size_t i = 0; i < _countof(full) - 1; ++i) full[i] = L'x';
+        full[_countof(full) - 1] = 0;
+        assert(ViSetInputText(L':', full));
+        key(VK_PACKET, 0xd83d, 0); key(VK_PACKET, 0xde00, 0);
+        assert(!wcscmp(CurrentInputStr + 1, full));
+        assert(ViInputCursor() == DEFAULT_STR_SIZE - 2);
+        key(VK_ESCAPE, 27, 0);
+    }
+}
+
+static void captured_inspection_panels(void)
+{
+    reset(); SelectView(0); compose();
+    DetailIdentity = SelectedIdentity; DetailSnapshot = ProcessList[SelectedProcessIndex];
+    Overlay = OVERLAY_DETAILS;
+    DetailObservation = calloc(1, sizeof(*DetailObservation));
+    assert(DetailObservation);
+    DetailObservation->kind = WTOP_PROVIDER_PROCESS_DETAILS;
+    DetailObservation->state = WTOP_PROVIDER_VALID; DetailObservation->response_received = 1;
+    DetailObservation->pid = 10; DetailObservation->creation = IdentityFileTime(DetailIdentity);
+    wtop_provider_details *details = &DetailObservation->data.details;
+    details->image_status.state = WTOP_PROVIDER_VALID;
+    wcscpy_s(details->image_path, _countof(details->image_path), L"C:\\owned\\fixture.exe");
+    details->command_status.state = WTOP_PROVIDER_VALID;
+    for(int i = 0; i < 6000; ++i) details->command_line[i] = L'x';
+    wcscpy_s(details->command_line + 6000, _countof(details->command_line) - 6000, L"TAIL-COMMAND-MARKER");
+    details->services_status.state = WTOP_PROVIDER_DENIED;
+    details->services_status.error_domain = WTOP_PROVIDER_ERROR_WIN32;
+    details->services_status.native_error = ERROR_ACCESS_DENIED;
+    details->affinity.status.state = WTOP_PROVIDER_UNSUPPORTED;
+    compose();
+    assert(frame_contains("Process details") && DetailLineCount > 60);
+    assert(!frame_contains("TAIL-COMMAND-MARKER"));
+    int reached_tail = 0, reached_denied = 0;
+    for(int i = 0; i < 8; ++i) {
+        key(VK_NEXT, 0, 0); compose();
+        reached_tail |= frame_contains("TAIL-COMMAND-MARKER");
+        reached_denied |= frame_contains("Services: denied");
+    }
+    assert(reached_tail && reached_denied); /* Full content, not a clipped formatter prefix. */
+    key(VK_ESCAPE, 27, 0);
+    assert(Overlay == OVERLAY_NONE && !DetailObservation && HasSelection());
+
+    DetailIdentity = SelectedIdentity; DetailSnapshot = ProcessList[SelectedProcessIndex];
+    Overlay = OVERLAY_THREADS;
+    DetailObservation = calloc(1, sizeof(*DetailObservation));
+    assert(DetailObservation);
+    DetailObservation->kind = WTOP_PROVIDER_THREADS;
+    DetailObservation->state = WTOP_PROVIDER_CAPACITY; DetailObservation->response_received = 1;
+    DetailObservation->count = 3; DetailObservation->total_count = 4;
+    for(DWORD i = 0; i < 3; ++i) {
+        wtop_provider_thread *thread = &DetailObservation->data.threads[i];
+        thread->tid = 800 + i; thread->pid = 10; thread->creation.dwLowDateTime = 4000 + i;
+        thread->identity_status.state = WTOP_PROVIDER_VALID;
+        thread->times_status.state = i == 1 ? WTOP_PROVIDER_DENIED : WTOP_PROVIDER_VALID;
+        thread->priority_status.state = i == 1 ? WTOP_PROVIDER_DENIED : WTOP_PROVIDER_VALID;
+        thread->kernel_100ns = 123; thread->user_100ns = 456; thread->priority = 1;
+    }
+    compose();
+    assert(frame_contains("Thread rows") && frame_contains("3 returned / 4 observed"));
+    assert(frame_contains("TID 800") && frame_contains("TID 802") && frame_contains("execution time: denied"));
+    assert(frame_contains("relative priority ? [denied]"));
+    key(VK_ESCAPE, 27, 0);
+
+    DetailIdentity = SelectedIdentity; DetailSnapshot = ProcessList[SelectedProcessIndex];
+    Overlay = OVERLAY_AFFINITY;
+    DetailObservation = calloc(1, sizeof(*DetailObservation));
+    assert(DetailObservation);
+    DetailObservation->kind = WTOP_PROVIDER_AFFINITY;
+    DetailObservation->observed_ms = GetTickCount64();
+    DetailObservation->state = WTOP_PROVIDER_VALID;
+    DetailObservation->data.affinity.status.state = WTOP_PROVIDER_VALID;
+    DetailObservation->data.affinity.mask_bits = 4;
+    DetailObservation->data.affinity.system_mask = 15;
+    DetailObservation->data.affinity.process_mask = AffinityMask = 3;
+    AffinityChoice = 0;
+    compose();
+    key(' ', ' ', 0); assert(AffinityMask == 2);
+    key(VK_RETURN, '\r', 0); assert(Overlay == OVERLAY_AFFINITY_CONFIRM);
+    key(VK_F9, 0, 0); key(VK_RETURN, '\r', 0);
+    assert(Overlay == OVERLAY_AFFINITY_CONFIRM && !AffinityActionRunning && !DetailWorker.initialized);
+    key(VK_ESCAPE, 27, 0); assert(Overlay == OVERLAY_AFFINITY);
+    AffinityMask = 0; ReviewAffinity(); assert(Overlay == OVERLAY_AFFINITY && frame_contains("Affinity"));
+    ReadOnlyMode = TRUE; AffinityMask = 2; ToggleAffinityChoice();
+    assert(AffinityMask == 2 && !AffinityActionRunning);
+    key(VK_ESCAPE, 27, 0); assert(!DetailObservation);
+}
+
 static void interrupt_every_context(void)
 {
     for(int map = WTOP_KEYMAP_HTOP; map <= WTOP_KEYMAP_EMACS; ++map) {
         /* Main, Help, Setup, Sort, Kill, Results, command/search/filter/rename
            editors, pause and the Emacs prefix all share one raw-key contract. */
-        for(int state = 0; state < 12; ++state) {
+        for(int state = 0; state < 16; ++state) {
             reset(); Settings.keymap = (wtop_keymap)map;
             SelectView(0); compose();
             if(state == 1) Overlay = OVERLAY_HELP;
@@ -430,6 +660,10 @@ static void interrupt_every_context(void)
             if(state == 9) { Overlay = OVERLAY_SETUP; SetupPage = 3; SetupIndex = 0; EditSetupTab(WTOP_UI_TAB_RENAME); }
             if(state == 10) { Paused = TRUE; InterlockedExchange(&CollectionPaused, 1); }
             if(state == 11) EmacsPrefix = TRUE;
+            if(state == 12) Overlay = OVERLAY_DETAILS;
+            if(state == 13) Overlay = OVERLAY_THREADS;
+            if(state == 14) Overlay = OVERLAY_AFFINITY;
+            if(state == 15) Overlay = OVERLAY_AFFINITY_CONFIRM;
             key('C', 3, LEFT_CTRL_PRESSED);
             assert(ShouldStop());
             assert(WaitForSingleObject(ShutdownEvent, 0) == WAIT_OBJECT_0);
@@ -450,16 +684,19 @@ int main(void)
     no_implicit_target();
     lifetime_selection();
     mouse_and_presented_identity();
+    hover_never_retargets_selection();
     escape_layers();
     pending_samples_do_not_drop_hits();
     pending_sample_selection();
     diagnostic_keeps_controls();
     overlays_keep_live_status();
+    editor_grapheme_navigation();
+    captured_inspection_panels();
     interrupt_every_context();
     CancelEditor(); CloseOverlay();
     ViDestroy();
     free(ViMessage); free(TaggedProcessList); free(ProcessList);
-    free(ViewIndices); free(RenderedRows);
+    free(ViewIndices); free(RenderedRows); free(CollapsedProcesses);
     wtop_console_frame_dispose(&Screen);
     CloseHandle(ShutdownEvent);
     DeleteCriticalSection(&SyncLock);

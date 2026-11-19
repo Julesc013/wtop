@@ -7,7 +7,8 @@ static const char *const color_names[WTOP_COLOR_COUNT] = {
     "FGColor", "BGColor", "FGHighlightColor", "BGHighlightColor",
     "MenuBarColor", "ProcessListHeaderColor", "CPUBarColor", "MemoryBarColor",
     "PageMemoryBarColor", "ErrorColor", "TaggedColor", "FollowColor",
-    "MeterLabelColor", "FunctionKeyColor"
+    "MeterLabelColor", "FunctionKeyColor", "FocusForeground", "FocusBackground",
+    "SelectionForeground", "SelectionBackground"
 };
 static const char *const column_names[WTOP_MAX_COLUMNS] = {
     "ID", "USER", "PRI", "CPU%", "MEM", "THRD", "I/O", "AGE", "PROCESS"
@@ -18,12 +19,12 @@ static const char *const row_names[WTOP_HEADER_ROWS] = {
 static const char *const base_names[] = {
     "ConfigVersion", "Theme", "Keymap", "Mouse", "FunctionBar", "ShowTabs",
     "HeaderRows", "RedrawInterval", "TabCount", "ActiveTab", "NextTabId",
-    "FooterStyle", "StatusPosition", "FrameInterval", "MeterWidth", "MeterStyle", "CharacterSet"
+    "FooterStyle", "StatusPosition", "FrameInterval", "MeterWidth", "MeterStyle", "CharacterSet", "BackgroundMode"
 };
 static const char *const tab_names[] = {
     "Name", "Filter", "Visible", "Sort", "Descending", "Tree", "Columns", "Id"
 };
-#define BASE_KEYS 17
+#define BASE_KEYS 18
 #define TAB_FIELDS 8
 #define TAB_KEY_BASE (BASE_KEYS + WTOP_COLOR_COUNT)
 #define KEY_COUNT (TAB_KEY_BASE + WTOP_MAX_TABS * TAB_FIELDS)
@@ -104,6 +105,8 @@ static const char *const footer_names[] = { "functions", "compact", "status" };
 static const char *const status_names[] = { "banner", "bottom", "hidden" };
 static const char *const meter_names[] = { "bars", "blocks", "text" };
 static const char *const charset_names[] = { "ascii", "unicode" };
+static const char *const background_names[] = { "terminal", "palette" };
+const char *wtop_background_mode_name(int v) { return v >= 0 && v < 2 ? background_names[v] : "invalid"; }
 const char *wtop_footer_style_name(int v) { return v >= 0 && v < 3 ? footer_names[v] : "invalid"; }
 const char *wtop_status_position_name(int v) { return v >= 0 && v < 3 ? status_names[v] : "invalid"; }
 const char *wtop_meter_style_name(int v) { return v >= 0 && v < 3 ? meter_names[v] : "invalid"; }
@@ -128,6 +131,11 @@ int wtop_parse_character_set(const char *text, wtop_character_set *value)
 {
     int v; if (!named_value(text, charset_names, 2, &v)) return 0;
     *value = (wtop_character_set)v; return 1;
+}
+int wtop_parse_background_mode(const char *text, wtop_background_mode *value)
+{
+    int v; if (!named_value(text, background_names, 2, &v)) return 0;
+    *value = (wtop_background_mode)v; return 1;
 }
 int wtop_parse_keymap(const char *text, wtop_keymap *value)
 {
@@ -170,9 +178,9 @@ int wtop_parse_column(const char *text, int *value)
 void wtop_settings_set_theme(wtop_settings *settings, wtop_theme theme)
 {
     static const unsigned int schemes[3][WTOP_COLOR_COUNT] = {
-        { 0x07, 0x00, 0x0b, 0x30, 0x30, 0x20, 0x02, 0x02, 0x03, 0x4f, 0x0e, 0x60, 0x03, 0x07 },
-        { 0x07, 0x08, 0x0b, 0xb0, 0x10, 0x20, 0x04, 0x02, 0x02, 0x47, 0x08, 0xb0, 0x0b, 0x07 },
-        { 0x07, 0x00, 0x0f, 0x70, 0x70, 0x70, 0x07, 0x07, 0x07, 0x70, 0x0f, 0x70, 0x07, 0x07 }
+        { 0x07, 0x00, 0x0b, 0x30, 0x30, 0x20, 0x02, 0x02, 0x03, 0x4f, 0x0e, 0x60, 0x03, 0x07, 15, 8, 0, 3 },
+        { 0x07, 0x08, 0x0b, 0xb0, 0x10, 0x20, 0x04, 0x02, 0x02, 0x47, 0x08, 0xb0, 0x0b, 0x07, 15, 8, 0, 11 },
+        { 0x07, 0x00, 0x0f, 0x70, 0x70, 0x70, 0x07, 0x07, 0x07, 0x70, 0x0f, 0x70, 0x07, 0x07, 15, 8, 0, 7 }
     };
     if (theme < WTOP_THEME_HTOP || theme > WTOP_THEME_MONO) return;
     settings->theme = theme;
@@ -194,6 +202,7 @@ void wtop_settings_defaults(wtop_settings *settings)
     settings->meter_width = 25;
     settings->meter_style = WTOP_METER_BARS;
     settings->character_set = WTOP_CHARSET_UNICODE;
+    settings->background_mode = WTOP_BACKGROUND_TERMINAL;
     settings->keymap = WTOP_KEYMAP_HTOP;
     settings->mouse = WTOP_MOUSE_AUTO;
     settings->show_function_bar = 1;
@@ -249,12 +258,13 @@ int wtop_settings_validate(const wtop_settings *settings, const char **error)
         settings->status_position < WTOP_STATUS_BANNER || settings->status_position > WTOP_STATUS_HIDDEN ||
         settings->meter_style < WTOP_METER_BARS || settings->meter_style > WTOP_METER_TEXT ||
         settings->character_set < WTOP_CHARSET_ASCII || settings->character_set > WTOP_CHARSET_UNICODE ||
+        settings->background_mode < WTOP_BACKGROUND_TERMINAL || settings->background_mode > WTOP_BACKGROUND_PALETTE ||
         settings->frame_interval_ms < 16 || settings->frame_interval_ms > 1000 ||
         settings->meter_width < 8 || settings->meter_width > 80) {
         *error = "invalid general setting"; return 0;
     }
-    for (i = 0; i < WTOP_COLOR_COUNT; ++i) if (settings->colors[i] > 255) {
-        *error = "color attributes must be 0..255"; return 0;
+    for (i = 0; i < WTOP_COLOR_COUNT; ++i) if (settings->colors[i] > (i >= WTOP_COLOR_FG_FOCUS ? 15U : 255U)) {
+        *error = "legacy color attributes must be 0..255; semantic palette indices must be 0..15"; return 0;
     }
     if (settings->header_count < 0 || settings->header_count > WTOP_HEADER_ROWS) {
         *error = "invalid header-row count"; return 0;
@@ -712,6 +722,7 @@ static int apply_key(wtop_settings *settings, int id, char *value)
         settings->meter_style = (wtop_meter_style)v; return 1;
     }
     case 16: return wtop_parse_character_set(value, &settings->character_set);
+    case 17: return wtop_parse_background_mode(value, &settings->background_mode);
     }
     return 0;
 }
@@ -846,6 +857,15 @@ int wtop_settings_read(FILE *input, wtop_settings *settings, wtop_config_documen
         start = end < length ? end + 1 : end;
     }
     for (i = 0; i < WTOP_COLOR_COUNT; ++i) if (seen[BASE_KEYS + i]) candidate.colors[i] = explicit_colors[i];
+    /* An explicit old background remains intentional. New BackgroundMode wins
+       independently of record order. Old highlight was a complete attribute. */
+    if (!seen[17] && seen[BASE_KEYS + WTOP_COLOR_BG]) candidate.background_mode = WTOP_BACKGROUND_PALETTE;
+    if (seen[BASE_KEYS + WTOP_COLOR_BG_HIGHLIGHT]) {
+        if (!seen[BASE_KEYS + WTOP_COLOR_FG_SELECTED])
+            candidate.colors[WTOP_COLOR_FG_SELECTED] = candidate.colors[WTOP_COLOR_BG_HIGHLIGHT] & 15U;
+        if (!seen[BASE_KEYS + WTOP_COLOR_BG_SELECTED])
+            candidate.colors[WTOP_COLOR_BG_SELECTED] = (candidate.colors[WTOP_COLOR_BG_HIGHLIGHT] >> 4) & 15U;
+    }
     for (i = candidate.tab_count; i < WTOP_MAX_TABS; ++i) {
         int field;
         for (field = 0; field < TAB_FIELDS; ++field) if (seen[TAB_KEY_BASE + i * TAB_FIELDS + field]) {
@@ -963,6 +983,7 @@ static int write_value(writer *out, const wtop_settings *settings, int id)
     case 14: return write_number(out, (unsigned long)settings->meter_width, 0);
     case 15: return write_text(out, wtop_meter_style_name(settings->meter_style));
     case 16: return write_text(out, wtop_character_set_name(settings->character_set));
+    case 17: return write_text(out, wtop_background_mode_name(settings->background_mode));
     }
     return 0;
 }

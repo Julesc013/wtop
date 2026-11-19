@@ -44,7 +44,11 @@ an installer.
 
 Candidate `query processes|system|services`, `inspect PID` and finite `log`
 now share the model and selector parser. Inspect accepts optional command-line
-and service providers; snapshots/query/log can request per-core collection.
+and service providers plus `--image-path`, `--threads` and read-only `--affinity`;
+snapshots/query/log can request per-core collection. New flags require inspect,
+do not imply command-line collection, and add optional schema2 provider fields.
+Affinity masks are exact hexadecimal strings; thread execution counters and
+creation identities are decimal strings, with independent field availability.
 `query system|services` does not open every process for unused row metrics.
 `--paths` resolves ownership without loading configuration or collecting processes.
 `--readonly` blocks process mutations, shell execution and settings writes, while

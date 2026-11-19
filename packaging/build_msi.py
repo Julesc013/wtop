@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from package_candidate import PackageError, checksum_file, json_bytes, sha256, verify
+from package_candidate import PackageError, checksum_file, json_bytes, sha256, verify, third_party_notices_required
 from inspect_pe import inspect_file
 from release_metadata import msi_version as mapped_msi_version
 
@@ -39,7 +39,10 @@ def write_guard_config(candidate: Path, stage: Path, manifest: dict) -> Path:
         raise PackageError("unsupported MSI profile")
     lines = ["/* Generated from exact candidate bytes; do not edit. */"]
     entries = []
-    for i, name in enumerate(("wtop.exe", "LICENSE")):
+    names = ['wtop.exe', 'LICENSE']
+    if third_party_notices_required(manifest['payload']['version']):
+        names.append('THIRD-PARTY-NOTICES.md')
+    for i, name in enumerate(names):
         data = (candidate / name).read_bytes()
         digest = sha256(data)
         if len(data) > 64 * 1024 * 1024:
@@ -94,6 +97,9 @@ def build(candidate: Path, stage: Path, wix: Path, numeric_version: str | None =
         "PayloadHash": payload["executable"]["sha256"],
         "LicenseFile": str((candidate / "LICENSE").resolve()), "GuardDll": str(guard.resolve()),
     }
+    if third_party_notices_required(payload['version']):
+        values['ThirdPartyNotices'] = str((candidate / 'THIRD-PARTY-NOTICES.md').resolve())
+        values['ThirdPartyComponent'] = guid('third-party-notices:' + profile)
     name = f'wtop-{payload["version"]}-{profile}-candidate.msi'
     command = [str(wix), "build", str(ROOT / "packaging/msi/wtop.wxs"), "-arch", arch,
                "-out", str((candidate / name).resolve())]
@@ -111,15 +117,17 @@ def build(candidate: Path, stage: Path, wix: Path, numeric_version: str | None =
         "built": True, "qualified": False, "product_code": product, "upgrade_code": upgrade,
         "msi_version": version, "semantic_version": payload["version"], "wix": output,
         "version_mapping": "wtop.version/1" if version == mapped_version else "explicit_candidate_override",
-        "scope": "perUserOrMachine", "automatic_upgrade": "blocked", "path_integration": "absent",
+        "scope": "perUserOrMachine", "automatic_upgrade": "guarded_major_upgrade_after_InstallInitialize",
+        "path_integration": "absent_explicit_option_refused",
         "guard": {"sha256": sha256(guard.read_bytes()), "pe": guard_pe,
                   "configuration_sha256": sha256((stage / "guard_config.h").read_bytes())},
         "commands": commands,
-        "preservation": "preflight refusal for detected changes; not an atomic compare-and-delete or replace",
-        "remaining": ["validation_to_file_operation_race", "standard_user_and_native_matrix",
-                      "rollback_and_power_loss", "upgrade_transaction"],
+        "preservation": "preflight plus deferred recheck, protected machine root, old-owner removal guard; not an atomic compare-and-delete or replace",
+        "remaining": ["hostile_same_user_validation_to_file_operation_race", "standard_user_and_native_matrix",
+                      "power_loss_and_restart_recovery", "real_prior_release_upgrade_matrix",
+                      "optional_path_alias_ownership"],
     }
-    manifest["promotion"]["blockers"] += ["msi_preservation_unqualified", "automatic_upgrade_not_implemented"]
+    manifest["promotion"]["blockers"] += ["msi_preservation_unqualified", "msi_lifecycle_evidence_required"]
     if version != mapped_version:
         manifest["promotion"]["blockers"].append("candidate_msi_version_override")
     (candidate / "candidate.json").write_bytes(json_bytes(manifest))

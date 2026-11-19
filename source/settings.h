@@ -27,6 +27,7 @@ typedef enum wtop_footer_style { WTOP_FOOTER_FUNCTIONS, WTOP_FOOTER_COMPACT, WTO
 typedef enum wtop_status_position { WTOP_STATUS_BANNER, WTOP_STATUS_BOTTOM, WTOP_STATUS_HIDDEN } wtop_status_position;
 typedef enum wtop_meter_style { WTOP_METER_BARS, WTOP_METER_BLOCKS, WTOP_METER_TEXT } wtop_meter_style;
 typedef enum wtop_character_set { WTOP_CHARSET_ASCII, WTOP_CHARSET_UNICODE } wtop_character_set;
+typedef enum wtop_background_mode { WTOP_BACKGROUND_TERMINAL, WTOP_BACKGROUND_PALETTE } wtop_background_mode;
 
 typedef enum wtop_mouse {
     WTOP_MOUSE_AUTO, WTOP_MOUSE_ON, WTOP_MOUSE_OFF
@@ -36,7 +37,8 @@ typedef enum wtop_color_role {
     WTOP_COLOR_BG_HIGHLIGHT, WTOP_COLOR_MENU_BAR, WTOP_COLOR_HEADER,
     WTOP_COLOR_CPU, WTOP_COLOR_MEMORY, WTOP_COLOR_COMMIT, WTOP_COLOR_ERROR,
     WTOP_COLOR_TAG, WTOP_COLOR_FOLLOW, WTOP_COLOR_METER_LABEL,
-    WTOP_COLOR_FUNCTION_KEY, WTOP_COLOR_COUNT
+    WTOP_COLOR_FUNCTION_KEY, WTOP_COLOR_FG_FOCUS, WTOP_COLOR_BG_FOCUS,
+    WTOP_COLOR_FG_SELECTED, WTOP_COLOR_BG_SELECTED, WTOP_COLOR_COUNT
 } wtop_color_role;
 typedef enum wtop_header_row {
     WTOP_ROW_TITLE, WTOP_ROW_CPU, WTOP_ROW_MEMORY,
@@ -73,6 +75,7 @@ typedef struct wtop_settings {
     wtop_status_position status_position;
     wtop_meter_style meter_style;
     wtop_character_set character_set;
+    wtop_background_mode background_mode;
     unsigned long frame_interval_ms;
     int meter_width;
     int header_rows[WTOP_HEADER_ROWS];
@@ -105,6 +108,8 @@ const char *wtop_footer_style_name(int value);
 const char *wtop_status_position_name(int value);
 const char *wtop_meter_style_name(int value);
 const char *wtop_character_set_name(int value);
+const char *wtop_background_mode_name(int value);
+int wtop_parse_background_mode(const char *text, wtop_background_mode *value);
 int wtop_parse_footer_style(const char *text, wtop_footer_style *value);
 int wtop_parse_status_position(const char *text, wtop_status_position *value);
 int wtop_parse_character_set(const char *text, wtop_character_set *value);

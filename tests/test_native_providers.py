@@ -42,11 +42,18 @@ class NativeProviderTests(unittest.TestCase):
         cls.observations = []
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.GetCurrentThread.restype = wintypes.HANDLE
+        kernel.GetCurrentThreadId.restype = wintypes.DWORD
         kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel.GetThreadTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel.GetThreadPriority.argtypes = [wintypes.HANDLE]
+        kernel.GetThreadPriority.restype = ctypes.c_int
+        kernel.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
         times = [wintypes.FILETIME() for _ in range(4)]
         if not kernel.GetProcessTimes(kernel.GetCurrentProcess(), *(ctypes.byref(value) for value in times)):
             raise ctypes.WinError(ctypes.get_last_error())
         cls.creation = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        cls.kernel = kernel
 
     @classmethod
     def tearDownClass(cls):
@@ -108,6 +115,112 @@ class NativeProviderTests(unittest.TestCase):
         else:
             self.assertIsNone(provider["value"])
             self.assertEqual(code, 3)
+
+    def test_thread_rows_use_real_lifetime_counters_and_individual_states(self):
+        ordinary, _ = self.run_json("inspect", str(os.getpid()))
+        self.assertNotIn("threads", ordinary.get("providers", {}))
+
+        def direct_times():
+            values = [wintypes.FILETIME() for _ in range(4)]
+            if not self.kernel.GetThreadTimes(self.kernel.GetCurrentThread(), *(ctypes.byref(v) for v in values)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return [(v.dwHighDateTime << 32) | v.dwLowDateTime for v in values]
+
+        tid = self.kernel.GetCurrentThreadId()
+        before = direct_times()
+        data, code = self.run_json("inspect", str(os.getpid()), "--threads")
+        after = direct_times()
+        provider = self.provider(data, "threads")
+        # This is an owned, live same-user process. Its primary thread is an
+        # independent oracle, not a synthetic expected row copied from Wtop.
+        self.assertEqual(provider["status"], "valid", provider)
+        self.assertEqual(code, 0)
+        self.assertEqual(provider["pid"], os.getpid())
+        self.assertEqual(int(provider["creation_filetime"]), self.creation)
+        self.assertEqual(len(provider["value"]), provider["count"])
+        self.assertLessEqual(provider["count"], 1024)
+        main = None
+        identities = set()
+        for row in provider["value"]:
+            self.assertEqual(row["pid"], os.getpid())
+            self.assertGreater(row["tid"], 0)
+            for field in ("identity_status", "times_status", "priority_status"):
+                self.assertIn(row[field], STATES)
+            self.assertNotIn("cpu_percent", row)
+            self.assertIsInstance(row["observed_ms"], str)
+            if row["identity_status"] == "valid":
+                self.assertIsInstance(row["creation_filetime"], str)
+                self.assertGreater(int(row["creation_filetime"]), 0)
+                key = (row["tid"], row["creation_filetime"])
+                self.assertNotIn(key, identities)
+                identities.add(key)
+            else:
+                self.assertIsNone(row["creation_filetime"])
+            if row["times_status"] == "valid":
+                self.assertEqual(row["identity_status"], "valid")
+                for field in ("kernel_100ns", "user_100ns"):
+                    self.assertIsInstance(row[field], str)
+                    self.assertGreaterEqual(int(row[field]), 0)
+            else:
+                self.assertIsNone(row["kernel_100ns"])
+                self.assertIsNone(row["user_100ns"])
+            if row["priority_status"] == "valid":
+                self.assertIsInstance(row["priority"], int)
+            else:
+                self.assertIsNone(row["priority"])
+            if row["tid"] == tid:
+                main = row
+        self.assertIsNotNone(main)
+        self.assertEqual(int(main["creation_filetime"]), before[0])
+        self.assertEqual(main["times_status"], "valid")
+        self.assertLessEqual(before[2], int(main["kernel_100ns"]))
+        self.assertLessEqual(int(main["kernel_100ns"]), after[2])
+        self.assertLessEqual(before[3], int(main["user_100ns"]))
+        self.assertLessEqual(int(main["user_100ns"]), after[3])
+        self.assertEqual(main["priority"], self.kernel.GetThreadPriority(self.kernel.GetCurrentThread()))
+
+    def test_affinity_read_discloses_scope_and_preserves_mask_width(self):
+        ordinary, _ = self.run_json("inspect", str(os.getpid()))
+        self.assertNotIn("affinity", ordinary.get("providers", {}))
+        data, code = self.run_json("inspect", str(os.getpid()), "--affinity", "--readonly")
+        provider = self.provider(data, "affinity")
+        self.assertEqual(provider["pid"], os.getpid())
+        self.assertEqual(int(provider["creation_filetime"]), self.creation)
+        value = provider["value"]
+        if provider["status"] == "valid":
+            process_mask, system_mask = ctypes.c_size_t(), ctypes.c_size_t()
+            if not self.kernel.GetProcessAffinityMask(self.kernel.GetCurrentProcess(), ctypes.byref(process_mask), ctypes.byref(system_mask)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            self.assertIsInstance(value, dict)
+            self.assertEqual(value["status"], "valid")
+            self.assertEqual(value["limitation"], "none")
+            self.assertEqual(value["system_group_count"], 1)
+            self.assertEqual(value["process_group_count"], 1)
+            self.assertIn(value["mask_bits"], (32, 64))
+            for field in ("process_mask", "system_mask"):
+                self.assertRegex(value[field], r"^0x[0-9a-fA-F]{16}$")
+            self.assertEqual(int(value["process_mask"], 16), process_mask.value)
+            self.assertEqual(int(value["system_mask"], 16), system_mask.value)
+            self.assertEqual(code, 0)
+        else:
+            self.assertEqual(code, 3)
+            if value is not None:
+                self.assertIsNone(value["process_mask"])
+                self.assertIsNone(value["system_mask"])
+                if provider["status"] == "unsupported":
+                    self.assertIn(value["limitation"], ("multiple_processor_groups", "native_mask_width", "api_unavailable"))
+
+    def test_full_image_path_does_not_implicitly_collect_command_lines(self):
+        ordinary, _ = self.run_json("inspect", str(os.getpid()))
+        self.assertNotIn("image_path", ordinary.get("providers", {}))
+        data, code = self.run_json("inspect", str(os.getpid()), "--image-path")
+        provider = self.provider(data, "image_path")
+        self.assertNotIn("command_line", data.get("providers", {}))
+        self.assertEqual(provider["status"], "valid", provider)
+        self.assertEqual(code, 0)
+        self.assertEqual(provider["pid"], os.getpid())
+        self.assertEqual(int(provider["creation_filetime"]), self.creation)
+        self.assertEqual(os.path.normcase(os.path.realpath(provider["value"])), os.path.normcase(os.path.realpath(sys.executable)))
 
     def test_service_inspection_keeps_target_identity(self):
         data, _ = self.run_json("inspect", str(os.getpid()), "--services")
@@ -180,9 +293,9 @@ class NativeProviderTests(unittest.TestCase):
             self.assertLessEqual(int(core["observed_ms"]), int(row["cpu_observed_ms"]))
 
     def test_private_worker_rejects_missing_or_invalid_inherited_handles(self):
-        for args in (("--wtop-provider-v1",), ("--wtop-provider-v1", "0", "0"),
-                     ("--wtop-provider-v1", "-1", "1"),
-                     ("--wtop-provider-v1", "184467440737095516160", "1")):
+        for args in (("--wtop-provider-v2",), ("--wtop-provider-v2", "0", "0"),
+                     ("--wtop-provider-v2", "-1", "1"),
+                     ("--wtop-provider-v2", "184467440737095516160", "1")):
             with self.subTest(args=args):
                 result = subprocess.run([EXE, *args], stdin=subprocess.DEVNULL,
                     capture_output=True, timeout=3)

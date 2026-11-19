@@ -3,9 +3,9 @@
 The supplied [Beta 2 plan](beta2-plan.md) authorizes automatic alpha/beta gates and
 retains human approval for stable releases. Pull requests and master pushes
 validate and retain source-bound artifacts. Draft staging and public publication
-each require an explicit workflow dispatch. The Beta 2 task requested a draft;
-source integration does not request public publication. Stable versions are
-refused by prerelease tooling.
+each require an explicit workflow dispatch. Beta 3 may be publicly promoted when
+its separately checked prerelease gates pass; user authorization does not
+substitute for those results. Stable versions are refused by prerelease tooling.
 
 ## Build and draft
 
@@ -13,7 +13,7 @@ The dedicated workflow builds x86/x64 on the named Windows Server runner and
 ARM64 on `windows-11-arm`. Every included executable runs the required native
 suite and produces exact-byte source/compiler/SDK/version/test/security receipts.
 Pull requests and master pushes run these checks and retain the verified aggregate
-as Actions artifacts identified by source SHA.
+and offline channel preparation as Actions artifacts identified by source SHA.
 Work-branch pushes use their open pull request's validation, avoiding duplicate
 push runs. Branches without a pull request can be checked by workflow dispatch.
 

@@ -38,6 +38,10 @@ class KeyChar(C.Union):
     _fields_ = [("UnicodeChar", W.WCHAR), ("AsciiChar", C.c_char)]
 
 
+class CharInfo(C.Structure):
+    _fields_ = [("char", KeyChar), ("attributes", W.WORD)]
+
+
 class KeyEvent(C.Structure):
     _fields_ = [("down", W.BOOL), ("repeat", W.WORD), ("vk", W.WORD),
                 ("scan", W.WORD), ("char", KeyChar), ("modifiers", W.DWORD)]
@@ -117,23 +121,32 @@ class FixtureJob:
 class Console:
     def __init__(self):
         assert C.sizeof(InputRecord) == 20, "incorrect INPUT_RECORD ABI"
+        assert C.sizeof(CharInfo) == 4, "incorrect CHAR_INFO ABI"
         self.k = C.WinDLL("kernel32", use_last_error=True)
         declarations = {
             "CreateFileW": ([W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p,
                              W.DWORD, W.DWORD, W.HANDLE], W.HANDLE),
+            "CreateConsoleScreenBuffer": ([W.DWORD, W.DWORD, C.c_void_p,
+                                            W.DWORD, C.c_void_p], W.HANDLE),
             "CloseHandle": ([W.HANDLE], W.BOOL),
             "SetHandleInformation": ([W.HANDLE, W.DWORD, W.DWORD], W.BOOL),
             "GetConsoleMode": ([W.HANDLE, C.POINTER(W.DWORD)], W.BOOL),
+            "SetConsoleMode": ([W.HANDLE, W.DWORD], W.BOOL),
             "SetStdHandle": ([W.DWORD, W.HANDLE], W.BOOL),
             "GetConsoleScreenBufferInfo": ([W.HANDLE, C.POINTER(ScreenInfo)], W.BOOL),
             "SetConsoleScreenBufferSize": ([W.HANDLE, Coord], W.BOOL),
             "SetConsoleWindowInfo": ([W.HANDLE, W.BOOL, C.POINTER(Rect)], W.BOOL),
+            "SetConsoleCursorPosition": ([W.HANDLE, Coord], W.BOOL),
             "ReadConsoleOutputCharacterW": ([W.HANDLE, W.LPWSTR, W.DWORD,
                                              Coord, C.POINTER(W.DWORD)], W.BOOL),
+            "ReadConsoleOutputW": ([W.HANDLE, C.POINTER(CharInfo), Coord,
+                                     Coord, C.POINTER(Rect)], W.BOOL),
             "ReadConsoleOutputAttribute": ([W.HANDLE, C.POINTER(W.WORD), W.DWORD,
                                             Coord, C.POINTER(W.DWORD)], W.BOOL),
             "WriteConsoleOutputCharacterW": ([W.HANDLE, W.LPCWSTR, W.DWORD,
                                               Coord, C.POINTER(W.DWORD)], W.BOOL),
+            "WriteConsoleW": ([W.HANDLE, W.LPCWSTR, W.DWORD,
+                                C.POINTER(W.DWORD), C.c_void_p], W.BOOL),
             "WriteConsoleInputW": ([W.HANDLE, C.POINTER(InputRecord), W.DWORD,
                                      C.POINTER(W.DWORD)], W.BOOL),
             "FlushConsoleInputBuffer": ([W.HANDLE], W.BOOL),
@@ -198,19 +211,31 @@ class Console:
             info = self.info(handle)
             width = info.window.Right - info.window.Left + 1
             height = info.window.Bottom - info.window.Top + 1
-            rows, attrs = [], []
+            # Read the cell grid, not a stream of UTF-16 characters. The latter
+            # expands combining clusters and can return fewer units than the
+            # cell width, shifting footer coordinates or introducing NULs.
+            # ReadConsoleOutputW is intentionally a legacy cell projection;
+            # it does not prove the terminal's complete glyph/font appearance.
+            cells = (CharInfo * (width * height))()
+            region = Rect(info.window.Left, info.window.Top,
+                          info.window.Right, info.window.Bottom)
+            self.check(self.k.ReadConsoleOutputW(handle, cells, Coord(width, height),
+                                                Coord(0, 0), C.byref(region)))
+            assert (region.Left, region.Top, region.Right, region.Bottom) == (
+                info.window.Left, info.window.Top, info.window.Right, info.window.Bottom)
+            rows, attrs, units = [], [], []
             for y in range(height):
-                coord = Coord(info.window.Left, info.window.Top + y)
-                chars = C.create_unicode_buffer(width + 1)
-                colors = (W.WORD * width)()
-                count = W.DWORD()
-                self.check(self.k.ReadConsoleOutputCharacterW(handle, chars, width, coord, C.byref(count)))
-                rows.append(chars[:width])
-                self.check(self.k.ReadConsoleOutputAttribute(handle, colors, width, coord, C.byref(count)))
-                attrs.append(list(colors))
+                line = cells[y * width:(y + 1) * width]
+                units.append([ord(cell.char.UnicodeChar) for cell in line])
+                attrs.append([cell.attributes for cell in line])
+                # Preserve one Python character per terminal cell. A trailing
+                # wide-cell marker is spacing, not a duplicated CJK glyph.
+                rows.append("".join(" " if cell.attributes & 0x200 else
+                    ("\ufffd" if 0xD800 <= ord(cell.char.UnicodeChar) <= 0xDFFF
+                     else cell.char.UnicodeChar) for cell in line))
             self.last_frame = {"width": width, "height": height,
                                "left": info.window.Left, "top": info.window.Top,
-                               "rows": rows, "attributes": attrs}
+                               "rows": rows, "attributes": attrs, "cell_units": units}
             return self.last_frame
         finally:
             self.k.CloseHandle(handle)
@@ -232,6 +257,40 @@ class Console:
                 matches = 0
             time.sleep(0.03)
         raise AssertionError(f"timeout waiting for {description}:\n" + "\n".join(self.last_frame["rows"]))
+
+    def cluster_widths(self):
+        """Independent host receipt, separate from Wtop's projected frame."""
+        handle = self.k.CreateConsoleScreenBuffer(0xC0000000, 3, None, 1, None)
+        if handle == C.c_void_p(-1).value:
+            return {"qualified": False, "error": C.get_last_error(), "widths": {}}
+        samples = {"combining": ("e\u0301", 1), "CJK": ("\u4e2d", 2),
+                   "supplementary": ("\U0001f600", 2),
+                   "ZWJ": ("\U0001f469\u200d\U0001f4bb", 2),
+                   "regional": ("\U0001f1e6\U0001f1fa", 2),
+                   "keycap": ("1\ufe0f\u20e3", 2),
+                   "leading_mark": ("\u25cc\u0301", 1)}
+        result = {"qualified": True, "widths": {}}
+        try:
+            mode = W.DWORD()
+            if not self.k.GetConsoleMode(handle, C.byref(mode)) or not self.k.SetConsoleMode(handle, (mode.value | 5) & ~2):
+                return {"qualified": False, "error": C.get_last_error(), "widths": {}}
+            for name, (sample, expected) in samples.items():
+                self.check(self.k.SetConsoleCursorPosition(handle, Coord(0, 0)))
+                # The trailing ASCII marker makes this an independent advance
+                # measurement rather than reading Wtop's capability variable.
+                text = sample + "Z"
+                count = len(text.encode("utf-16-le")) // 2
+                written = W.DWORD()
+                self.check(self.k.WriteConsoleW(handle, text, count, C.byref(written), None))
+                assert written.value == count
+                info = self.info(handle)
+                observed = info.cursor.X - 1
+                result["widths"][name] = {"observed": observed, "expected": expected}
+                if observed != expected or info.cursor.Y != 0:
+                    result["qualified"] = False
+            return result
+        finally:
+            self.check(self.k.CloseHandle(handle))
 
     def records(self, records):
         data = (InputRecord * len(records))(*records)
@@ -363,14 +422,14 @@ def tab_selected(frame, name):
     return position is not None and frame["attributes"][position[1]][position[0]] == 0x30
 
 
-def visible_pids(frame, pids, selected_only=False):
+def visible_pids(frame, pids, selected_only=False, highlighted_only=False):
     found = set()
     for y, row in enumerate(frame["rows"]):
         trimmed = row.lstrip()
         token = trimmed.split(None, 1)[0] if trimmed else ""
         if token.isdigit() and int(token) in pids:
             x = len(row) - len(trimmed)
-            if not selected_only or frame["attributes"][y][x] == 0x30:
+            if (not selected_only or frame["attributes"][y][x] == 0x30) and (not highlighted_only or frame["attributes"][y][x] == 0x8f):
                 found.add(int(token))
     return found
 
@@ -382,6 +441,12 @@ def function_slot(frame, number):
         if int(match.group(1)) == number:
             start = match.start()
             end = matches[index + 1].start() if index + 1 < len(matches) else frame["width"]
+            # Standard bars reserve ten fixed spans even when a contextual
+            # binding is absent. F7 must not absorb blank F8/F9 cells merely
+            # because the next visible label is F10. Shared-editor/compact
+            # labels retain their observed adjacent bounds.
+            if start == (frame["width"] * (number - 1)) // 10:
+                end = min(end, (frame["width"] * number) // 10)
             return start, end, row[start:end], frame["attributes"][-1][start:end]
     return 0, 0, "", []
 
@@ -403,6 +468,19 @@ def function_ready(frame, number, label, enabled=True):
     if not shown.startswith(prefix) or not shown[len(prefix):].strip().startswith(label):
         return False
     return any(color != 8 for color in colors) if enabled else bool(colors) and all(color == 8 for color in colors)
+
+
+def footer_slot_contract():
+    row = list(" " * 120)
+    for start, label in ((0, "F1Help"), (72, "F7Affinity"), (108, "F10Quit")):
+        row[start:start + len(label)] = label
+    colors = [0] * 120
+    colors[72:84] = [8] * 12
+    frame = {"width": 120, "rows": ["".join(row)], "attributes": [colors]}
+    assert function_slot(frame, 7)[:2] == (72, 84)
+    assert function_ready(frame, 7, "Affinity", False)
+    colors[80] = 7
+    assert not function_ready(frame, 7, "Affinity", False), "disabled oracle ignored a wrongly enabled cell"
 
 
 def click_function(console, number, label, enabled=True):
@@ -492,7 +570,7 @@ def setup_contract(console, exe, directory, pids, observations):
     next_id = int(config_values(config)["NextTabId"])
     with config.open("a", encoding="utf-8") as stream:
         stream.write("\n# Setup fixture extension must follow I/O's stable identity\nTab1.FutureScoped io-owned\n")
-    console.start(exe, config, pids, "--status-bar")
+    console.start(exe, config, pids, "--status-bar", "--character-set", "ascii")
     console.key(0x71)
     frame = console.wait(lambda f: overlay_contains(f, "Setup") and f["rows"][1].startswith("General")
                          and function_ready(f, 2, "Next") and function_ready(f, 10, "Quit"), "Setup General page")
@@ -521,7 +599,9 @@ def setup_contract(console, exe, directory, pids, observations):
     click_function(console, 4, "Clear")
     console.wait(lambda f: editor_contains(f, "=") and not editor_contains(f, "=" + expected_copy), "editor F4 clears text")
     name = "Audit \u4e2d\u6587 e\u0301 \U0001f600"
-    shown_name = "Audit ?? e? ?"
+    # Beta 3 substitutes a complete unsupported grapheme with one cell, so
+    # the base plus combining accent is one '?' rather than two projections.
+    shown_name = "Audit ?? ? ?"
     console.type(name)
     frame = console.wait(lambda f: editor_contains(f, "=" + shown_name), "CJK, combining and surrogate-pair input uses explicit ASCII cells")
     bounded_ascii_frame(frame)
@@ -588,6 +668,72 @@ def setup_contract(console, exe, directory, pids, observations):
     assert config_values(config)["Tab2.FutureScoped"] == "io-owned"
     console.stop()
     observations["checks"].append("contextual Setup CRUD/reorder/save with stable IDs, keyboard/mouse labels, Unicode raw preservation and bounded ASCII display")
+
+
+def unicode_layout_contract(console, exe, directory, pids, observations):
+    config = directory / "unicode-layout.conf"
+    new_config(exe, config)
+    assert config_values(config)["CharacterSet"] == "unicode"
+    probe = console.cluster_widths()
+    observations["unicode_host_probe"] = probe
+    full = probe["qualified"]
+    console.start(exe, config, pids, "--status-position", "bottom")
+    console.wait(has_bar, "Unicode layout function bar")
+    console.type(":e\u0301\u4e2d\U0001f600Z")
+
+    def editor(frame):
+        # The active editor shares the final function row even when idle
+        # status is configured as a separate bottom row.
+        return frame["rows"][-1], frame["attributes"][-1]
+
+    def anchored(frame, column, caret):
+        row, colors = editor(frame)
+        return row.startswith(":e" if full else ":?") and row[column] == "Z" and (colors[caret] & 0xFF) == 0x30
+
+    def plain(frame):
+        row, colors = editor(frame)
+        return row.startswith(":Z") and (colors[1] & 0xFF) == 0x30
+
+    # These are independent terminal-cell positions: prompt 1, e+accent 1,
+    # CJK 2, emoji 2, Z 1. ReadConsoleOutputW cannot expose the full combining
+    # text; raw preservation and cluster segmentation have separate fixtures.
+    # On a host that fails the independent native probe, every unsupported
+    # cluster has one visible fallback cell. Do not pretend legacy conhost
+    # proved full shaping merely because it accepted ENABLE_VT_PROCESSING.
+    last, end, emoji = (6, 7, 4) if full else (4, 5, 3)
+    frame = console.wait(lambda f: anchored(f, last, end), "host-qualified Unicode cell widths and end caret")
+    if full:
+        assert frame["cell_units"][-1][2] == 0x4E2D, "CJK glyph lost in qualified VT projection"
+    else:
+        assert frame["rows"][-1].startswith(":???Z"), "unsupported clusters were not conservatively projected"
+    assert has_bar(frame), "Unicode editor displaced the independent function bar"
+    assert function_slot(frame, 1)[0] == frame["width"] // 2, "Unicode width drift moved the function buttons"
+    console.key(0x25)
+    console.wait(lambda f: anchored(f, last, last), "caret before final ASCII glyph")
+    console.key(0x25)
+    console.wait(lambda f: anchored(f, last, emoji), "caret skips the complete supplementary grapheme")
+    console.key(8, "\b")
+    console.wait(lambda f: anchored(f, 4 if full else 3, 2), "backspace removes the preceding whole CJK grapheme")
+    console.key(0x2E)
+    console.wait(lambda f: anchored(f, 2, 2), "delete removes the complete supplementary grapheme")
+    console.key(0x24)
+    console.key(0x2E)
+    console.wait(plain,
+                 "delete removes base plus combining accent as one grapheme")
+    console.key(ord("U"), "\x15", 8)
+    console.type("\U0001f469\u200d\U0001f4bbZ")
+    console.wait(lambda f: editor(f)[0][3 if full else 2] == "Z"
+                 and (editor(f)[1][4 if full else 3] & 0xFF) == 0x30,
+                 "ZWJ sequence occupies its qualified layout allocation")
+    console.key(0x24)
+    console.key(0x2E)
+    console.wait(plain, "delete removes the complete ZWJ sequence")
+    console.key(27, "\x1b")
+    console.wait(lambda f: is_main(f) and has_bar(f) and not editor_contains(f, ":Z"),
+                 "Unicode editor cancellation returns to main")
+    console.stop()
+    observations["checks"].append(
+        "independently probed native Unicode projection, exact combining/CJK/supplementary/ZWJ cell anchors and caret positions, whole-grapheme deletion, fixed function-bar coordinates")
 
 
 def readonly_contract(console, exe, directory, pids, fixtures, observations):
@@ -668,6 +814,39 @@ def churn_contract(console, exe, directory, pids, fixtures, observations):
     observations["checks"].append("process churn retains captured identity and action result without terminating a replacement/neighbour; deterministic PID reuse remains a core-test case")
 
 
+def inspection_contract(console, exe, directory, pids, observations):
+    config = directory / "inspection.conf"
+    new_config(exe, config)
+    original = config.read_bytes()
+    console.start(exe, config, pids, "--readonly", "-s", "ID")
+    console.wait(lambda f: is_main(f) and visible_pids(f, pids) == set(pids), "inspection owned targets")
+    console.key(0x24)
+    console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {max(pids)} and not visible_pids(f, pids, True), "read-only inspection from focus")
+    console.type("d")
+    console.wait(lambda f: overlay_contains(f, "Process details"), "asynchronous detail panel opens")
+    frame = console.wait(lambda f: any(row.startswith("Provider: ") for row in f["rows"])
+                         and function_ready(f, 7, "Affinity", False),
+                         "detail provider result and read-only function state are displayed")
+    assert_function(frame, 7, "Affinity", False)
+    console.type("H")
+    # The cached basic process section also says 'sampled threads: N'. It is
+    # visible while the optional provider is still collecting, so it cannot
+    # acknowledge thread observation completion. Match the returned/observed
+    # summary row, independently of the exact unit assertion that follows.
+    frame = console.wait(lambda f: overlay_contains(f, "Thread rows")
+                         and any(re.match(r"Threads: [0-9]+ returned / [0-9]+ observed;", row)
+                                 for row in f["rows"]),
+                         "bounded thread observation returned and rendered")
+    assert text_contains(frame, "lifetime 100ns"), "thread counters were not labelled as lifetime values"
+    console.key(0x23)  # End exposes later rows; it never changes the captured target.
+    console.wait(lambda f: overlay_contains(f, "Thread rows") and text_contains(f, "TID "), "thread rows remain navigable")
+    console.key(27, "\x1b")
+    console.wait(lambda f: is_main(f) and not visible_pids(f, pids, True), "inspection closes without creating selection")
+    console.stop()
+    assert config.read_bytes() == original
+    observations["checks"].append("read-only focused details and thread panels use bounded providers, scroll and return without selecting or writing config")
+
+
 def recovery_contract(console, exe, directory, pids, observations):
     config = directory / "recovery.conf"
     new_config(exe, config)
@@ -678,10 +857,14 @@ def recovery_contract(console, exe, directory, pids, observations):
                          and function_ready(f, 9, "Kill", False), "startup has no implicit target")
     assert all(function_ready(frame, number, label, False)
                for number, label in ((7, "Prio+"), (8, "Prio-"), (9, "Kill")))
-    console.key(0x28)  # Down selects the first row, not the second.
-    console.wait(lambda f: visible_pids(f, pids, True) == {max(pids)}, "first Down explicitly selects first process")
+    console.key(0x28)  # Down only highlights the first visible row.
+    console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {max(pids)}
+                         and not visible_pids(f, pids, True) and function_ready(f, 9, "Kill", False), "Down highlights without enabling mutation")
+    console.key(13, "\r")
+    console.wait(lambda f: visible_pids(f, pids, True) == {max(pids)}, "Enter confirms highlighted target")
     console.type(" ")
-    console.wait(lambda f: visible_pids(f, pids, True) == {sorted(pids, reverse=True)[1]}, "tag moves to next process")
+    console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {sorted(pids, reverse=True)[1]}
+                         and visible_pids(f, pids, True) == {max(pids)}, "tag moves focus while confirmed target stays fixed")
     console.type("F")
     console.key(0x70)
     console.wait(lambda f: overlay_contains(f, "Help"), "Help above a selection and tag")
@@ -689,7 +872,10 @@ def recovery_contract(console, exe, directory, pids, observations):
     console.wait(lambda f: is_main(f) and function_ready(f, 9, "Kill"), "Escape closes Help without mutating captured selection")
     console.key(27, "\x1b")
     frame = console.wait(lambda f: is_main(f) and function_ready(f, 9, "Kill", False)
-                         and not visible_pids(f, pids, True), "main Escape clears selection, tags and follow")
+                         and not visible_pids(f, pids, True) and visible_pids(f, pids, highlighted_only=True) == {max(pids)}, "first main Escape clears selection/tags and highlights former target")
+    console.key(27, "\x1b")
+    frame = console.wait(lambda f: is_main(f) and not visible_pids(f, pids, True)
+                         and not visible_pids(f, pids, highlighted_only=True), "second main Escape clears highlight/search/follow")
     for y, row in enumerate(frame["rows"]):
         token = row.lstrip().split(None, 1)[0:1]
         if token and token[0].isdigit() and int(token[0]) in pids:
@@ -803,6 +989,7 @@ def worker(exe, output):
     fixtures = []
     observations = {"checks": [], "human_visual_acceptance": False}
     try:
+        footer_slot_contract()
         console = Console()
         with tempfile.TemporaryDirectory(prefix="wtop-native-ui-") as temp:
             config = Path(temp) / "settings.conf"
@@ -835,7 +1022,9 @@ def worker(exe, output):
 
             console.wait(lambda f: visible_pids(f, pids) == set(pids), "identity-bearing targets before confirmation")
             assert not visible_pids(console.frame(), pids, True), "startup unexpectedly selected a process"
-            console.key(0x24)  # Explicitly select a process before requesting an action.
+            console.key(0x24)  # Home highlights; Enter confirms an explicit action target.
+            console.wait(lambda f: bool(visible_pids(f, pids, highlighted_only=True)) and not visible_pids(f, pids, True), "Home highlights without selecting")
+            console.key(13, "\r")
             console.wait(lambda f: bool(visible_pids(f, pids, True))
                          and function_ready(f, 9, "Kill"), "explicit target before confirmation")
             console.records(console.key_records(0x78, repeat=32))  # Held initiating F9.
@@ -935,12 +1124,12 @@ def worker(exe, output):
             console.wait(has_bar, "vi common bar")
             ordered_pids = sorted(pids, reverse=True)
             console.key(0x24)  # Home: first row in stable descending PID order.
-            console.wait(lambda f: visible_pids(f, pids, True) == {ordered_pids[0]}, "vi first process selection")
+            console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {ordered_pids[0]} and not visible_pids(f, pids, True), "vi Home highlights first process")
             console.type("j")
-            console.wait(lambda f: visible_pids(f, pids, True) == {ordered_pids[1]}, "vi j selects next process")
+            console.wait(lambda f: visible_pids(f, pids, highlighted_only=True) == {ordered_pids[1]} and not visible_pids(f, pids, True), "vi j highlights next process")
             console.type("k")
-            console.wait(lambda f: is_main(f) and visible_pids(f, pids, True) == {ordered_pids[0]},
-                         "vi k selects previous process without opening termination")
+            console.wait(lambda f: is_main(f) and visible_pids(f, pids, highlighted_only=True) == {ordered_pids[0]} and not visible_pids(f, pids, True),
+                         "vi k highlights previous process without opening termination")
             console.key(0x70)
             console.wait(lambda f: overlay_contains(f, "Help"), "vi help input acknowledgement")
             console.key(27, "\x1b")
@@ -974,9 +1163,11 @@ def worker(exe, output):
             retained_frame_contract(console, exe, Path(temp), pids, observations)
             sampling_click_contract(console, exe, Path(temp), pids, observations)
             setup_contract(console, exe, Path(temp), pids, observations)
+            unicode_layout_contract(console, exe, Path(temp), pids, observations)
             readonly_contract(console, exe, Path(temp), pids, fixtures, observations)
             churn_contract(console, exe, Path(temp), pids, fixtures, observations)
             recovery_contract(console, exe, Path(temp), pids, observations)
+            inspection_contract(console, exe, Path(temp), pids, observations)
         observations["result"] = "passed"
     except BaseException:
         observations["result"] = "failed"
