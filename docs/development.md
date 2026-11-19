@@ -35,10 +35,18 @@ relevant differences before choosing a merge or cherry-pick; do not blindly sync
 the fork over its downstream changes. The inherited `multiple-cpus` branch is
 also historical material, not Wtop's integration branch.
 
+Open a draft pull request after the first coherent checkpoint, then commit and
+push each bounded increment promptly. Both workflows validate PR updates and
+master pushes; work-branch pushes do not trigger duplicate runs alongside their
+PR. Use workflow dispatch to check a branch without a pull request.
+
 Merge only after applicable checks pass, preserve other contributors' work, and
-do not force-push the canonical branch. A development merge does not publicly publish a release or qualify additional
-operating systems. Canonical `master` can stage a verified alpha/beta draft through
-the dedicated release workflow. Public promotion is a separate explicit operation.
+do not force-push the canonical branch. A development merge produces checked
+source-bound artifacts; it does not publish a release or qualify additional
+operating systems. Explicitly dispatch the dedicated prerelease workflow from
+canonical `master` with operation `stage` for a verified alpha/beta draft.
+Public promotion is a separate explicit `publish` operation. Existing versioned
+drafts and published bytes remain immutable; see [publication policy](beta-publication.md).
 
 ## Current implementation and module boundaries
 
@@ -172,9 +180,13 @@ Windows Win32/x64/ARM64 candidates. Win32 executes under WoW64 on the hosted
 x64 Windows Server runner; ARM64 executes on `windows-11-arm`. A runner label is
 not a receipt: inspect each actual run's OS, architecture, token and test results.
 These lanes do not certify historical Windows. Artifacts retain exact identities
-and explicit limits. Work branches never stage releases; canonical `master` may
-stage a draft after the separate beta workflow passes. Keep large binaries/raw logs in ignored `out/` or an external build
-directory; retain concise source-bound outcomes and known failures as evidence.
+and explicit limits. Automatic runs retain checked candidates and assembled beta
+bundles without staging a release. Only explicit
+dispatch from canonical `master` can stage or publish after the applicable gates.
+Superseded automatic prerelease validation can be cancelled without cancelling
+an in-progress explicit delivery, which uses a separate concurrency group.
+Keep large binaries/raw logs in ignored `out/` or an external build directory;
+retain concise source-bound outcomes and known failures as evidence.
 
 The initial [bootstrap observations](bootstrap-verification.md) disclose the
 original cross-build and host-test results, toolchain failures and remaining

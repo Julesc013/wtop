@@ -1,24 +1,42 @@
 # Draft staging and deliberate public promotion
 
 The supplied [Beta 2 plan](beta2-plan.md) authorizes automatic alpha/beta gates and
-retains human approval for stable releases. This task requests a **draft**, so the
-master-push path creates only a draft prerelease. Public publication always needs
-an explicit dispatch operation. Stable versions are refused by prerelease tooling.
+retains human approval for stable releases. Pull requests and master pushes
+validate and retain source-bound artifacts. Draft staging and public publication
+each require an explicit workflow dispatch. The Beta 2 task requested a draft;
+source integration does not request public publication. Stable versions are
+refused by prerelease tooling.
 
 ## Build and draft
 
 The dedicated workflow builds x86/x64 on the named Windows Server runner and
 ARM64 on `windows-11-arm`. Every included executable runs the required native
 suite and produces exact-byte source/compiler/SDK/version/test/security receipts.
-Work branches and pull requests cannot stage or publish. The canonical master
-job verifies the aggregate, uploads it as a draft, then reacquires and hashes the
-actual assets. The release title, asset labels and numeric resources derive from
-one version model.
+Pull requests and master pushes run these checks and retain the verified aggregate
+as Actions artifacts identified by source SHA.
+Work-branch pushes use their open pull request's validation, avoiding duplicate
+push runs. Branches without a pull request can be checked by workflow dispatch.
+
+To stage a release, explicitly dispatch the prerelease workflow from canonical
+`master` with operation `stage`. It rebuilds and qualifies that exact master
+snapshot, verifies the aggregate, uploads a draft, then reacquires and hashes the
+actual assets. Work branches and pull requests cannot stage or publish. The
+release title, asset labels and numeric resources derive from one version model.
+
+Superseded automatic validation runs can be cancelled within the same PR/ref.
+Explicit stage/publish runs share a separate delivery concurrency group, so
+automatic validation cannot cancel an in-progress release operation. Submit one
+delivery operation at a time; GitHub's default concurrency permits one pending
+run per group. The built source must still be current master when the staging
+job checks it.
 
 A version is never overwritten. An existing public release or different-source
 draft is refused. A retry can add a missing asset only after every existing asset
 matches. There is no `--clobber`, silent signing, tag move, rebuild or replacement.
 Beta 1's schema-1 evidence and published bytes remain readable and immutable.
+After a draft exists, changed source requires a new version before another draft
+can be staged. This includes documentation changes. Ordinary source integration
+continues to produce SHA-specific artifacts without attempting to replace drafts.
 
 Alpha/beta human visual review is optional. Automated receipts explicitly say
 that they are automated, identify the actual OS/architecture/token and never
