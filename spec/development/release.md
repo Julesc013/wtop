@@ -106,9 +106,11 @@ alpha/beta publication after automatic gates. Human desktop review is valuable
 but is not a mandatory alpha/beta prerequisite. Stable publication still requires
 ordinary-user desktop evidence, human interaction review and final-byte approval.
 This change is an authorized channel policy, not an automatically synthesized
-human receipt. An automatic master push stages only a **draft**. Public Beta 3
-promotion is separately user-authorized when its prerelease gates pass; it remains
-an explicit publication operation and cannot be implied by a source push.
+human receipt. Automatic pull-request and master-push runs validate and retain
+artifacts bound to their exact source revision. Draft staging and public promotion
+each require explicit `workflow_dispatch` from canonical `master`, with their
+existing exact-payload gates. Public Beta 3 promotion is separately user-authorized
+when its prerelease gates pass; it cannot be implied by a source push.
 
 A draft may record a missing optional observation or unavailable security scanner
 truthfully. Failed required tests, changed payloads, invalid signatures or a
