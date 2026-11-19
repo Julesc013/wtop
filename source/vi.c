@@ -28,6 +28,7 @@
 TCHAR *CurrentInputStr;
 int InInputMode = 0;
 static DWORD InputIndex;
+static BOOL InputPendingHighSurrogate;
 
 typedef int (*cmd_fn)(DWORD Argc, TCHAR **Argv);
 
@@ -332,6 +333,7 @@ void ViDestroy(void)
     CurrentInputStr = NULL;
     for(DWORD i = 0; i < HistoryCount; ++i) { free(History[i]); History[i] = NULL; }
     HistoryCount = HistoryIndex = InputIndex = 0;
+    InputPendingHighSurrogate = FALSE;
     InInputMode = 0;
 }
 
@@ -343,6 +345,7 @@ void ViEnableInput(TCHAR InitialKey)
 	ClearViMessage();
 	InInputMode = 1;
 	InputIndex = 1;
+    InputPendingHighSurrogate = FALSE;
     HistoryIndex = HistoryCount;
 }
 
@@ -350,6 +353,7 @@ void ViDisableInput(void)
 {
 	CurrentInputStr[0] = 0;
 	InInputMode = 0;
+    InputPendingHighSurrogate = FALSE;
 
     /* Never discard unrelated queued console events on editor close. */
 }
@@ -386,10 +390,32 @@ static void NormalizeInputPosition(void)
     if(InputIndex > 1) InputIndex = NextInputPosition(InputIndex - 1, (DWORD)_tcslen(CurrentInputStr));
 }
 
+static BOOL ContinuesInputSurrogate(const KEY_EVENT_RECORD *KeyEvent, BOOL Ctrl)
+{
+    if(Ctrl || KeyEvent->uChar.UnicodeChar < 0xdc00 || KeyEvent->uChar.UnicodeChar > 0xdfff) return FALSE;
+    /* A navigation/edit event remains an action even if an injected record
+       also carries a low surrogate in its character field. */
+    switch(KeyEvent->wVirtualKeyCode) {
+    case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT:
+    case VK_HOME: case VK_END: case VK_DELETE: case VK_BACK:
+    case VK_ESCAPE: case VK_RETURN: return FALSE;
+    default: return TRUE;
+    }
+}
+
 int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
 {
     DWORD Length = (DWORD)_tcslen(CurrentInputStr);
     BOOL Ctrl = (KeyEvent->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    /* Windows delivers a supplementary scalar as two UTF-16 key records.
+       Keep the insertion point after its high surrogate until the low unit
+       arrives: grapheme normalization could otherwise jump over a following
+       combining mark and split the pair. Any different event finishes the
+       unmatched raw unit and restores a cluster boundary before editing. */
+    if(InputPendingHighSurrogate && !ContinuesInputSurrogate(KeyEvent, Ctrl)) {
+        InputPendingHighSurrogate = FALSE;
+        NormalizeInputPosition();
+    }
     if(Ctrl) {
         switch(KeyEvent->wVirtualKeyCode) {
         case 'G': ViDisableInput(); return 1;
@@ -434,10 +460,22 @@ int ViHandleInputKey(KEY_EVENT_RECORD *KeyEvent)
     case VK_ESCAPE: ViDisableInput(); return 1;
     case VK_RETURN: ViExecInput(); return 1;
     default:
+        if(InputPendingHighSurrogate && Length + 1 >= DEFAULT_STR_SIZE) {
+            /* Refuse an overflowing pair as a unit, restoring the text that
+               preceded its first event instead of retaining half a scalar. */
+            memmove(CurrentInputStr + InputIndex - 1, CurrentInputStr + InputIndex,
+                (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
+            --InputIndex; InputPendingHighSurrogate = FALSE;
+            NormalizeInputPosition(); return 1;
+        }
         if(KeyEvent->uChar.UnicodeChar >= 0x20 && KeyEvent->uChar.UnicodeChar != 0x7f && Length + 1 < DEFAULT_STR_SIZE) {
             memmove(CurrentInputStr + InputIndex + 1, CurrentInputStr + InputIndex, (Length - InputIndex + 1) * sizeof(*CurrentInputStr));
             CurrentInputStr[InputIndex++] = KeyEvent->uChar.UnicodeChar;
-            NormalizeInputPosition(); return 1;
+            InputPendingHighSurrogate = KeyEvent->uChar.UnicodeChar >= 0xd800 &&
+                KeyEvent->uChar.UnicodeChar <= 0xdbff &&
+                !(CurrentInputStr[InputIndex] >= 0xdc00 && CurrentInputStr[InputIndex] <= 0xdfff);
+            if(!InputPendingHighSurrogate) NormalizeInputPosition();
+            return 1;
         }
     }
     return 0;

@@ -527,6 +527,42 @@ static void editor_grapheme_navigation(void)
         key(VK_BACK, 0, 0); assert(!wcscmp(CurrentInputStr, L":"));
         key(VK_ESCAPE, 27, 0);
     }
+    {
+        static const WCHAR leading_mark[] = {0x0301, L'Z', 0};
+        static const WCHAR completed[] = {L':', 0xd83d, 0xde00, 0x0301, L'Z', 0};
+        static const WCHAR unmatched[] = {L':', 0xd83d, 0x0301, L'e', L'Z', 0};
+        /* Actual console input sends the surrogate units as separate records.
+           A following mark must not be moved between those raw UTF-16 units. */
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key(VK_PACKET, 0xde00, 0);
+        assert(!wcscmp(CurrentInputStr, completed) && ViInputCursor() == 4);
+        key(VK_LEFT, 0, 0); assert(ViInputCursor() == 1);
+        key(VK_RIGHT, 0, 0); assert(ViInputCursor() == 4);
+        key(VK_BACK, 0, 0); assert(!wcscmp(CurrentInputStr, L":Z"));
+
+        /* Interrupted pairs retain the unmatched raw unit. The next edit is
+           applied at the whole-cluster boundary, including attached marks. */
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key('E', L'e', 0);
+        assert(!wcscmp(CurrentInputStr, unmatched) && ViInputCursor() == 4);
+        key(VK_BACK, 0, 0); key(VK_BACK, 0, 0);
+        assert(!wcscmp(CurrentInputStr, L":Z") && ViInputCursor() == 1);
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key(VK_BACK, 0, 0);
+        assert(!wcscmp(CurrentInputStr, L":Z") && ViInputCursor() == 1);
+        assert(ViSetInputText(L':', leading_mark)); key(VK_HOME, 0, 0);
+        key(VK_PACKET, 0xd83d, 0); key(VK_HOME, 0, 0); key(VK_DELETE, 0, 0);
+        assert(!wcscmp(CurrentInputStr, L":Z") && ViInputCursor() == 1);
+
+        WCHAR full[DEFAULT_STR_SIZE - 2];
+        for(size_t i = 0; i < _countof(full) - 1; ++i) full[i] = L'x';
+        full[_countof(full) - 1] = 0;
+        assert(ViSetInputText(L':', full));
+        key(VK_PACKET, 0xd83d, 0); key(VK_PACKET, 0xde00, 0);
+        assert(!wcscmp(CurrentInputStr + 1, full));
+        assert(ViInputCursor() == DEFAULT_STR_SIZE - 2);
+        key(VK_ESCAPE, 27, 0);
+    }
 }
 
 static void captured_inspection_panels(void)
