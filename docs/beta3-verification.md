@@ -437,6 +437,59 @@ fixture does not assume an automatic permission grant or retry with broader acce
 
 Reference: [CreateProcessWithLogonW startup desktop contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw).
 
+### 19 November follow-up: launch repaired, real rollback still fails
+
+Candidate `644c0a7766b0b12a40b27e4ec2d4b85cb57853c0` was tested as PR merge
+`11ebca55f51dcd723ac117063ab8720ad0b1472d`; both resolve to Git tree
+`e22e914707f304529132058a558651faa4fef9db`.
+[Checks 44464607563](https://github.com/Julesc013/wtop/actions/runs/44464607563)
+and [prerelease 44464607595](https://github.com/Julesc013/wtop/actions/runs/44464607595)
+passed 25 application CTest entries on each of x86, x64 and ARM64, but both
+overall workflows failed the ARM64 MSI lifecycle. The checked ARM64 artifact is
+`14501905977`; its downloaded ZIP SHA-256 is
+`663ae8d4446053b59f6d48dead7732ecdb98965833fe27f05c19304c44ac05a7`.
+
+The normal inherited-desktop launcher repaired the earlier pre-package access
+failure. The distinct fresh account had Users membership, a non-elevated,
+unfiltered medium token and `WinSta0`/`Default`. Its owned Global/Local mutex
+creation and reopening passed, including handle cleanup. The receipt records
+`named_object_namespace_access_verified=true`. No shared-object ACL, synthetic
+token group or machine-policy change was used.
+
+The child then passed rollback-disabled refusal, ordinary initial installation
+and same-version refusal. Its injected upgrade reached the checked deferred
+`WtopFixtureFail` after product registration. The expected missing-context
+failure triggered rollback; the first registry access denial was under the
+fresh user's `Software\\Microsoft\\Installer\\Products\\...\\SourceList` during
+`PublishProduct` reversal. The log contains 164 skipped failed rollback entries
+with return 3, plus two separately recognized terminal return-5 entries.
+There are 233 registry denial notes (96 error-1402 and 137 error-1401), each with
+system error 5. These are observed counts from this exact log, not host-wide
+statistics.
+
+The log shows removal of the new payload/owner state and restoration of the old
+payload/owner state, but it does not establish complete registration recovery.
+The verification correctly stopped at the first skipped rollback operation.
+Subsequent cleanup refused the older product because the failed newer version
+remained detectable. Consequently cleanup failed and the fixture retained its
+account/profile/staging rather than record false successful retirement. The
+later native product-state assertions were not reached; no exact post-failure
+state code is claimed here. Full standard-user installation is **not qualified**.
+
+Independent review found that the missing-context fault action returns before
+registry, ACL or impersonation changes. The similar open
+[WiX issue #8574](https://github.com/wixtoolset/issues/issues/8574), including a
+[minimal reproduction reported 18 November](https://github.com/wixtoolset/issues/issues/8574#issuecomment-6969995463),
+corroborates post-registration per-user rollback failures without Wtop code.
+Attribution to Windows Installer or WiX remains an inference; no supported fix
+was established. Moving the fault before registration, elevating the account,
+changing shared ACLs or ignoring rollback errors would not qualify this contract.
+
+PR #6 remains draft and blocked. The next bounded investigation is a minimal
+per-user package comparison at the same post-registration failure boundary,
+followed by evidence for a supported recovery fix. Independent CI/checkpoint
+improvements can integrate on master without importing or approving Beta 3.
+
 ## Remaining work and recommended sequence
 
 1. **Finish exact Beta 3 qualification:** resolve actual native fixture failures,
