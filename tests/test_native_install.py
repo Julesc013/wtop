@@ -56,6 +56,26 @@ def record_installer_context(observations, key):
                              "traceback": traceback.format_exc()}
 
 
+def verify_standard_namespace(context):
+    """A fresh account must reach ordinary named objects before testing MSI."""
+    require(isinstance(context, dict) and context.get("schema") == "wtop.installer-context/1",
+            "fresh standard user has no complete named-object context")
+    probes = context.get("owned_mutex_probes")
+    require(isinstance(probes, dict), "fresh standard user has no named-object probes")
+    for prefix in ("Global\\", "Local\\"):
+        probe = probes.get(prefix)
+        require(isinstance(probe, dict) and probe.get("ok") is True,
+                f"fresh standard user cannot create an owned {prefix} mutex; see installer_context_before")
+        value = probe.get("value")
+        require(isinstance(value, dict) and value.get("created") is True,
+                f"fresh standard user did not create its own {prefix} mutex")
+        reopened = value.get("reopened")
+        require(isinstance(reopened, dict) and reopened.get("ok") is True and
+                isinstance(reopened.get("value"), dict) and reopened["value"].get("opened") is True,
+                f"fresh standard user cannot reopen its owned {prefix} mutex; see installer_context_before")
+    require(context.get("cleanup_errors") == [], "fresh standard-user namespace probes did not close cleanly")
+
+
 def install_scope_arguments(scope):
     # ALLUSERS=1 explicitly selects machine scope and ignores the package's
     # MSIINSTALLPERUSER default. Avoid an empty property whose required literal
@@ -68,6 +88,31 @@ def install_scope_arguments(scope):
 
 
 class InstallScopeArguments(unittest.TestCase):
+    def test_fresh_account_requires_both_namespaces_and_proven_probe_cleanup(self):
+        from copy import deepcopy
+
+        valid = {"schema": "wtop.installer-context/1", "cleanup_errors": [], "owned_mutex_probes": {
+            prefix: {"ok": True, "value": {"created": True,
+                     "reopened": {"ok": True, "value": {"opened": True}}}}
+            for prefix in ("Global\\", "Local\\")}}
+        verify_standard_namespace(valid)
+        for prefix in ("Global\\", "Local\\"):
+            for failed_operation in ("create", "reopen"):
+                denied = deepcopy(valid)
+                probe = denied["owned_mutex_probes"][prefix]
+                if failed_operation == "create":
+                    probe.update(ok=False, winerror=5)
+                else:
+                    probe["value"]["reopened"] = {"ok": False, "winerror": 5}
+                with self.subTest(prefix=prefix, operation=failed_operation):
+                    with self.assertRaisesRegex(AssertionError, "fresh standard user cannot"):
+                        verify_standard_namespace(denied)
+        for incomplete in ({}, {"observation_failed": True},
+                           {**valid, "cleanup_errors": [{"operation": "CloseHandle", "winerror": 6}]},
+                           {**valid, "owned_mutex_probes": {}}):
+            with self.assertRaises(AssertionError):
+                verify_standard_namespace(incomplete)
+
     def test_diagnostic_error_cannot_replace_the_actual_installer_failure(self):
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -712,6 +757,7 @@ def run_standard_account(candidate, manifest, observations):
                 any(row.get("scope") == "user" and row.get("passed") is True
                     for row in ordinary.get("scope_results", [])),
                 "fresh standard user did not complete the full installation lifecycle")
+        verify_standard_namespace(ordinary.get("installer_context_before"))
         require(ordinary.get("payload_sha256") == manifest["payload"]["executable"]["sha256"] and
                 ordinary.get("installer_sha256") == observations["installer_sha256"] and
                 ordinary.get("source_revision") == observations["source_revision"],
@@ -781,6 +827,9 @@ def main(argv=None) -> int:
         observations["profile"] = manifest['payload']['profile']
         observations["msi_version"] = manifest['installer']['msi_version']
         observations["installer_sha256"] = next(item['sha256'] for item in manifest['artifacts'] if item['kind'] == 'msi')
+        if args.require_standard_token:
+            verify_standard_namespace(observations.get("installer_context_before"))
+            observations["named_object_namespace_access_verified"] = True
         if args.standard_user:
             require(token["is_user_an_admin"] and token["token_elevation"],
                     "fresh-account fixture requires the disposable elevated parent")

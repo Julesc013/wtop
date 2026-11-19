@@ -9,9 +9,10 @@ a claim of complete in-process secret erasure. The
 caller copies its receipts out before leaving the context.
 
 The account has only direct local Users membership. Its real logon token must
-be non-admin, non-elevated and medium integrity. Its own profile/environment
-and a private desktop replace inherited runner state. A suspended child joins
-an owned kill-on-close job before it can execute. A timeout or unproven job
+be non-admin, non-elevated and medium integrity, with its own profile/environment.
+The ordinary secondary-logon path inherits the caller's desktop; CREATE_NO_WINDOW
+prevents a console window. This is not private-desktop or human-logon acceptance.
+A suspended child joins an owned kill-on-close job before it can execute. A timeout or unproven job
 retirement retains the account/profile/staging for the disposable VM's cleanup:
 retiring an MSI client does not prove the external Installer service stopped.
 
@@ -39,7 +40,6 @@ import time
 import uuid
 
 from native_token import current_token_context, token_context
-from restricted_process import _owned_desktop
 
 
 class _UserInfo1(C.Structure):
@@ -127,8 +127,6 @@ class _StandardAccount:
         self.token = W.HANDLE()
         self.profile = _ProfileInfo()
         self.environment = C.c_void_p()
-        self.desktop = None
-        self.desktop_name = None
         self.retirement_proven = True
         self.closed = False
         self.k = C.WinDLL("kernel32", use_last_error=True)
@@ -141,7 +139,6 @@ class _StandardAccount:
         def bind(lib, name, args, result=W.BOOL):
             fn = getattr(lib, name); fn.argtypes, fn.restype = args, result
         bind(self.k, "GetCurrentProcess", [], W.HANDLE)
-        bind(self.k, "GetCurrentThreadId", [], W.DWORD)
         bind(self.k, "CloseHandle", [W.HANDLE])
         bind(self.k, "LocalFree", [C.c_void_p], C.c_void_p)
         bind(self.k, "GetFileAttributesW", [W.LPCWSTR], W.DWORD)
@@ -346,8 +343,9 @@ class _StandardAccount:
         _checked(self.u.CreateEnvironmentBlock(C.byref(self.environment), self.token, False))
         self.diagnostics["environment"] = "CreateEnvironmentBlock fresh user; parent environment not inherited"
         self._stage_access(parent["user_sid"])
-        self.desktop = _owned_desktop(self.k, self.a, self.token, self.diagnostics, owner_sid=parent["user_sid"])
-        self.desktop_name = self.desktop.__enter__()
+        self.diagnostics["desktop"] = {"selection": "caller_inherited",
+            "startup_desktop": None, "private_window_station_created": False,
+            "shared_object_acl_modified": False, "create_no_window": True}
         return self
 
     def _job_empty(self, job, seconds):
@@ -367,7 +365,8 @@ class _StandardAccount:
         self.diagnostics.setdefault("retention_reasons", []).append(str(reason))
 
     def run(self, arguments, cwd, timeout=600):
-        if self.closed or not self.created or not self.desktop_name or not self.retirement_proven:
+        if (self.closed or not self.created or not self.environment or
+                not self.profile.profile or not self.retirement_proven):
             raise RuntimeError("standard-account fixture is not admitting work")
         if not arguments or not 1 <= timeout <= 1800:
             raise ValueError("explicit command and a bounded 1..1800-second wait required")
@@ -386,7 +385,12 @@ class _StandardAccount:
             job = _checked(self.k.CreateJobObjectW(None, None))
             limits = _ExtendedJobLimits(); limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE
             _checked(self.k.SetInformationJobObject(job, 9, C.byref(limits), C.sizeof(limits)))
-            startup = _StartupInfo(); startup.cb = C.sizeof(startup); startup.desktop = self.desktop_name
+            startup = _StartupInfo(); startup.cb = C.sizeof(startup)
+            # Use the documented normal secondary-logon desktop selection.
+            # The former private station let the child start but its named
+            # object operations were denied, even for a new random mutex.
+            # Do not work around that by modifying shared ACLs or token groups.
+            startup.desktop = None
             previous = self.k.GetErrorMode()
             self.k.SetErrorMode(previous | 0x8003)
             try:
@@ -461,8 +465,6 @@ class _StandardAccount:
                 cleanup[name] = False; errors.append(name + ": " + str(error))
                 return False
 
-        if self.desktop_name:
-            attempt("desktop_closed", lambda: self.desktop.__exit__(None, None, None))
         if self.environment:
             attempt("environment_released", lambda: _checked(self.u.DestroyEnvironmentBlock(self.environment)))
             self.environment = C.c_void_p()

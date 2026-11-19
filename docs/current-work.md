@@ -29,11 +29,19 @@ Exact failing candidate runs:
 - [Checks 44278311905](https://github.com/Julesc013/wtop/actions/runs/44278311905).
 - [Prerelease 44278312085](https://github.com/Julesc013/wtop/actions/runs/44278312085).
 
-Next action: collect parent/child token, session and named-object access evidence,
-identify the failing Windows boundary, and repair the fixture or product according
-to that evidence. Keep the genuine standard-user requirement, restoration checks,
-cleanup evidence and existing machine policy intact. An access-denied result is
-not successful installer qualification.
+The continuation at `1b02c3333c20504cc7b313f4b2a0a5da07aa0e12` added bounded
+diagnostics and repaired a reproducible surrogate/combining-mark editor bug.
+[Checks 44463603797](https://github.com/Julesc013/wtop/actions/runs/44463603797)
+passed all 25 application entries on every architecture, but the ARM64 fresh
+account could not create even a new random mutex in either namespace. The
+parent could, and saw no existing MSI mutex. See the dated
+[evidence section](beta3-verification.md#19-november-continuation-editor-repair-and-installer-namespace-evidence).
+
+Next action: qualify normal inherited-desktop secondary logon for the fresh
+account, including successful namespace probes and the complete MSI lifecycle.
+Keep the genuine standard-user requirement, restoration checks, cleanup evidence
+and existing machine policy intact. An access-denied result is not successful
+installer qualification.
 
 ## Delivery sequence
 

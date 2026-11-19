@@ -392,6 +392,51 @@ assertion. Shared-session, cross-user coexistence remains a distinct test.
 Even successful alternate-credential account automation does not establish
 interactive-logon Group Policy, human UAC or desktop acceptance.
 
+### 19 November continuation: editor repair and installer namespace evidence
+
+Candidate `1b02c3333c20504cc7b313f4b2a0a5da07aa0e12` was tested as PR merge
+`5b9f5e58952e25a860225aa20413a593242b784f`; their complete Git tree is identical
+(`fe6a875e16a17042fc1bce93b85791270abc5412`).
+[Checks 44463603797](https://github.com/Julesc013/wtop/actions/runs/44463603797)
+and [prerelease 44463603698](https://github.com/Julesc013/wtop/actions/runs/44463603698)
+passed all 25 application CTest entries on each architecture. The ARM64 installer
+gate still failed before package evaluation. The local Python run passed 89
+executed cases with 36 explicit skips (125 total). The nine portable suites also
+passed with address/undefined-behaviour sanitizers; this traced Linux container
+cannot run LeakSanitizer, and its original failed leak-detection run was retained.
+
+The source repair preserves adjacent UTF-16 surrogate key events before grapheme
+normalization. Previously, entering an emoji before a combining mark could move
+the caret between the high and low surrogate events and corrupt raw text. The
+native input fixture now covers the exact text/caret result, whole-grapheme
+navigation/deletion, interrupted input and buffer-capacity refusal. A pending
+surrogate is bounded editor state, cleared on editor reset/cancellation/destruction.
+
+The new bounded Installer diagnostics distinguish missing objects, denied access
+and independent namespace probes. In the ARM64 release receipt, parent and fresh
+child both had process/token session ID 2. The parent used `WinSta0`; the fresh
+child used its explicitly created `WtopFixture-*` station and a different
+authentication/logon context. The parent observed `_MSIExecute` as absent and
+successfully created/reopened uniquely named mutexes in both `Global\\` and
+`Local\\`. The child was denied both fresh mutex creations as well as all MSI
+mutex opens, before and after the failed package attempt. This demonstrates a
+broader launch/session namespace access failure; it does not establish a stale
+Installer mutex or a defect in the package's rollback guard.
+
+The next bounded repair uses the documented normal `CreateProcessWithLogonW`
+desktop inheritance (`STARTUPINFO.lpDesktop = NULL`) for the genuine fresh-user
+fixture. It retains no-window execution, the independent account/profile,
+unelevated medium token, owned job/cleanup and all MSI assertions. The launcher
+does not edit shared object ACLs, fabricate token groups or change Installer
+policy. Successful fresh namespace creation/reopening becomes a checked fixture
+precondition. The exact subsequent native run must establish the outcome; this
+report does not infer success from the API choice. Restricted same-user resource
+fixtures retain their separate private-desktop implementation.
+Modern Windows still requires access to the inherited station/desktop; this
+fixture does not assume an automatic permission grant or retry with broader access.
+
+Reference: [CreateProcessWithLogonW startup desktop contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw).
+
 ## Remaining work and recommended sequence
 
 1. **Finish exact Beta 3 qualification:** resolve actual native fixture failures,
